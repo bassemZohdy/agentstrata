@@ -49,3 +49,4 @@ venv = ".venv"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+asyncio_mode = "auto"

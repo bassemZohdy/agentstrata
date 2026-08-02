@@ -4,6 +4,7 @@
 -r requirements.txt
 
 pytest>=9,<10
+pytest-asyncio>=1.0,<2
 ruff>=0.16,<1
 mypy>=1.11,<3
 types-PyYAML
