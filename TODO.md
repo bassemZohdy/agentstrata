@@ -105,26 +105,26 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 
 ## Milestone 3 — Engine execution
 
-- [ ] Model connector construction (LLM-01 – LLM-03)
-  - [ ] Gemini native + Vertex AI (ADC) path
-  - [ ] LiteLLM bridge model-string mapping: `openai/{model}`, `anthropic/{model}`, `ollama_chat/{model}` (+`api_base`), `litellm` verbatim
-  - [ ] Retry policy: ≤2 retries on transport/429/5xx, 1s→2s backoff + jitter, honor `Retry-After`, never replay after a delta/tool call
-  - [ ] Credential health state machine: `unavailable`/`unknown`/`available`, file-backed re-resolve per request vs. env-backed process-start snapshot
-- [ ] ADK `LlmAgent` construction, one immutable root-agent per Applied Config generation (ENG-01)
-- [ ] `AgentRunner` façade over `Runner.run_async` + internal `AgentEvent` union (ENG-02)
-- [ ] Admission pipeline in exact order (ENG-03) — auth/rate-limit may be stubbed until Milestone 5, but enforce the 8-step ordering now
-- [ ] Context bounds & pruning: history-message/byte limits, context-window trimming, uncommitted-until-success (ENG-04)
-- [ ] Run state machine (ENG-05)
-  - [ ] `created → running → succeeded|failed|cancelled` (+ `cancelling`)
-  - [ ] Compare-and-swap terminal transition, exactly one winner under timeout/disconnect/shutdown races
-  - [ ] Restart reconciliation: `run_interrupted`, `tool_outcome_unknown` for orphaned `executing` tool records
-- [ ] Transactional persistence: admit without appending history, commit pruning+turn+usage only on success (ENG-06)
-- [ ] Iteration/output/token limits (ENG-07, ENG-08)
-  - [ ] Iteration exhaustion → `finish_reason: "length"`, `x_agent_status: "iteration_limit"`
-  - [ ] Output-byte cap → code-point-safe truncation, `x_agent_status: "output_limit"`
-  - [ ] Token budget capping `max_output_tokens`, one-call overshoot recorded, `estimated: true` for missing usage
-- [ ] Tool-call-ID dedup & side-effect safety: `executing`/`completed`/`failed` states, replay-safe, no auto-retry (ENG-09)
-- [ ] Public error sanitization — no internal exception/provider/SQL/path/secret detail leaks (ENG-10)
+- [x] Model connector construction (LLM-01 – LLM-03)
+  - [x] Gemini native + Vertex AI (ADC) path — `app/engine/connectors.py::build_llm` (client_kwargs api_key / vertexai+project+location)
+  - [x] LiteLLM bridge model-string mapping: `openai/{model}`, `anthropic/{model}`, `ollama_chat/{model}` (+`api_base`), `litellm` verbatim
+  - [x] Retry policy: ≤2 retries on transport/429/5xx, 1s→2s backoff + jitter, honor `Retry-After`, never replay after a delta/tool call — `RetryableLlm`
+  - [x] Credential health state machine: `unavailable`/`unknown`/`available`, file-backed re-resolve per request vs. env-backed process-start snapshot — `CredentialHealth` + `SecretResolver`
+- [x] ADK `LlmAgent` construction, one immutable root-agent per Applied Config generation (ENG-01) — `app/engine/agent.py`
+- [x] `AgentRunner` façade over `Runner.run_async` + internal `AgentEvent` union (ENG-02) — `app/engine/runner.py`
+- [x] Admission pipeline in exact order (ENG-03) — auth/rate-limit may be stubbed until Milestone 5, but enforce the 8-step ordering now — `_admit` (session resolve/create, budget eligibility, run record; steps 1-4 enforced by the M5 adapter)
+- [x] Context bounds & pruning: history-message/byte limits, context-window trimming, uncommitted-until-success (ENG-04) — `app/engine/context.py` (pruning committed only by the ENG-06 transaction)
+- [x] Run state machine (ENG-05) — `app/engine/events.py::RunStateMachine`
+  - [x] `created → running → succeeded|failed|cancelled` (+ `cancelling`)
+  - [x] Compare-and-swap terminal transition, exactly one winner under timeout/disconnect/shutdown races — CAS persisted via storage; `RunStateMachine._to_terminal`
+  - [x] Restart reconciliation: `run_interrupted`, `tool_outcome_unknown` for orphaned `executing` tool records — `reconcile_after_restart` + `ToolLedger.reconcile_executing`
+- [x] Transactional persistence: admit without appending history, commit pruning+turn+usage only on success (ENG-06) — `_commit_success`/`_commit_failure` + `truncate_session_events` revert on failure (verified: no history on failed run)
+- [x] Iteration/output/token limits (ENG-07, ENG-08) — `app/engine/limits.py::RunLimiter`
+  - [x] Iteration exhaustion → `finish_reason: "length"`, `x_agent_status: "iteration_limit"` — verified by test
+  - [x] Output-byte cap → code-point-safe truncation, `x_agent_status: "output_limit"` — verified incl. multibyte
+  - [x] Token budget capping `max_output_tokens`, one-call overshoot recorded, `estimated: true` for missing usage — `TokenAccount`
+- [x] Tool-call-ID dedup & side-effect safety: `executing`/`completed`/`failed` states, replay-safe, no auto-retry (ENG-09) — `app/engine/tools.py::ToolLedger`
+- [x] Public error sanitization — no internal exception/provider/SQL/path/secret detail leaks (ENG-10) — `sanitize_error` + `PublicError` stable codes
 
 ---
 
