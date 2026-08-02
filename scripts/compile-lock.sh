@@ -14,16 +14,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 uv pip compile requirements.txt \
-    -o requirements.lock \
-    --generate-hashes \
-    --universal \
-    --python-version 3.12
+	-o requirements.lock \
+	--generate-hashes \
+	--universal \
+	--python-version 3.12
 
 uv pip compile requirements.txt requirements-dev.txt \
-    -o requirements-dev.lock \
-    --generate-hashes \
-    --universal \
-    --python-version 3.12
+	-o requirements-dev.lock \
+	--generate-hashes \
+	--universal \
+	--python-version 3.12
 
 # Guard against drift between requirements.txt and pyproject.toml [project].
 python scripts/check-manifest-sync.py

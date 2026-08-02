@@ -36,40 +36,40 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 
 ## Milestone 1 — Configuration engine
 
-- [ ] Pydantic schema (SCH-01 – SCH-09, BASE-01)
-  - [ ] Base `model_config` (camelCase alias generator, `extra="forbid"`, `strict=True`, `populate_by_name=True`) (SCH-01)
-  - [ ] Top-level fields: `$schema`, `schemaVersion`, `name`, `description`, `profile`
-  - [ ] `engine.*`: `systemInstruction`, `temperature`, `topP`, `maxTokens`, `maxOutputBytes`, `timeoutSeconds`, `maxIterations`, `historyMaxMessages`/`historyMaxBytes`, `streaming`, `overrides.*`, `tokenBudget.*`
-  - [ ] `llm.*`: `provider`, `model`, `apiKey` secret ref pair, `baseUrl`, `contextWindowTokens`, `vertex.*`, `extra` passthrough
-  - [ ] `tools.mcpServers[]` and its `SecretHeaderRef` sub-model (SCH-04)
-  - [ ] `storage.*` (SCH-05)
-  - [ ] `server.*`: protocols, CORS, auth (apiKey/JWT), rate limit, transport byte/count limits (SCH-06)
-  - [ ] `k8s.*`: `enabled`, `required`, `namespace`, `name`, `resyncSeconds` — ConfigMap-only, no `source` field (SCH-07)
-  - [ ] `observability.*` (SCH-08)
-  - [ ] Phase-gated stub sections with disabled defaults: `agents[]`, `approval`, `rag` (SCH-09)
-  - [ ] Bundled base config `/app/config/agent.yaml` matching schema defaults (BASE-01)
-  - [ ] JSON Schema generation → `schemas/agent.schema.json`, CI zero-diff check (SCH-02, DEL-02)
-- [ ] Tier 1–7 resolver (CFG-01 – CFG-11a)
-  - [ ] Tier 1/2: bundled base + profile file loading
-  - [ ] Tier 3/4: mounted base/profile file discovery in exact candidate order, first-match-only, warn on ignored siblings (CFG-03b)
-  - [ ] Tier 5: relaxed env binding — schema-aware alias matching, ambiguity detection, near-match security-sensitive warning (CFG-07, CFG-08)
-  - [ ] Tier 6: `AGENT_APPLICATION_JSON` inline JSON (fatal on invalid JSON)
-  - [ ] Tier 7: `--<dotted.path>=<value>` CLI flags, last-occurrence-wins with warning (CFG-10)
-  - [ ] Deep-merge engine: recursive mapping merge, wholesale list replacement, null-reset semantics (CFG-04 – CFG-06)
-  - [ ] Provenance tracking per leaf, including defaulted/reset values
-  - [ ] Source parsing safety: UTF-8, 1 MiB cap, single mapping root, duplicate-key rejection, immutable byte-snapshot reads (CFG-03a, CFG-03b)
-  - [ ] `--validate` (CFG-10a), `--dump-config` with canonical masked YAML + winning-source comments (CFG-11), `--version`/`--help` (CFG-11a)
-  - [ ] Verify NFR-05 as this lands: identical resolver inputs (including permuted env-var enumeration order) produce byte-identical `--dump-config` output
-- [ ] Validation pipeline (CFG-12 – CFG-15, CAP-01, CAP-02)
-  - [ ] `AgentConfig.model_validate()` + alias-only external shape walk (CFG-13)
-  - [ ] Cross-field validation checklist (CFG-14): storage↔connection-string, MCP transport↔command/url, auth-mode↔credentials, vertex↔provider, MCP name uniqueness/size caps, byte-limit orderings, `k8s.required`↔`k8s.enabled`, JWT claim/CIDR checks
-  - [ ] Deterministic aggregate error reporting sorted by path + code, secrets omitted
-  - [ ] Capability fail-closed gating: reject non-empty `agents`, `acp`/`approval`/`rag` enabled in a P1 build (CAP-01)
-  - [ ] `GET /health` capability reporting wired to build-time flags (CAP-02)
-  - [ ] Enforce the exact boot order (CFG-15)
-- [ ] Operational mode selection (MODE-01 – MODE-04)
-  - [ ] Detect `k8s.enabled` + `KUBERNETES_SERVICE_HOST`
-  - [ ] `k8s.required` fail-closed (exit 78) vs. warn-and-run-standalone behavior (MODE-03)
+- [x] Pydantic schema (SCH-01 – SCH-09, BASE-01)
+  - [x] Base `model_config` (camelCase alias generator, `extra="forbid"`, `strict=True`, `populate_by_name=True`) (SCH-01)
+  - [x] Top-level fields: `$schema`, `schemaVersion`, `name`, `description`, `profile`
+  - [x] `engine.*`: `systemInstruction`, `temperature`, `topP`, `maxTokens`, `maxOutputBytes`, `timeoutSeconds`, `maxIterations`, `historyMaxMessages`/`historyMaxBytes`, `streaming`, `overrides.*`, `tokenBudget.*`
+  - [x] `llm.*`: `provider`, `model`, `apiKey` secret ref pair, `baseUrl`, `contextWindowTokens`, `vertex.*`, `extra` passthrough
+  - [x] `tools.mcpServers[]` and its `SecretHeaderRef` sub-model (SCH-04)
+  - [x] `storage.*` (SCH-05)
+  - [x] `server.*`: protocols, CORS, auth (apiKey/JWT), rate limit, transport byte/count limits (SCH-06)
+  - [x] `k8s.*`: `enabled`, `required`, `namespace`, `name`, `resyncSeconds` — ConfigMap-only, no `source` field (SCH-07)
+  - [x] `observability.*` (SCH-08)
+  - [x] Phase-gated stub sections with disabled defaults: `agents[]`, `approval`, `rag` (SCH-09)
+  - [x] Bundled base config `config/agent.yaml` (repo) → `/app/config/agent.yaml` (image) matching schema defaults (BASE-01)
+  - [x] JSON Schema generation → `schemas/agent.schema.json` (draft 2020-12, `$id` v1), CI zero-diff step wired (SCH-02, DEL-02)
+- [x] Tier 1–7 resolver (CFG-01 – CFG-11a)
+  - [x] Tier 1/2: bundled base + profile file loading
+  - [x] Tier 3/4: mounted base/profile file discovery in exact candidate order, first-match-only, warn on ignored siblings (CFG-03b)
+  - [x] Tier 5: relaxed env binding — schema-aware alias matching, ambiguity detection, near-match security-sensitive warning (CFG-07, CFG-08)
+  - [x] Tier 6: `AGENT_APPLICATION_JSON` inline JSON (fatal on invalid JSON)
+  - [x] Tier 7: `--<dotted.path>=<value>` CLI flags, last-occurrence-wins with warning (CFG-10)
+  - [x] Deep-merge engine: recursive mapping merge, wholesale list replacement, null-reset semantics (CFG-04 – CFG-06)
+  - [x] Provenance tracking per leaf, including defaulted/reset values
+  - [x] Source parsing safety: UTF-8, 1 MiB cap, single mapping root, duplicate-key rejection, immutable byte-snapshot reads (CFG-03a, CFG-03b)
+  - [x] `--validate` (CFG-10a), `--dump-config` with canonical masked YAML + winning-source comments (CFG-11), `--version`/`--help` (CFG-11a) — exit codes 0/64/78 verified
+  - [x] Verify NFR-05 as this lands: identical resolver inputs (including permuted env-var enumeration order) produce byte-identical `--dump-config` output — `tests/test_config/test_dump.py::TestNfr05` (60 env permutations, argv-order permutations, repeated identical inputs)
+- [x] Validation pipeline (CFG-12 – CFG-15, CAP-01, CAP-02)
+  - [x] `AgentConfig.model_validate()` + alias-only external shape walk (CFG-13)
+  - [x] Cross-field validation checklist (CFG-14): storage↔connection-string, MCP transport↔command/url, auth-mode↔credentials, vertex↔provider, MCP name uniqueness/size caps, byte-limit orderings, `k8s.required`↔`k8s.enabled`, JWT claim/CIDR checks
+  - [x] Deterministic aggregate error reporting sorted by path + code, secrets omitted
+  - [x] Capability fail-closed gating: reject non-empty `agents`, `acp`/`approval`/`rag` enabled in a P1 build (CAP-01)
+  - [x] `GET /health` capability reporting wired to build-time flags (CAP-02) — `app/config/capabilities.py` (endpoint lands in M5)
+  - [x] Enforce the exact boot order (CFG-15)
+- [x] Operational mode selection (MODE-01 – MODE-04)
+  - [x] Detect `k8s.enabled` + `KUBERNETES_SERVICE_HOST`
+  - [x] `k8s.required` fail-closed (exit 78) vs. warn-and-run-standalone behavior (MODE-03)
 
 ---
 

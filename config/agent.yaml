@@ -1,0 +1,10 @@
+# Bundled base Agent Definition (tier 1, REQUIREMENTS.md BASE-01).
+# Semantically equivalent to schema defaults with these explicit values.
+schemaVersion: 1
+name: "agent"
+engine:
+  systemInstruction: "You are a helpful assistant."
+llm:
+  provider: "gemini"
+  model: "gemini-2.5-flash"
+  apiKeyEnv: "GEMINI_API_KEY"

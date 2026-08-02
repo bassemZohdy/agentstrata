@@ -40,6 +40,7 @@ EXPOSE 8080
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY app /app/app
+COPY config /app/config
 COPY schemas /app/schemas
 COPY LICENSE /app/LICENSE
 

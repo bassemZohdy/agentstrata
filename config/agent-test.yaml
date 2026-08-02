@@ -1,0 +1,5 @@
+# Bundled profile used by resolver tests (tier 2).
+engine:
+  systemInstruction: "You are the test profile agent."
+server:
+  port: 9091
