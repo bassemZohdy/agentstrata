@@ -150,7 +150,6 @@ anyio==4.14.2 \
     # via
     #   google-genai
     #   httpx
-    #   httpx2
     #   mcp
     #   openai
     #   sse-starlette
@@ -736,7 +735,6 @@ h11==0.16.0 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
     # via
     #   httpcore
-    #   httpcore2
     #   uvicorn
 hf-xet==1.5.2 ; platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' \
     --hash=sha256:045f84440c55cdeb659cf1a1dd48c77bcd0d2e93632e2fea8f2c3bdee79f38ed \
@@ -761,10 +759,6 @@ httpcore==1.0.9 \
     --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \
     --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
     # via httpx
-httpcore2==2.9.1 \
-    --hash=sha256:4d8acbf8b306f48c9d6046591fd5ba4037d1b1b1000d140fc2c3eab1e9a0c0e2 \
-    --hash=sha256:6182472379e855fe4221246a2bb7ecede403bc61c6798062ae1787d051ccde26
-    # via httpx2
 httptools==0.8.0 \
     --hash=sha256:0770728beb05094c809b98e814edff5fef69d26ad7d21185f2f6d5884a0ba683 \
     --hash=sha256:0ea897f0c729581ebf72131a438a7932d9b14efef72d75ada966700cac3caaeb \
@@ -825,10 +819,11 @@ httpx==0.28.1 \
     #   google-genai
     #   huggingface-hub
     #   litellm
+    #   mcp
     #   openai
-httpx2==2.9.1 \
-    --hash=sha256:1820fe14a9ab1107bfeff39259987429450b070ec0ff38cc87eb0d8c97fdc71a \
-    --hash=sha256:1932a768737e3666291582833da748cc4e563c337cf96706fccc04fa6e58764a
+httpx-sse==0.4.3 \
+    --hash=sha256:0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc \
+    --hash=sha256:9b1ed0127459a66014aec3c56bebd93da3c1bc8bb6618c8082039a44889a755d
     # via mcp
 huggingface-hub==1.26.0 \
     --hash=sha256:c8cd4e2df1ba9402f77fce9b509ec1d52debb502551789473f34016acc14e361 \
@@ -840,7 +835,6 @@ idna==3.18 \
     # via
     #   anyio
     #   httpx
-    #   httpx2
     #   requests
     #   yarl
 importlib-metadata==8.9.0 \
@@ -1184,14 +1178,10 @@ markupsafe==3.0.3 \
     --hash=sha256:f9e130248f4462aaa8e2552d547f36ddadbeaa573879158d721bbd33dfe4743a \
     --hash=sha256:fed51ac40f757d41b7c48425901843666a6677e3e8eb0abcff09e4ba6e664f50
     # via jinja2
-mcp==2.0.0 \
-    --hash=sha256:0f440e735c13ece8bb19bc62cf0b86f4313448432fbb77d35e14034f4e050728 \
-    --hash=sha256:1cb4c75d2d2c7b8c1d756355e5d82a39f2822cc7f13e22a2051d7ca3592349d6
+mcp==1.29.0 \
+    --hash=sha256:52d01f334de1868cc3bb2d6604931126a67631f99a6c5d3b82ba47290315ec36 \
+    --hash=sha256:f5a075bb611f23d6f4d080c6a1699fa62772eebc562ba9e66b306ddde1c755f7
     # via -r requirements.txt
-mcp-types==2.0.0 \
-    --hash=sha256:6b2de797ca2797f568b79529e1b25948e34de511bcc0bd82fef1039a6d1b8eb0 \
-    --hash=sha256:d7d939b9285c9961ae8866ba75ef85da34d12bafe276efbf4eb6a131786d8379
-    # via mcp
 multidict==6.7.1 \
     --hash=sha256:026d264228bcd637d4e060844e39cdc60f86c479e463d49075dedc21b18fbbe0 \
     --hash=sha256:03ede2a6ffbe8ef936b92cb4529f27f42be7f56afcdab5ab739cd5f27fb1cbf9 \
@@ -1406,7 +1396,6 @@ opentelemetry-api==1.42.1 \
     --hash=sha256:56c63bea9f77b62856be8c47600474acad853b2924b99b1687c4cb6297166716
     # via
     #   google-adk
-    #   mcp
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
 opentelemetry-sdk==1.42.1 \
@@ -1640,8 +1629,8 @@ pydantic==2.13.4 \
     #   google-genai
     #   litellm
     #   mcp
-    #   mcp-types
     #   openai
+    #   pydantic-settings
 pydantic-core==2.46.4 \
     --hash=sha256:00c603d540afdd6b80eb39f078f33ebd46211f02f33e34a32d9f053bba711de0 \
     --hash=sha256:0186750b482eefa11d7f435892b09c5c606193ef3375bcf94aa00ae6bfb66262 \
@@ -1764,6 +1753,10 @@ pydantic-core==2.46.4 \
     --hash=sha256:fc3e9034a63de20e15e8ade85358bc6efc614008cab72898b4b4952bea0509ff \
     --hash=sha256:fd8b3d9fd264be37976686c7f65cd52a83f5e84f4bfd2adf9c1d469676bbb6ae
     # via pydantic
+pydantic-settings==2.14.2 \
+    --hash=sha256:a20c97b37910b6550d5ea50fbcc2d4187defe58cd57070b73863d069419c9440 \
+    --hash=sha256:c19dd64b19097f1de80184f0cc7b0272a13ae6e170cbf240a3e27e381ed14a5f
+    # via mcp
 pygments==2.20.0 \
     --hash=sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f \
     --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
@@ -1788,6 +1781,7 @@ python-dotenv==1.2.2 \
     # via
     #   google-adk
     #   litellm
+    #   pydantic-settings
     #   uvicorn
 python-multipart==0.0.32 \
     --hash=sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e \
@@ -2292,12 +2286,6 @@ tqdm==4.70.0 \
     # via
     #   huggingface-hub
     #   openai
-truststore==0.10.4 \
-    --hash=sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301 \
-    --hash=sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981
-    # via
-    #   httpcore2
-    #   httpx2
 types-pyyaml==6.0.12.20260724 \
     --hash=sha256:3c1ce1bb73cd5ec02e90390c2b1f00e810d241d8825fd73ff359696839271b6b \
     --hash=sha256:d57db930a4b2efbc57cf430ec8882765d246929432fa253092f383902329a453
@@ -2312,10 +2300,8 @@ typing-extensions==4.16.0 \
     #   fastapi
     #   google-adk
     #   google-genai
-    #   httpx2
     #   huggingface-hub
     #   mcp
-    #   mcp-types
     #   mypy
     #   openai
     #   opentelemetry-api
@@ -2334,6 +2320,7 @@ typing-inspection==0.4.2 \
     #   fastapi
     #   mcp
     #   pydantic
+    #   pydantic-settings
 tzdata==2026.3 ; sys_platform == 'win32' \
     --hash=sha256:4a1518b8993086a7982523e071643f3c0e5f213e75b21318e78bcabfff9d1415 \
     --hash=sha256:dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931

@@ -15,12 +15,12 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
   - [x] `requirements.txt` with direct compatible ranges: `fastapi`, `uvicorn[standard]`, `pydantic` v2, `google-adk`, `litellm`, `mcp`, `PyYAML`, `kubernetes`, `redis`, `psycopg[binary]`, `PyJWT[crypto]`
   - [x] `requirements-dev.txt` for test/schema/lint tooling (`pytest`, `ruff`, `mypy`, `types-PyYAML`)
   - [x] Lock tooling producing `requirements.lock` with exact versions + hashes — `uv pip compile` via `scripts/compile-lock.sh`; `requirements.lock` (prod) + `requirements-dev.lock` (dev union), both universal + hash-pinned for Python 3.12; `scripts/verify-lock.sh` verifies hashes (CI + Docker builder); resolve/update/review flow documented in PLAN.md (STACK-01 cross-cutting rule)
-- [ ] **STACK-02 feasibility spike — do this before Milestones 1–4, not after:**
-  - [ ] Confirm the locked ADK version exposes the documented session/event lifecycle through a public/stable seam
-  - [ ] Confirm `McpToolset` connection/cancellation lifecycle is usable without private-internal monkey-patching
-  - [ ] Confirm a bounded-read seam exists for enforcing `maxTransportMessageBytes` (MCP-08) on every transport
-  - [ ] Confirm Uvicorn exposes the parser bounds API-20 requires (request-line/header/header-count limits pre-allocation)
-  - [ ] If any seam is missing: revise the dependency choice, trust boundary, or phase scope before continuing
+- [x] **STACK-02 feasibility spike — do this before Milestones 1–4, not after:**
+  - [x] Confirm the locked ADK version exposes the documented session/event lifecycle through a public/stable seam — **GO** (google-adk 2.6.1): `LlmAgent`, `Runner.run_async` (yields typed `Event`), `BaseSessionService` (public abstract contract, injectable into `Runner`), `BaseLlm.generate_content_async` extension hook. Verified end-to-end by `scripts/spike_adk_lifecycle.py` (run → event stream → session history persisted).
+  - [x] Confirm `McpToolset` connection/cancellation lifecycle is usable without private-internal monkey-patching — **GO on mcp 1.29.0** (`McpToolset(connection_params=...)` → `get_tools()` → `close()`; verified by `scripts/spike_mcp_lifecycle.py` against a real stdio server); **BROKEN on mcp 2.0.0** — `google.adk.tools.McpToolset` import fails: ADK 2.6.1 imports `mcp.shared.session.ProgressFnT`, removed in mcp 2.0 (ADK declares `mcp>=1.24,<2`; 2.6.1 is the latest ADK release). **Dependency fix required: pin `mcp>=1.24,<2` (lock → 1.29.0).**
+  - [x] Confirm a bounded-read seam exists for enforcing `maxTransportMessageBytes` (MCP-08) on every transport — **GO for HTTP/SSE** (`httpx_client_factory`/`http_client` injection is an ADK-blessed public seam on `SseConnectionParams`/`StreamableHTTPConnectionParams` and `mcp.client.streamable_http`); **NO seam for stdio** in mcp 1.29.0 (`stdio_client` reads `async for line` with an unbounded accumulate-until-newline buffer; no byte-source injection point). mcp 2.0.0 *does* define a documented `Transport` protocol seam, but is incompatible with ADK 2.6.1. **→ decision needed (STACK-02: dependency choice / trust boundary / phase scope MUST change).**
+  - [x] Confirm Uvicorn exposes the parser bounds API-20 requires (request-line/header/header-count limits pre-allocation) — **PARTIAL** on uvicorn 0.52.1: `h11_max_incomplete_event_size` bounds the incomplete request-line+headers buffer before full allocation (public Config/CLI seam), but (a) complete single-segment requests bypass the cap, (b) there is no header-count limit, (c) over-limit responses are `400` or connection aborts — `error_status_hint` (431) is ignored; 414 is never produced. httptools path (default) exposes nothing configurable. `uvicorn.Config(http=...)` accepts a custom protocol *class* — the documented seam for an M5 custom h11 subclass that maps 431/414 — plan for it in Milestone 5.
+  - [x] If any seam is missing: revise the dependency choice, trust boundary, or phase scope before continuing — **two findings recorded above: (1) mcp pin <2 applied (ADK's declared range — locked at 1.29.0), (2) stdio byte-bound seam absent — user decision (2026-08-02): defer stdio pre-parse cap, enforce HTTP/SSE now; REQUIREMENTS.md MCP-08 amended with phase note (v2.5)** (see Open decisions)
 - [ ] Minimal Dockerfile (CNT-01, CNT-04, CNT-05, CNT-06)
   - [ ] Multi-stage build: digest-pinned `python:3.12-slim` builder installing into a venv, then a matching runtime stage
   - [ ] `ENTRYPOINT ["python","-m","app.main"]` (exec form)
@@ -136,7 +136,7 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 - [ ] Global per-server toolset lifecycle manager with ref-counted close on rebuild/shutdown (MCP-05)
 - [ ] stdio sandboxing: `shell=False`, minimal inherited env (`PATH`/`LANG`/`LC_ALL`/`TMPDIR` + configured `env`), `${VAR}` interpolation at connect time (MCP-06)
 - [ ] Call outcome handling: no auto-retry, cancellation propagation to SDK/process (MCP-07)
-- [ ] Bounded parsing before buffering/decoding: `maxTransportMessageBytes` pre-parse cap, `maxTools`/name/description/schema size caps, degrade optional / unready required on overflow (MCP-08)
+- [ ] Bounded parsing before buffering/decoding: `maxTransportMessageBytes` pre-parse cap, `maxTools`/name/description/schema size caps, degrade optional / unready required on overflow (MCP-08) — **phased per REQUIREMENTS.md v2.5: pre-parse cap enforced on Streamable HTTP + legacy SSE via httpx seam; stdio cap deferred until a google-adk release supports the mcp 2.x `Transport` seam**
 - [ ] Protocol tests against the official MCP SDK: connect/reconnect/recovery, collisions, truncation, an endless/no-delimiter stdio writer, oversized HTTP/SSE frames
 
 ---
@@ -160,7 +160,7 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 - [ ] `GET /v1/models` returning the single configured model (API-17)
 - [ ] OpenAPI docs: security schemes, extensions, limits, SSE schemas documented; golden diff in CI (API-18, DEL-02)
 - [ ] Serialization case rules: camelCase config/non-`/v1/`, snake_case OpenAI-compatible surface (API-19)
-- [ ] Bounded HTTP parser (request-line/header/header-count limits pre-allocation), replica-local rate limiting (API-20)
+- [ ] Bounded HTTP parser (request-line/header/header-count limits pre-allocation), replica-local rate limiting (API-20) — **STACK-02 (M0): uvicorn 0.52.1 `h11_max_incomplete_event_size` bounds the incomplete request-line+headers buffer; 414/431 mapping + header-count cap require the custom-protocol-class seam (`uvicorn.Config(http=...)` accepts a class) — build at M5; httptools not used for the bounded path**
 - [ ] Auth modes
   - [ ] `none` — non-loopback bind emits high-severity audit warning (SEC-01)
   - [ ] `apiKey` — constant-time compare, `Bearer`/`X-API-Key`, must-match if both present (SEC-01)
@@ -230,6 +230,11 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria (§18) pass.
 
 ---
+
+## Decisions made (resolved, for the record)
+
+- [x] **MCP-08 stdio pre-parse byte cap (STACK-02 seam).** Decided 2026-08-02: defer the stdio `maxTransportMessageBytes` pre-parse cap; enforce the cap on Streamable HTTP + legacy SSE now. Reason: google-adk 2.6.1 (latest) pins `mcp>=1.24,<2`, and mcp 1.29.0's `stdio_client` has no bounded-read injection point; mcp 2.x has the `Transport` seam but is incompatible with ADK 2.6.1. Recorded in REQUIREMENTS.md MCP-08 (v2.5). Revisit when a google-adk release supports mcp 2.x.
+- [x] **mcp SDK version range.** Pinned `mcp>=1.24,<2` (locked 1.29.0) per google-adk 2.6.1's declared range — mcp 2.0.0 breaks `McpToolset` imports.
 
 ## Open decisions (need a human call, not an engineering call)
 

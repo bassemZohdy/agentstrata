@@ -54,7 +54,7 @@ Every milestone below is broken into a checked task list in TODO.md under the sa
 ## Milestone 4 — MCP tool integration
 
 - `McpToolset` wiring for stdio, Streamable HTTP, and legacy SSE transports (SCH-04, MCP-01, MCP-05).
-- Bounded parsing before buffering/decoding, tool-count/name/schema limits (MCP-08).
+- Bounded parsing before buffering/decoding, tool-count/name/schema limits (MCP-08). **Phased per REQUIREMENTS.md 2.5:** the `maxTransportMessageBytes` pre-parse cap is enforced on Streamable HTTP and legacy SSE via the `httpx_client_factory`/`http_client` seam (verified in the M0 STACK-02 spike); the stdio pre-parse cap is deferred until a google-adk release supports the mcp 2.x `Transport` seam — stdio connect/reconnect/limits are still proven per §18, minus the byte cap.
 - Tool filtering, collision-safe renaming, redacted/truncated results (MCP-03, MCP-04).
 - stdio sandboxing (`shell=False`, minimal inherited env) and call-outcome/cancellation semantics (MCP-06, MCP-07).
 
@@ -63,7 +63,7 @@ Every milestone below is broken into a checked task list in TODO.md under the sa
 ## Milestone 5 — API surface and security
 
 - Health/metadata endpoints (API-01 – API-04).
-- OpenAI-compatible chat: request validation, state rules, idempotency, non-streaming and streaming responses, error mapping (API-05 – API-08a, API-12 – API-20).
+- OpenAI-compatible chat: request validation, state rules, idempotency, non-streaming and streaming responses, error mapping (API-05 – API-08a, API-12 – API-20). **STACK-02 finding (M0):** uvicorn 0.52.1's `h11_max_incomplete_event_size` bounds the incomplete request-line+headers buffer pre-allocation, but over-limit requests get 400/abort (never 414/431) and there is no header-count cap. `uvicorn.Config(http=...)` accepts a custom protocol class — M5 ships a small h11 subclass that enforces request-line/header-count caps and maps `error_status_hint` to 414/431; httptools is not used for the bounded path.
 - Session management endpoints (API-09).
 - Auth modes — none, API key, JWT/JWKS — wired into the admission pipeline from Milestone 3 (SEC-01, SEC-03, SEC-08).
 - Recursive secret redaction, CORS, egress restriction, proxy handling, audit events, response hardening (SEC-02, SEC-05, SEC-06, SEC-09 – SEC-11).

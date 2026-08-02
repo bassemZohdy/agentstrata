@@ -1,7 +1,7 @@
 # AgentStrata — Universal Cloud-Native Agent Runtime
 
 | | |
-|---|---|
+| --- | --- |
 | **Document** | Product and Software Requirements Specification (SRS) — authoritative implementation baseline |
 | **Working name** | **AgentStrata** (pending trademark, domain, and package-registry clearance) |
 | **Version** | 2.4 |
@@ -13,7 +13,7 @@
 **Revision history**
 
 | Version | Change |
-|---|---|
+| --- | --- |
 | 1.0 | Initial consolidated baseline |
 | 1.1 | Review pass: NFRs (§6), concurrency and session-serialization limits, `GET /v1/models`, `--validate`, JWT algorithm allowlist, TTL sweeps, container hardening, `engine.topP` |
 | 2.0 | Independent requirements review: fail-closed phase capabilities, deterministic config parsing, bounded transports and sessions, atomic multi-replica session semantics, explicit run lifecycle, JWT/proxy hardening, transactional reload, measurable release gates |
@@ -21,11 +21,12 @@
 | 2.2 | Scope pass: dropped WebSocket API and the Kubernetes CRD path (ConfigMap watching only) as premature transports/surfaces; storage remains configurable across all four backends with a shared contract test plus an extra fencing proof for the multi-replica ones; replaced the internal file-tree/pytest-tooling/release-governance sections (§§17-19, GATE-01, STACK-02) with outcome-based deliverables, acceptance criteria, and traceability requirements — this document states what the runtime must do, not how it is built or tested |
 | 2.3 | Final consistency pass: removed a stale "phase gate" reference to the deleted GATE-01, de-duplicated the `docker-compose.yaml` deliverable description against CNT-09, added the OpenAI SDK compatibility matrix to the deliverables list, and clarified the image-size measurement rule |
 | 2.4 | Fixed a real contradiction: DEL-01 claimed internal code organization was entirely free, but CNT-04/CNT-10 fix the entrypoint/healthcheck module path (`app.main`/`app.healthcheck`) so Docker has a concrete command to invoke. DEL-01 now names that one narrow exception. |
+| 2.5 | STACK-02 phase-scope decision: `maxTransportMessageBytes` enforcement is phased — Streamable HTTP and legacy SSE get the pre-parse cap in the P1 release (bounded-read seam exists via httpx injection on the locked stack); the stdio transport's pre-parse cap is deferred until a google-adk release supports the mcp 2.x `Transport` protocol seam (google-adk 2.6.1 pins `mcp>=1.24,<2`; mcp 1.29.0's `stdio_client` has no bounded-read injection point). MCP-08 now carries this note. |
 
 **Section index**
 
 | Phase | Sections |
-|---|---|
+| --- | --- |
 | P1 core (§§2–12, 16–18) | [1](#1-purpose-and-product-overview) Purpose · [2](#2-operational-modes) Operational modes · [3](#3-externalized-configuration-engine) Config engine · [4](#4-agent-definition-schema) Agent Definition schema · [5](#5-engine-execution-adk) Engine execution · [6](#6-non-functional-requirements) NFRs · [7](#7-watcher-driven-configuration-reload) Config reload · [8](#8-sessions-and-storage) Sessions/storage · [9](#9-api-surface) API surface · [10](#10-kubernetes-watcher-mode) K8s watcher · [11](#11-security) Security · [12](#12-observability) Observability · [16](#16-container-and-runtime-packaging) Container packaging · [17](#17-required-deliverables) Deliverables · [18](#18-acceptance-criteria) Acceptance criteria |
 | P2 (§13) | [13](#13-multi-agent-phase-2) Multi-agent |
 | P3 (§14) | [14](#14-human-in-the-loop-approval-phase-3) Human-in-the-loop approval |
@@ -63,7 +64,7 @@ The product is a runtime and control boundary, not an agent builder. Its primary
 **STACK-01 (fixed stack and lock)** — Releases MUST use the following stack and the exact dependency versions and hashes in `requirements.lock`. `requirements.txt` declares direct compatible ranges; CI resolves and reviews lock updates. A library upgrade that changes a documented API shape or lifecycle is a requirements-impacting change, not an automatic dependency bump.
 
 | Component | Requirement |
-|---|---|
+| --- | --- |
 | Language | Python 3.12 |
 | Validation | Pydantic v2 |
 | HTTP server | FastAPI + Uvicorn (single async worker; see CNT-08) |
@@ -94,7 +95,7 @@ The product is a runtime and control boundary, not an agent builder. Its primary
 Each phase MUST be independently releasable, retain previous contracts unless a versioned breaking change is approved, and pass its own acceptance criteria (§18) before the next phase begins.
 
 | Phase | Contents |
-|---|---|
+| --- | --- |
 | **P1 — Core runtime** | §§2–12 and §§16–18, excluding items explicitly tagged P2/P3/P4 |
 | **P2 — Multi-agent and agent-to-agent REST** | Sub-agent hierarchies (§13) and the ACP surface (API-16) |
 | **P3 — Human-in-the-loop** | Tool-approval flow (§14) |
@@ -152,7 +153,7 @@ Specifically, a P1 build MUST reject non-empty `agents`, `server.protocols.acp: 
 **CFG-01** — Configuration MUST be assembled by deep-merging the following tiers in ascending order; the highest tier that supplies a leaf wins.
 
 | Tier | Source | Notes |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Bundled base file `/app/config/agent.yaml` | Shipped in image; MUST exist |
 | 2 | Bundled profile file `/app/config/agent-{profile}.yaml` | Skipped if absent |
 | 3 | Mounted base file — first existing of `{configDir}/agent.yaml`, `{configDir}/agent.yml`, `{configDir}/agent.json`, `{configDir}/config.yaml`, checked in that order | Only the first match is loaded; skipped if none |
@@ -242,8 +243,9 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 **SCH-03 (core field contract)** — Every field through the `llm` table below MUST exist with the listed type, default, and constraint. “Secret ref pair” means two optional non-empty strings `<name>Env` and `<name>File`; when both are set, file wins (SEC-04). Secret contents never become part of `AgentConfig`; resolution returns a separate secret value at the point of use.
 
 #### Top level
+
 | Field | Type | Default | Constraints |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `$schema` | str | `""` | Informational URI used by editors; retained in dumps, not fetched at runtime |
 | `schemaVersion` | int | `1` | MUST equal `1` in this specification |
 | `name` | str | — **required** | `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$` (DNS-1123 label) |
@@ -251,8 +253,9 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 | `profile` | str | `""` | Informational only (CFG-03) |
 
 #### `engine`
+
 | Field | Type | Default | Constraints |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `systemInstruction` | str | — **required** | non-empty |
 | `temperature` | float | `0.7` | `0.0 ≤ x ≤ 2.0` |
 | `topP` | float | `1.0` | `0.0 < x ≤ 1.0`; nucleus sampling, passed to the model when the provider supports it |
@@ -271,8 +274,9 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 | `tokenBudget.perSession` | int | `0` | `0..1000000000000`; `0` = unlimited; cumulative per session; exceeding ⇒ error `budget_exceeded` |
 
 #### `llm`
+
 | Field | Type | Default | Constraints |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `provider` | enum | `"gemini"` | `gemini \| openai \| anthropic \| ollama \| litellm` |
 | `model` | str | — **required** | 1..256 code points; MUST NOT be validated against a hardcoded model list |
 | `apiKey(Env/File)` | secret ref pair | unset | |
@@ -288,10 +292,11 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 **LLM-03** — A provider call that fails before any response delta MAY be retried at most twice for transport errors, HTTP 429, or HTTP 5xx. Backoff is 1 s then 2 s plus 0–250 ms jitter and MUST honor a longer valid `Retry-After`, all within the run deadline. Once a delta has been emitted or a tool call has begun, that call MUST NOT be automatically replayed. Provider authentication, invalid requests, content-policy failures, and quota/billing failures are not retried. There is no cross-model fallback.
 
 #### `tools.mcpServers[]`
+
 **SCH-04 (MCP field contract)** — `tools.mcpServers` is a list with default `[]`, replaced wholesale per CFG-05; every item has the fields and constraints below.
 
 | Field | Type | Default | Constraints |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `name` | str | — **required** | Unique within the list; DNS-1123 label |
 | `transport` | enum | — **required** | `stdio \| sse \| streamable-http`. (`http` MUST be accepted as a deprecated alias for `streamable-http` with a warning) |
 | `url` | str | `""` | For sse/streamable-http |
@@ -317,13 +322,14 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 **MCP-05 (lifecycle)** — One runtime-global `McpToolset`/connection lifecycle exists per configured server and is shared across sessions. The manager owns explicit async close on rebuild and shutdown; removed components close only after their in-flight reference count reaches zero or the shutdown deadline expires.
 **MCP-06 (stdio boundary)** — Stdio processes MUST launch with `shell=False`. Their environment consists only of present values from `PATH`, `LANG`, `LC_ALL`, and `TMPDIR`, plus the configured `env` map. They MUST NOT inherit the full runtime environment. Each exact `${VAR}` is resolved from the parent environment at connection time; an unset reference causes that server’s connection attempt to fail without revealing the variable value.
 **MCP-07 (call outcome)** — Tool calls are never automatically retried. Timeout or transport failure becomes one structured error result visible to the agent and counts as an iteration. Request cancellation MUST propagate to the SDK/tool process; if cancellation is unsupported, the result is discarded and the run still terminates by its deadline.
-**MCP-08 (untrusted metadata and framing)** — The adapter supplied to the official MCP SDK MUST enforce `maxTransportMessageBytes` while reading each HTTP/SSE/stdio message, before full buffering or JSON decoding; exceeding it disconnects that server and records a bounded error. Discovery admits at most `maxTools` after filtering. A tool name is at most 128 UTF-8 bytes, a description at most 4,096 code points, and canonical input schema at most 65,536 bytes; an oversized tool is excluded. Exclusion/overflow marks an optional server degraded and a required server unready. The locked SDK/ADK versions MUST expose a tested bounded-stream seam; replacing `McpToolset` with a parallel protocol client is not an allowed workaround.
+**MCP-08 (untrusted metadata and framing)** — The adapter supplied to the official MCP SDK MUST enforce `maxTransportMessageBytes` while reading each HTTP/SSE/stdio message, before full buffering or JSON decoding; exceeding it disconnects that server and records a bounded error. Discovery admits at most `maxTools` after filtering. A tool name is at most 128 UTF-8 bytes, a description at most 4,096 code points, and canonical input schema at most 65,536 bytes; an oversized tool is excluded. Exclusion/overflow marks an optional server degraded and a required server unready. The locked SDK/ADK versions MUST expose a tested bounded-stream seam; replacing `McpToolset` with a parallel protocol client is not an allowed workaround. **Phase-scope note (2.5):** the pre-parse byte cap is enforced on Streamable HTTP and legacy SSE transports from the P1 release (the `httpx_client_factory`/`http_client` injection seam exists on the locked stack). The stdio transport's pre-parse cap is deferred: google-adk 2.6.1 (latest) pins `mcp>=1.24,<2`, and mcp 1.29.0's `stdio_client` offers no bounded-read injection point; mcp 2.x's documented `Transport` protocol seam is incompatible with ADK 2.6.1. Stdio servers remain fully supported; the config field still validates for them, but the cap is documented as not yet enforced on stdio — revisit when a google-adk release supports the mcp 2.x `Transport` seam.
 
 #### `storage`
+
 **SCH-05 (storage field contract)** — The storage fields below are required with the listed defaults and constraints.
 
 | Field | Type | Default | Constraints |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `type` | enum | `"memory"` | `memory \| file \| redis \| postgres` |
 | `path` | str | `""` | `file` type: directory for session JSON files |
 | `connectionString(Env/File)` | secret ref pair | unset | `redis` / `postgres` |
@@ -338,10 +344,11 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 See §8 for behavior.
 
 #### `server`
+
 **SCH-06 (server field contract)** — The serving, protocol, authentication, and transport-limit fields below are required with the listed defaults and constraints.
 
 | Field | Type | Default | Constraints |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `host` | str | `"0.0.0.0"` | |
 | `port` | int | `8080` | 1–65535 |
 | `protocols.openaiCompat` | bool | `true` | §9 REST + SSE |
@@ -371,10 +378,11 @@ See §8 for behavior.
 | `shutdownGraceSeconds` | int | `25` | `1..300`; CNT-07 |
 
 #### `k8s`
+
 **SCH-07 (Kubernetes field contract)** — The watcher fields below are required with the listed defaults and constraints.
 
 | Field | Type | Default | Constraints |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `enabled` | bool | `false` | |
 | `required` | bool | `false` | When true, readiness waits for one valid tier-8 sync |
 | `namespace` | str | `"default"` | |
@@ -382,10 +390,11 @@ See §8 for behavior.
 | `resyncSeconds` | int | `300` | `≥ 30`; full re-list interval |
 
 #### `observability`
+
 **SCH-08 (observability field contract)** — The logging and telemetry fields below are required with the listed defaults and constraints.
 
 | Field | Type | Default | Constraints |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `logLevel` | enum | `"INFO"` | `DEBUG \| INFO \| WARNING \| ERROR` |
 | `logFormat` | enum | `"json"` | `json \| text` |
 | `includeToolArguments` | bool | `false` | Applies to logs/traces only; never disables SEC-02 redaction |
@@ -393,6 +402,7 @@ See §8 for behavior.
 | `otel.serviceName` | str | value of top-level `name` | |
 
 #### Phase-gated sections
+
 **SCH-09 (phase-section contract)** — Future-phase sections remain explicitly present and fail closed.
 
 `agents[]` (§13, P2), `approval` (§14, P3), and `rag` (§15, P4) MUST exist in every phase schema with empty/disabled defaults. CAP-01 governs unsupported builds. Unknown non-default fields in a future schema major are still rejected; forward compatibility never permits fail-open behavior.
@@ -479,7 +489,7 @@ Release performance gates run against the Linux `amd64` image with a 1.0 CPU quo
 **REL-02** — Every schema leaf is classified exhaustively:
 
 | Category | Fields | Action |
-|---|---|---|
+| --- | --- | --- |
 | Live snapshot | `$schema`, `description`, `engine.maxOutputBytes/timeoutSeconds/maxIterations/historyMaxMessages/historyMaxBytes/streaming/overrides/tokenBudget`, `storage.sessionTtlSeconds/runTtlSeconds/maxSessions/maxRunsPerSession/maxIdempotencyRecordsPerSession/lockAcquireSeconds/idempotencyTtlSeconds`, `server.rateLimit.*`, `server.maxConcurrentRequests/maxRequestBytes/maxMessageBytes/streamQueueEvents/slowConsumerSeconds/exposeSystemInstruction/shutdownGraceSeconds`, `observability.logLevel/includeToolArguments` | Included in the next Applied Config snapshot |
 | Component rebuild | `engine.systemInstruction/temperature/topP/maxTokens`, `llm.*`, `tools.*`, and supported phase components `agents/approval/rag` | Build and health-check replacements without exposing them, then atomically swap |
 | Restart required | `schemaVersion`, `name`, `profile`, `storage.type/path/connectionString*`, `server.host/port/protocols/cors*/auth/trustedProxyCidrs/maxRequestLineBytes/maxHeaderBytes/maxHeaderCount`, `k8s.*`, `observability.logFormat/otel/serviceName` | Reject the entire update as `restart_required`; do not partially apply |
@@ -499,7 +509,7 @@ Release performance gates run against the Linux `amd64` image with a 1.0 CPU quo
 **SES-01 (record)** — A session is keyed by `(agent_name, principal_id, session_id)` and stores that identity, revision, ordered conversational messages, cumulative usage, `history_truncated`, `created_at`, and `updated_at`. The same client-chosen `session_id` MAY safely exist for different principals or agents. Runs, tool audit records, and idempotency records are associated data but are not blindly replayed as model conversation. Stored JSON has an explicit internal `schema_version`.
 
 | Type | Behavior |
-|---|---|
+| --- | --- |
 | `memory` | In-process maps and locks. Boot logs that data is lost on restart and not shared across replicas. Production manifests MUST use one replica with this backend. |
 | `file` | `{path}/{agent_name}/{principal_digest}/{session_id}.json`, with safe fixed-format components. Writes use an exclusive temp file in the target directory, fsync its contents, same-filesystem replace, then fsync the parent directory; traversal through attacker-controlled symlinks is rejected. The directory MUST pass create/write/fsync/rename/delete probing before readiness. This backend supports one replica/process only. |
 | `redis` | Session key includes `agent_name`, full principal digest, and `session_id`; revision mutations use atomic Lua or transactions; lock and idempotency keys share the same hash tag for Redis Cluster compatibility. |
@@ -566,7 +576,7 @@ Acquisition waits at most `lockAcquireSeconds`, then returns 409 `session_busy`.
 **API-05 (request)** — `POST /v1/chat/completions` accepts this P1 text subset:
 
 | Field | Contract |
-|---|---|
+| --- | --- |
 | `model` | Required non-empty string. It MUST exactly equal the ID returned by `GET /v1/models`; otherwise 404 `model_not_found`. |
 | `messages` | Required array with 1..`engine.historyMaxMessages` items. Each item has `role`, string `content`, and optional string `name`. |
 | `stream` | Optional bool, default `false`. |
@@ -613,7 +623,7 @@ Unknown, expired, and foreign IDs return identical 404 responses.
 **API-15 (errors)** — Endpoints under `/v1/` MUST use the OpenAI error envelope: `{"error":{"message":"...","type":"<code>","code":"<code>"}}`. Non-`/v1/` endpoints use `{"status":"error","code":"...","message":"..."}`. Defined codes and HTTP statuses:
 
 | code | HTTP |
-|---|---|
+| --- | --- |
 | `invalid_request` / `invalid_session_id` / `override_not_allowed` / `context_length_exceeded` / `approval_session_required` | 400 |
 | `unauthorized` | 401 |
 | `not_found` / `model_not_found` | 404 |

@@ -1,0 +1,50 @@
+[project]
+name = "agentstrata"
+version = "0.1.0"
+description = "A declarative, production-grade AI agent runtime (Phase 1 core). Working name — pending trademark/package clearance."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141,<1",
+    "uvicorn[standard]>=0.52,<1",
+    "pydantic>=2.13,<3",
+    "google-adk>=2.6,<3",
+    "litellm>=1.95,<2",
+    "mcp>=2.0,<3",
+    "PyYAML>=6.0,<7",
+    "kubernetes>=36,<37",
+    "redis>=8,<9",
+    "psycopg[binary]>=3.3,<4",
+    "PyJWT[crypto]>=2.13,<3",
+]
+
+# NOTE: requirements.txt/requirements-dev.txt are the manifest of record
+# (STACK-01); this [project] table mirrors them for tooling/IDE convenience
+# and MUST be kept in sync by scripts/compile-lock.sh's inputs.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["SIM108"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+show_error_codes = true
+warn_unused_configs = true
+exclude = ["build/", "dist/", ".venv/", "tests/"]
+files = ["app", "scripts"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
