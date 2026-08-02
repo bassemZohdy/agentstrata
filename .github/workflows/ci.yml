@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Install Python 3.12
+        run: uv python install 3.12
+      - name: Install locked dev dependencies
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv -r requirements-dev.lock --require-hashes
+      - name: Ruff lint
+        run: .venv/bin/python -m ruff check app scripts
+      - name: Ruff format check
+        run: .venv/bin/python -m ruff format --check app scripts
+      - name: mypy type-check
+        run: .venv/bin/python -m mypy app scripts
+
+  lockfile:
+    name: Lockfile hash verification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Verify lock hashes (STACK-01)
+        run: ./scripts/verify-lock.sh
+
+  test:
+    name: Tests (placeholder)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Install Python 3.12
+        run: uv python install 3.12
+      - name: Install locked dev dependencies
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv -r requirements-dev.lock --require-hashes
+      - name: Run tests
+        run: .venv/bin/python -m pytest
