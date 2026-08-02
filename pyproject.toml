@@ -9,7 +9,7 @@ dependencies = [
     "pydantic>=2.13,<3",
     "google-adk>=2.6,<3",
     "litellm>=1.95,<2",
-    "mcp>=2.0,<3",
+    "mcp>=1.24,<2",
     "PyYAML>=6.0,<7",
     "kubernetes>=36,<37",
     "redis>=8,<9",
@@ -18,8 +18,9 @@ dependencies = [
 ]
 
 # NOTE: requirements.txt/requirements-dev.txt are the manifest of record
-# (STACK-01); this [project] table mirrors them for tooling/IDE convenience
-# and MUST be kept in sync by scripts/compile-lock.sh's inputs.
+# (STACK-01); this [project] table mirrors them for tooling/IDE convenience.
+# Drift is caught by scripts/check-manifest-sync.py (run in CI and by
+# scripts/compile-lock.sh) — never edit one without the other.
 
 [tool.ruff]
 line-length = 100

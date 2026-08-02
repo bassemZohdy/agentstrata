@@ -25,4 +25,7 @@ uv pip compile requirements.txt requirements-dev.txt \
     --universal \
     --python-version 3.12
 
+# Guard against drift between requirements.txt and pyproject.toml [project].
+python scripts/check-manifest-sync.py
+
 echo "Lockfiles regenerated: requirements.lock, requirements-dev.lock"

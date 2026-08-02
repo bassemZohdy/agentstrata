@@ -29,6 +29,8 @@ jobs:
         run: |
           uv venv --python 3.12 .venv
           uv pip install --python .venv -r requirements-dev.lock --require-hashes
+      - name: Manifest sync (requirements.txt vs pyproject [project])
+        run: .venv/bin/python scripts/check-manifest-sync.py
       - name: Ruff lint
         run: .venv/bin/python -m ruff check app scripts
       - name: Ruff format check
