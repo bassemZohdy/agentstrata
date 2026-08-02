@@ -8,13 +8,13 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 
 ## Milestone 0 — Project bootstrap
 
-- [ ] Repository skeleton
-  - [ ] Directory layout for config/engine/storage/protocol/security/watcher concerns (internal layout is free-form, DEL-01 — just keep these independently testable)
-  - [ ] `.gitignore`, base `README`/license placeholders
-- [ ] Dependency management (STACK-01)
-  - [ ] `requirements.txt` with direct compatible ranges: `fastapi`, `uvicorn[standard]`, `pydantic` v2, `google-adk`, `litellm`, `mcp`, `PyYAML`, `kubernetes`, `redis`, `psycopg[binary]`, `PyJWT[crypto]`
-  - [ ] `requirements-dev.txt` for test/schema/lint tooling
-  - [ ] Lock tooling producing `requirements.lock` with exact versions + hashes
+- [x] Repository skeleton
+  - [x] Directory layout for config/engine/storage/protocol/security/watcher concerns (internal layout is free-form, DEL-01 — just keep these independently testable)
+  - [x] `.gitignore`, base `README`/license placeholders (README existed; added `.gitignore`, `.gitattributes`, LICENSE placeholder — license/trademark remains an open decision)
+- [x] Dependency management (STACK-01)
+  - [x] `requirements.txt` with direct compatible ranges: `fastapi`, `uvicorn[standard]`, `pydantic` v2, `google-adk`, `litellm`, `mcp`, `PyYAML`, `kubernetes`, `redis`, `psycopg[binary]`, `PyJWT[crypto]`
+  - [x] `requirements-dev.txt` for test/schema/lint tooling (`pytest`, `ruff`, `mypy`, `types-PyYAML`)
+  - [x] Lock tooling producing `requirements.lock` with exact versions + hashes — `uv pip compile` via `scripts/compile-lock.sh`; `requirements.lock` (prod) + `requirements-dev.lock` (dev union), both universal + hash-pinned for Python 3.12; `scripts/verify-lock.sh` verifies hashes (CI + Docker builder); resolve/update/review flow documented in PLAN.md (STACK-01 cross-cutting rule)
 - [ ] **STACK-02 feasibility spike — do this before Milestones 1–4, not after:**
   - [ ] Confirm the locked ADK version exposes the documented session/event lifecycle through a public/stable seam
   - [ ] Confirm `McpToolset` connection/cancellation lifecycle is usable without private-internal monkey-patching

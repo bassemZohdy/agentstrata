@@ -1,0 +1,9 @@
+# Development-only tooling — not installed into the runtime image.
+# The dev union lock is `requirements-dev.lock` (see scripts/compile-lock.sh).
+
+-r requirements.txt
+
+pytest>=9,<10
+ruff>=0.16,<1
+mypy>=1.11,<3
+types-PyYAML

@@ -1,0 +1,19 @@
+# Direct runtime dependencies — compatible ranges only (REQUIREMENTS.md STACK-01).
+#
+# Exact versions + hashes live in `requirements.lock` (and
+# `requirements-dev.lock` for the dev union). Regenerate with
+# `scripts/compile-lock.sh`; lock updates are reviewed in CI, and a library
+# upgrade that changes a documented API shape or lifecycle is a
+# requirements-impacting change, not an automatic dependency bump.
+
+fastapi>=0.141,<1
+uvicorn[standard]>=0.52,<1
+pydantic>=2.13,<3
+google-adk>=2.6,<3
+litellm>=1.95,<2
+mcp>=2.0,<3
+PyYAML>=6.0,<7
+kubernetes>=36,<37
+redis>=8,<9
+psycopg[binary]>=3.3,<4
+PyJWT[crypto]>=2.13,<3
