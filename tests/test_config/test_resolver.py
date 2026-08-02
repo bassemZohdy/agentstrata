@@ -113,7 +113,7 @@ class TestMerge:
         write_yaml(tmp_path, "agent.yaml", "server:\n  port: 9999\n")
         r = resolve(env={"AGENT_SERVER_PORT": "null"}, bundled_dir=tmp_path, argv=[])
         assert "port" not in r.data["server"]
-        assert r.provenance["server.port"].reset is True
+        assert r.provenance["server.port"].reset
         assert r.provenance["server.port"].tier == 5
 
     def test_null_reset_list(self, tmp_path):

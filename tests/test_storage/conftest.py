@@ -11,9 +11,10 @@ from __future__ import annotations
 import pytest
 
 from app.storage.contract import StorageSettings
-from app.storage.fakes import FakeRedis
+from app.storage.fakes import FakeRedis, SqliteDb
 from app.storage.file_backend import FileBackend
 from app.storage.memory import MemoryBackend
+from app.storage.postgres_backend import PostgresBackend
 from app.storage.redis_backend import RedisBackend
 
 
@@ -47,6 +48,16 @@ def redis_backend(settings):
     return RedisBackend(FakeRedis(), settings)
 
 
-@pytest.fixture(params=["memory", "file", "redis"])
-def backend(request, memory_backend, file_backend, redis_backend):
-    return {"memory": memory_backend, "file": file_backend, "redis": redis_backend}[request.param]
+@pytest.fixture()
+def postgres_backend(settings):
+    return PostgresBackend(SqliteDb(), settings)
+
+
+@pytest.fixture(params=["memory", "file", "redis", "postgres"])
+def backend(request, memory_backend, file_backend, redis_backend, postgres_backend):
+    return {
+        "memory": memory_backend,
+        "file": file_backend,
+        "redis": redis_backend,
+        "postgres": postgres_backend,
+    }[request.param]

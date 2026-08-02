@@ -7,9 +7,11 @@ real-instance + fencing/multi-replica proofs are recorded as deferred.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import json
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -371,3 +373,71 @@ class FakePostgres:
         return [
             dict(d) for (pk, d) in self.rows.get(table, {}).items() if pk[: len(prefix)] == prefix
         ]
+
+
+class SqliteDb:
+    """In-memory SQLite substitute for the postgres backend (DbClient).
+
+    Executes the backend's real SQL with three translations: ``%s`` params
+    to ``?``, ``JSONB`` to ``TEXT``, and the postgres JSON operator
+    ``data->>'status'`` to ``json_extract``. Advisory-lock fencing is
+    simulated with an in-process held-lock map (the real advisory-lock +
+    fencing-number proof is deferred per ACC-01).
+    """
+
+    def __init__(self) -> None:
+        import sqlite3
+        from datetime import datetime as _dt
+
+        # Python 3.12 deprecates sqlite3's default datetime adapter.
+        sqlite3.register_adapter(_dt, lambda dt: dt.isoformat())
+        self._conn = sqlite3.connect(":memory:", isolation_level=None)
+        self._conn.row_factory = sqlite3.Row
+        self._lock = asyncio.Lock()
+        self._held_locks: set[int] = set()
+
+    @staticmethod
+    def _translate(sql: str) -> str:
+        sql = sql.replace("JSONB", "TEXT")
+        sql = sql.replace("(data->>'status')", "json_extract(data, '$.status')")
+        sql = sql.replace("data->>'status'", "json_extract(data, '$.status')")
+        sql = sql.replace("ctid", "rowid")  # sqlite rowid analogue of postgres ctid
+        return sql.replace("%s", "?")
+
+    async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        async with self._lock:
+            self._conn.execute(self._translate(sql), list(params))
+
+    async def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+        async with self._lock:
+            cur = self._conn.execute(self._translate(sql), list(params))
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+    def transaction(self) -> AbstractAsyncContextManager[None]:
+        return _SqliteTxn(self)
+
+    async def try_advisory_lock(self, key: int) -> bool:
+        async with self._lock:
+            if key in self._held_locks:
+                return False
+            self._held_locks.add(key)
+            return True
+
+    async def release_advisory_lock(self, key: int) -> None:
+        async with self._lock:
+            self._held_locks.discard(key)
+
+
+class _SqliteTxn:
+    def __init__(self, db: SqliteDb) -> None:
+        self._db = db
+
+    async def __aenter__(self) -> None:
+        await self._db.execute("BEGIN")
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if exc_type is None:
+            await self._db.execute("COMMIT")
+        else:
+            await self._db.execute("ROLLBACK")
