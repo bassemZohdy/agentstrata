@@ -21,13 +21,13 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
   - [x] Confirm a bounded-read seam exists for enforcing `maxTransportMessageBytes` (MCP-08) on every transport — **GO for HTTP/SSE** (`httpx_client_factory`/`http_client` injection is an ADK-blessed public seam on `SseConnectionParams`/`StreamableHTTPConnectionParams` and `mcp.client.streamable_http`); **NO seam for stdio** in mcp 1.29.0 (`stdio_client` reads `async for line` with an unbounded accumulate-until-newline buffer; no byte-source injection point). mcp 2.0.0 *does* define a documented `Transport` protocol seam, but is incompatible with ADK 2.6.1. **→ decision needed (STACK-02: dependency choice / trust boundary / phase scope MUST change).**
   - [x] Confirm Uvicorn exposes the parser bounds API-20 requires (request-line/header/header-count limits pre-allocation) — **PARTIAL** on uvicorn 0.52.1: `h11_max_incomplete_event_size` bounds the incomplete request-line+headers buffer before full allocation (public Config/CLI seam), but (a) complete single-segment requests bypass the cap, (b) there is no header-count limit, (c) over-limit responses are `400` or connection aborts — `error_status_hint` (431) is ignored; 414 is never produced. httptools path (default) exposes nothing configurable. `uvicorn.Config(http=...)` accepts a custom protocol *class* — the documented seam for an M5 custom h11 subclass that maps 431/414 — plan for it in Milestone 5.
   - [x] If any seam is missing: revise the dependency choice, trust boundary, or phase scope before continuing — **two findings recorded above: (1) mcp pin <2 applied (ADK's declared range — locked at 1.29.0), (2) stdio byte-bound seam absent — user decision (2026-08-02): defer stdio pre-parse cap, enforce HTTP/SSE now; REQUIREMENTS.md MCP-08 amended with phase note (v2.5)** (see Open decisions)
-- [ ] Minimal Dockerfile (CNT-01, CNT-04, CNT-05, CNT-06)
-  - [ ] Multi-stage build: digest-pinned `python:3.12-slim` builder installing into a venv, then a matching runtime stage
-  - [ ] `ENTRYPOINT ["python","-m","app.main"]` (exec form)
-  - [ ] `VOLUME /etc/agent`, `EXPOSE 8080`
-  - [ ] `ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1`
-  - [ ] `.dockerignore` covering the build context boundary
-- [ ] Exactly one Uvicorn worker; confirm reload/debug mode is disabled in the production entrypoint (CNT-08)
+- [x] Minimal Dockerfile (CNT-01, CNT-04, CNT-05, CNT-06)
+  - [x] Multi-stage build: digest-pinned `python:3.12-slim` builder installing into a venv, then a matching runtime stage
+  - [x] `ENTRYPOINT ["python","-m","app.main"]` (exec form)
+  - [x] `VOLUME /etc/agent`, `EXPOSE 8080`
+  - [x] `ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1`
+  - [x] `.dockerignore` covering the build context boundary
+- [x] Exactly one Uvicorn worker; confirm reload/debug mode is disabled in the production entrypoint (CNT-08)
 - [ ] CI skeleton: lint, type-check, lockfile hash verification, placeholder test job
 
 ---

@@ -1,0 +1,42 @@
+# Build context boundary (CNT-01): keep the image lean, secret-free, and free
+# of source-control data, tests, local config, and build credentials.
+
+# Version control
+.git
+.gitignore
+.gitattributes
+.github
+
+# Local environments / caches
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.pip-cache
+.uv
+
+# Secrets / local config
+.env
+.env.*
+
+# Tests, spikes, tooling (not needed at runtime)
+tests
+scripts
+pyproject.toml
+requirements-dev.txt
+requirements-dev.lock
+
+# Project docs (kept in git, not in the image)
+README.md
+CHANGELOG.md
+PLAN.md
+TODO.md
+REQUIREMENTS.md
+
+# Docker metadata
+Dockerfile
+.dockerignore

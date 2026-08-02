@@ -1,6 +1,5 @@
 """Tiny stdio MCP server exposing one echo tool (for spike tests)."""
 
-
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("spike-echo-server")

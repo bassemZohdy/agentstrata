@@ -35,9 +35,7 @@ class EchoLlm(BaseLlm):
         for _ in llm_request.contents:  # consume input
             pass
         yield LlmResponse(
-            content=types.Content(
-                role="model", parts=[types.Part(text="pong from EchoLlm")]
-            )
+            content=types.Content(role="model", parts=[types.Part(text="pong from EchoLlm")])
         )
 
 
@@ -56,9 +54,7 @@ async def main() -> None:
         session_service=session_service,
     )
 
-    session = await session_service.create_session(
-        app_name=APP_NAME, user_id=USER_ID
-    )
+    session = await session_service.create_session(app_name=APP_NAME, user_id=USER_ID)
     print("session created:", session.id, "events:", len(session.events))
 
     seen: list[str] = []
