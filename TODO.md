@@ -90,16 +90,16 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
   - [x] Key layout with shared hash tags for Cluster compatibility — `agentstrata:{principal_digest}:{kind}:{agent}:{sid}[:{rid|key}]`, all session-scoped keys share the principal hash tag
   - [x] Atomic Lua/transaction revision mutations — CREATE_SESSION/MUTATE_SESSION (revision CAS)/CREATE_RUN (capacity eviction)/CREATE_IDEM with python twins in `app/storage/fakes.py::FakeRedis`
   - [x] Fencing lease: token-valued lease + monotonic fencing number, renew/release by token match (SES-05) — ACQUIRE/RENEW/RELEASE_FENCE Lua; lease extends session TTL; fencing counter persisted in the store
-- [ ] `postgres` backend
-  - [ ] `agent_sessions` + companion run/idempotency tables, transactional versioned migrations
-  - [ ] Session-scoped advisory lock fencing on a dedicated connection (SES-05)
-- [ ] Retention & bounds (SES-06, SES-07)
-  - [x] TTL sweep: memory/file every 10 min + redis run-TTL sweep (SWEEP_RUNS); session/idempotency TTLs atomic-with-mutation in redis (age-based index cleanup, cutoff = now - sessionTtl)
+- [x] `postgres` backend
+  - [x] `agent_sessions` + companion run/idempotency tables, transactional versioned migrations — `agent_schema` version table, JSONB data, revision + fencing_number columns
+  - [x] Session-scoped advisory lock fencing on a dedicated connection (SES-05) — `try_advisory_lock` on the DbClient for the run lifetime, persisted fencing-number increment, token-matched renew/release
+- [x] Retention & bounds (SES-06, SES-07)
+  - [x] TTL sweep: memory/file every 10 min + redis run-TTL sweep (SWEEP_RUNS); session/idempotency TTLs atomic-with-mutation in redis (age-based index cleanup, cutoff = now - sessionTtl); postgres sweep purges expired sessions (skipping leased) + expired idempotency + terminal runs older than runTtl
   - [x] Sweep skips sessions with a live run/lease, rechecks revision before delete — fence check in memory/file sweeps; redis lease extends session TTL
   - [x] Enforce `maxSessions` / `maxRunsPerSession` / `maxIdempotencyRecordsPerSession` atomically — index ZCARD in create, run eviction of oldest terminal (fail capacity when cannot free), idem capacity fails new keys
 - [ ] Delete & shutdown flush (SES-08)
 - [ ] ADK session-service adapter — one revisioned transaction path shared with ADK events (SES-09)
-- [x] Shared backend contract test suite, run against all four backends; extra fencing/multi-replica proof for Redis and PostgreSQL only (§18 ACC-01) — **per user decision: runs against memory + real file now; redis/postgres join via in-memory substitutes; real-instance + fencing proof deferred (TODO Decisions made)** — 81 contract tests passing on memory + file + redis(FakeRedis); postgres pending
+- [x] Shared backend contract test suite, run against all four backends; extra fencing/multi-replica proof for Redis and PostgreSQL only (§18 ACC-01) — **per user decision: runs against memory + real file now; redis/postgres join via in-memory substitutes; real-instance + fencing proof deferred (TODO Decisions made)** — 108 contract tests passing on all four backends (memory + file + redis(FakeRedis) + postgres(SqliteDb))
 
 ---
 
