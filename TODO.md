@@ -8,6 +8,8 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 
 ## Milestone 0 — Project bootstrap
 
+**Exit check: `docker build` produces a running (but functionally empty) container — PASSED (2026-08-02, image `agentstrata:m0`): serves on 8080, exactly one Uvicorn worker, exec-form PID 1, no reload.**
+
 - [x] Repository skeleton
   - [x] Directory layout for config/engine/storage/protocol/security/watcher concerns (internal layout is free-form, DEL-01 — just keep these independently testable)
   - [x] `.gitignore`, base `README`/license placeholders (README existed; added `.gitignore`, `.gitattributes`, LICENSE placeholder — license/trademark remains an open decision)
@@ -28,7 +30,7 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
   - [x] `ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1`
   - [x] `.dockerignore` covering the build context boundary
 - [x] Exactly one Uvicorn worker; confirm reload/debug mode is disabled in the production entrypoint (CNT-08)
-- [ ] CI skeleton: lint, type-check, lockfile hash verification, placeholder test job
+- [x] CI skeleton: lint, type-check, lockfile hash verification, placeholder test job — `.github/workflows/ci.yml` (SHA-pinned actions, read-only permissions, zizmor clean); all jobs verified locally from a clean checkout
 
 ---
 

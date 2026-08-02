@@ -8,7 +8,11 @@ Nothing shipped yet. See [PLAN.md](PLAN.md) for the current build order and [TOD
 
 ### Added
 
-- **Milestone 0 bootstrap (in progress):** repository skeleton — `app/` package layout for the config/engine/storage/protocol/security/watcher concerns (DEL-01, free-form but independently testable; `app.main`/`app.healthcheck` fixed paths reserved), `.gitignore`, `.gitattributes`, and a `schemas/` area for generated artifacts (DEL-02).
+- **Milestone 0 bootstrap (complete):** repository skeleton — `app/` package layout for the config/engine/storage/protocol/security/watcher concerns (DEL-01, free-form but independently testable; `app.main`/`app.healthcheck` fixed paths reserved), `.gitignore`, `.gitattributes`, and a `schemas/` area for generated artifacts (DEL-02).
+- **Dependency manifests (STACK-01):** `requirements.txt` (direct compatible ranges) + `requirements-dev.txt`, locked with `uv pip compile` into `requirements.lock` / `requirements-dev.lock` (exact versions + hashes, universal, Python 3.12); `scripts/compile-lock.sh` / `scripts/verify-lock.sh`; review flow documented in PLAN.md.
+- **STACK-02 feasibility spike (M0):** ADK session/event lifecycle — GO (public seams, e2e smoke); McpToolset lifecycle — GO on mcp 1.29.0, broken on mcp 2.0.0; MCP-08 bounded-read seam — GO for HTTP/SSE (httpx injection), no stdio seam; uvicorn 0.52.1 API-20 — partial (414/431 + header-count cap planned via custom protocol class at M5). Resulted in REQUIREMENTS.md v2.5 phase note (stdio pre-parse cap deferred per user decision) and the `mcp>=1.24,<2` pin.
+- **Minimal Dockerfile (CNT-01/04/05/06/08):** digest-pinned `python:3.12-slim`, multi-stage, hash-verified venv install, exec-form `ENTRYPOINT`, one worker, no reload; `.dockerignore`. Exit check passed: running container serving on 8080.
+- **CI skeleton:** lint/type-check/lockfile-hash/placeholder-test jobs (SHA-pinned actions, read-only permissions, zizmor clean).
 - **LICENSE placeholder only** — no license/trademark decision (working name "AgentStrata" pending clearance; see TODO.md "Open decisions").
 - [README.md](README.md), [PLAN.md](PLAN.md), [TODO.md](TODO.md), and this changelog, establishing the project's documentation set alongside REQUIREMENTS.md.
 - PLAN.md's 9 dependency-ordered P1 milestones (bootstrap → config → storage → engine → MCP → API/security → K8s reload → observability → container/release), each tied to the requirement IDs it satisfies.
