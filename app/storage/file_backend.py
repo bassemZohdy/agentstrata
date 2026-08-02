@@ -259,6 +259,24 @@ class FileBackend(StorageBackend):
         async with self._lock:
             return await asyncio.to_thread(_mutate)
 
+    async def truncate_session_events(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        keep_revision: int,
+    ) -> None:
+        path = self._session_path(agent_name, principal_id, session_id)
+        async with self._lock:
+            record = await asyncio.to_thread(self._read_record, path, SessionRecord.from_json)
+            if record is None or record.revision <= keep_revision:
+                return
+            drop = record.revision - keep_revision
+            record.events = record.events[:-drop]
+            record.revision = keep_revision
+            await asyncio.to_thread(self._atomic_write, path, record.to_json())
+
     async def delete_session(self, *, agent_name: str, principal_id: str, session_id: str) -> bool:
         if not self._ready:
             raise BackendUnavailableError("file storage not ready")

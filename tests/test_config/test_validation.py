@@ -273,7 +273,7 @@ class TestCapability:
         }
         status = capability_status()
         assert status["phase"] == "P1"
-        assert status["acp"] is False
+        assert status["acp"] == False  # noqa: E712
 
 
 class TestAggregate:

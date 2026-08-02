@@ -200,6 +200,21 @@ class RedisBackend(StorageBackend):
             result.decode() if isinstance(result, bytes) else str(result)
         )
 
+    async def truncate_session_events(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        keep_revision: int,
+    ) -> None:
+        tag = self._tag(principal_id)
+        await self._client.eval(
+            TRUNCATE_SESSION,
+            [self._sess(agent_name, tag, session_id)],
+            [str(keep_revision)],
+        )
+
     async def delete_session(self, *, agent_name: str, principal_id: str, session_id: str) -> bool:
         tag = self._tag(principal_id)
         result = await self._client.eval(
@@ -645,4 +660,18 @@ for _, k in ipairs(redis.call('KEYS', 'agentstrata:*:run:*')) do
   end
 end
 return deleted
+"""
+
+
+TRUNCATE_SESSION = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local rec = cjson.decode(raw)
+local keep = tonumber(ARGV[1])
+if rec.revision <= keep then return 0 end
+local drop = rec.revision - keep
+for i = 1, drop do table.remove(rec.events) end
+rec.revision = keep
+redis.call('SET', KEYS[1], cjson.encode(rec))
+return drop
 """

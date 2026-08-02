@@ -315,6 +315,19 @@ def _t_release_fence(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
     return 1
 
 
+def _t_truncate_session(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
+    (sess_key,) = keys
+    keep = _i(args[0])
+    rec = fake._get_decoded(sess_key)
+    if rec is None or _i(rec.get("revision")) <= keep:
+        return 0
+    drop = _i(rec.get("revision")) - keep
+    rec["events"] = rec.get("events", [])[: -drop or None]
+    rec["revision"] = keep
+    fake._set_json(sess_key, rec)
+    return drop
+
+
 def _t_sweep_runs(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
     now_ts, ttl = _i(args[0]), _i(args[1])
     deleted = 0
@@ -340,6 +353,7 @@ _TWINS: dict[str, Callable[[FakeRedis, list[str], list[str]], Any]] = {
     rb.RENEW_FENCE: _t_renew_fence,
     rb.RELEASE_FENCE: _t_release_fence,
     rb.SWEEP_RUNS: _t_sweep_runs,
+    rb.TRUNCATE_SESSION: _t_truncate_session,
 }
 
 

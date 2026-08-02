@@ -196,6 +196,10 @@ SQL = {
         "SELECT agent_name, principal_id, session_id, key FROM agent_idempotency "
         "WHERE expires_at IS NOT NULL AND expires_at <= %s"
     ),
+    "update_session_data": (
+        "UPDATE agent_sessions SET data = %s "
+        "WHERE agent_name = %s AND principal_id = %s AND session_id = %s"
+    ),
     "get_fence_number": (
         "SELECT fencing_number FROM agent_sessions "
         "WHERE agent_name = %s AND principal_id = %s AND session_id = %s"
@@ -365,6 +369,27 @@ class PostgresBackend(StorageBackend):
             raise RevisionConflict(f"revision {expected_revision} != current (cas failed)")
         updated = self._parse(SessionRecord.from_json, rows[0]["data"])
         return updated or current
+
+    async def truncate_session_events(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        keep_revision: int,
+    ) -> None:
+        current = await self.get_session(
+            agent_name=agent_name, principal_id=principal_id, session_id=session_id
+        )
+        if current is None or current.revision <= keep_revision:
+            return
+        drop = current.revision - keep_revision
+        current.events = current.events[:-drop]
+        current.revision = keep_revision
+        await self._db.query(
+            SQL["update_session_data"],
+            (current.to_json(), agent_name, principal_id, session_id),
+        )
 
     async def delete_session(self, *, agent_name: str, principal_id: str, session_id: str) -> bool:
         existing = await self.get_session(

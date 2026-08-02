@@ -142,6 +142,19 @@ class StorageBackend(ABC):
         with revision+1 and updated_at refreshed (SES-06)."""
 
     @abstractmethod
+    async def truncate_session_events(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        keep_revision: int,
+    ) -> None:
+        """ENG-06: on failure/cancellation, remove events appended after
+        ``keep_revision`` (the pre-run revision) so the failed user message
+        and partial assistant text are never committed."""
+
+    @abstractmethod
     async def delete_session(self, *, agent_name: str, principal_id: str, session_id: str) -> bool:
         """Cascade-delete session + runs + idempotency (SES-08); raises
         SessionBusy when a nonterminal run exists; False when absent."""

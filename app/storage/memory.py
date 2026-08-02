@@ -130,6 +130,24 @@ class MemoryBackend(StorageBackend):
             record.updated_at = now
             return record
 
+    async def truncate_session_events(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        keep_revision: int,
+    ) -> None:
+        key = (agent_name, principal_id, session_id)
+        async with self._lock:
+            record = self._sessions.get(key)
+            if record is None or record.revision <= keep_revision:
+                return
+            # drop events appended after keep_revision (ENG-06 revert)
+            per_rev = record.revision - keep_revision
+            record.events = record.events[:-per_rev] if per_rev > 0 else record.events
+            record.revision = keep_revision
+
     async def delete_session(self, *, agent_name: str, principal_id: str, session_id: str) -> bool:
         key = (agent_name, principal_id, session_id)
         async with self._lock:
