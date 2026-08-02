@@ -11,8 +11,10 @@ from __future__ import annotations
 import pytest
 
 from app.storage.contract import StorageSettings
+from app.storage.fakes import FakeRedis
 from app.storage.file_backend import FileBackend
 from app.storage.memory import MemoryBackend
+from app.storage.redis_backend import RedisBackend
 
 
 @pytest.fixture()
@@ -40,8 +42,11 @@ def file_backend(tmp_path, settings):
     return backend
 
 
-@pytest.fixture(params=["memory", "file"])
-def backend(request, memory_backend, file_backend):
-    if request.param == "memory":
-        return memory_backend
-    return file_backend
+@pytest.fixture()
+def redis_backend(settings):
+    return RedisBackend(FakeRedis(), settings)
+
+
+@pytest.fixture(params=["memory", "file", "redis"])
+def backend(request, memory_backend, file_backend, redis_backend):
+    return {"memory": memory_backend, "file": file_backend, "redis": redis_backend}[request.param]

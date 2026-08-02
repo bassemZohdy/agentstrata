@@ -163,7 +163,7 @@ class TestMutation:
             expected_revision=1,
             history_truncated=True,
         )
-        assert s.history_truncated is True
+        assert s.history_truncated
 
 
 class TestDelete:
@@ -194,7 +194,7 @@ class TestDelete:
         ok = await backend.delete_session(
             agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid"
         )
-        assert ok is True
+        assert ok
         assert (
             await backend.get_session(agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid")
             is None
@@ -223,11 +223,10 @@ class TestDelete:
 
     async def test_delete_absent_false(self, backend):
         await _open(backend)
-        assert (
-            await backend.delete_session(
-                agent_name=AGENT, principal_id=PRINCIPAL, session_id="nope"
-            )
-        ) is False
+        result = await backend.delete_session(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id="nope"
+        )
+        assert not result
 
 
 class TestRuns:
@@ -259,7 +258,7 @@ class TestRuns:
             status="succeeded",
             outcome={"text": "ok"},
         )
-        assert r3.terminal is True
+        assert r3.terminal
 
     async def test_run_requires_session(self, backend):
         await _open(backend)
@@ -316,11 +315,10 @@ class TestIdempotency:
             outcome={"ok": True},
         )
         assert done.status == "completed"
-        assert (
-            await backend.expire_idempotency(
-                agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", key="k1"
-            )
-        ) is True
+        expired = await backend.expire_idempotency(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", key="k1"
+        )
+        assert expired
 
     async def test_idempotency_capacity(self, backend, settings):
         await _open(backend)
@@ -361,8 +359,9 @@ class TestSweep:
         await backend.create_session(
             agent_name=AGENT, principal_id=PRINCIPAL, session_id="fresh", now=now
         )
-        stats = await backend.sweep(now=now)
-        assert stats["sessions"] >= 1
+        await backend.sweep(now=now)
+        # observable: the expired session is gone, the fresh one survives
+        # (redis expires atomically at TTL; memory/file sweep lazily)
         assert (
             await backend.get_session(agent_name=AGENT, principal_id=PRINCIPAL, session_id="old")
             is None
@@ -430,9 +429,19 @@ class TestSweep:
             ttl_seconds=1,
             now=now - timedelta(seconds=10),
         )
-        stats = await backend.sweep(now=now)
-        assert stats["runs"] >= 1
-        assert stats["idempotency"] >= 1
+        await backend.sweep(now=now)
+        assert (
+            await backend.get_run(
+                agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", run_id="r1"
+            )
+            is None
+        )
+        assert (
+            await backend.get_idempotency(
+                agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", key="k1"
+            )
+            is None
+        )
 
 
 class TestFencing:
@@ -447,22 +456,18 @@ class TestFencing:
             ttl_seconds=60,
         )
         assert f is not None and f.fencing_number == 1
-        assert (
-            await backend.renew_fence(
-                agent_name=AGENT,
-                principal_id=PRINCIPAL,
-                session_id="sid",
-                token="tok",
-                ttl_seconds=60,
-            )
-            is True
+        renewed = await backend.renew_fence(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id="sid",
+            token="tok",
+            ttl_seconds=60,
         )
-        assert (
-            await backend.release_fence(
-                agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", token="tok"
-            )
-            is True
+        assert renewed
+        released = await backend.release_fence(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", token="tok"
         )
+        assert released
 
     async def test_second_acquire_fails_while_held(self, backend):
         await _open(backend)
@@ -504,19 +509,15 @@ class TestFencing:
             token="right",
             ttl_seconds=60,
         )
-        assert (
-            await backend.renew_fence(
-                agent_name=AGENT,
-                principal_id=PRINCIPAL,
-                session_id="sid",
-                token="wrong",
-                ttl_seconds=60,
-            )
-            is False
+        renewed = await backend.renew_fence(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id="sid",
+            token="wrong",
+            ttl_seconds=60,
         )
-        assert (
-            await backend.release_fence(
-                agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", token="wrong"
-            )
-            is False
+        assert not renewed
+        released = await backend.release_fence(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", token="wrong"
         )
+        assert not released

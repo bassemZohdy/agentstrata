@@ -75,17 +75,17 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 
 ## Milestone 2 — Storage and sessions
 
-- [ ] Common data model & backend contract (SES-01 – SES-03)
-  - [ ] Session/run/idempotency record shapes with internal `schema_version`
-  - [ ] Storage backend interface (create/get/update/delete session, run records, idempotency records, locking)
-- [ ] `memory` backend
-  - [ ] In-process maps + locks
-  - [ ] Boot warning: data lost on restart, not shared across replicas
-- [ ] `file` backend
-  - [ ] Path layout `{path}/{agent_name}/{principal_digest}/{session_id}.json` with safe fixed-format components
-  - [ ] Atomic write: exclusive temp file → fsync contents → same-filesystem replace → fsync parent directory
-  - [ ] Symlink-traversal rejection
-  - [ ] Readiness probing: create/write/fsync/rename/delete
+- [x] Common data model & backend contract (SES-01 – SES-03)
+  - [x] Session/run/idempotency record shapes with internal `schema_version`
+  - [x] Storage backend interface (create/get/update/delete session, run records, idempotency records, locking) — `app/storage/contract.py` incl. fencing + StorageSettings bounds
+- [x] `memory` backend
+  - [x] In-process maps + locks
+  - [x] Boot warning: data lost on restart, not shared across replicas
+- [x] `file` backend
+  - [x] Path layout `{path}/{agent_name}/{principal_digest}/{session_id}.json` with safe fixed-format components
+  - [x] Atomic write: exclusive temp file → fsync contents → same-filesystem replace → fsync parent directory (Windows: directory fsync skipped — os.replace still atomic)
+  - [x] Symlink-traversal rejection
+  - [x] Readiness probing: create/write/fsync/rename/delete
 - [ ] `redis` backend
   - [ ] Key layout with shared hash tags for Cluster compatibility
   - [ ] Atomic Lua/transaction revision mutations
@@ -99,7 +99,7 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
   - [ ] Enforce `maxSessions` / `maxRunsPerSession` / `maxIdempotencyRecordsPerSession` atomically
 - [ ] Delete & shutdown flush (SES-08)
 - [ ] ADK session-service adapter — one revisioned transaction path shared with ADK events (SES-09)
-- [ ] Shared backend contract test suite, run against all four backends; extra fencing/multi-replica proof for Redis and PostgreSQL only (§18 ACC-01)
+- [x] Shared backend contract test suite, run against all four backends; extra fencing/multi-replica proof for Redis and PostgreSQL only (§18 ACC-01) — **per user decision: runs against memory + real file now; redis/postgres join via in-memory substitutes; real-instance + fencing proof deferred (TODO Decisions made)** — 54 contract tests passing on memory + file
 
 ---
 
