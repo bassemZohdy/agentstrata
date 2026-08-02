@@ -97,8 +97,8 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
   - [x] TTL sweep: memory/file every 10 min + redis run-TTL sweep (SWEEP_RUNS); session/idempotency TTLs atomic-with-mutation in redis (age-based index cleanup, cutoff = now - sessionTtl); postgres sweep purges expired sessions (skipping leased) + expired idempotency + terminal runs older than runTtl
   - [x] Sweep skips sessions with a live run/lease, rechecks revision before delete — fence check in memory/file sweeps; redis lease extends session TTL
   - [x] Enforce `maxSessions` / `maxRunsPerSession` / `maxIdempotencyRecordsPerSession` atomically — index ZCARD in create, run eviction of oldest terminal (fail capacity when cannot free), idem capacity fails new keys
-- [ ] Delete & shutdown flush (SES-08)
-- [ ] ADK session-service adapter — one revisioned transaction path shared with ADK events (SES-09)
+- [x] Delete & shutdown flush (SES-08) — cascade delete (session+runs+idempotency+fence, busy on nonterminal run) implemented and tested on all four backends; per-backend `close()` flushes/closes (runtime shutdown wiring lands with the main loop in M5)
+- [x] ADK session-service adapter — one revisioned transaction path shared with ADK events (SES-09) — `app/storage/adk_adapter.py::AdkSessionService` implements ADK `BaseSessionService` over the runtime backend; `append_event` persists each event via the backend revision CAS (no independent ADK history); proven end-to-end with a real `LlmAgent` run (`tests/test_storage/test_adk_adapter.py`)
 - [x] Shared backend contract test suite, run against all four backends; extra fencing/multi-replica proof for Redis and PostgreSQL only (§18 ACC-01) — **per user decision: runs against memory + real file now; redis/postgres join via in-memory substitutes; real-instance + fencing proof deferred (TODO Decisions made)** — 108 contract tests passing on all four backends (memory + file + redis(FakeRedis) + postgres(SqliteDb))
 
 ---
