@@ -1,0 +1,246 @@
+# Backlog
+
+Actionable checklist for implementing [REQUIREMENTS.md](REQUIREMENTS.md) in the order set by [PLAN.md](PLAN.md). Each milestone section below mirrors a milestone in PLAN.md; check items off as they land, and add new ones there if scope shifts — don't let the two documents drift.
+
+Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.md). "Later phases," "Deferred scope," and "Open decisions" at the bottom are not part of the Phase 1 critical path.
+
+---
+
+## Milestone 0 — Project bootstrap
+
+- [ ] Repository skeleton
+  - [ ] Directory layout for config/engine/storage/protocol/security/watcher concerns (internal layout is free-form, DEL-01 — just keep these independently testable)
+  - [ ] `.gitignore`, base `README`/license placeholders
+- [ ] Dependency management (STACK-01)
+  - [ ] `requirements.txt` with direct compatible ranges: `fastapi`, `uvicorn[standard]`, `pydantic` v2, `google-adk`, `litellm`, `mcp`, `PyYAML`, `kubernetes`, `redis`, `psycopg[binary]`, `PyJWT[crypto]`
+  - [ ] `requirements-dev.txt` for test/schema/lint tooling
+  - [ ] Lock tooling producing `requirements.lock` with exact versions + hashes
+- [ ] **STACK-02 feasibility spike — do this before Milestones 1–4, not after:**
+  - [ ] Confirm the locked ADK version exposes the documented session/event lifecycle through a public/stable seam
+  - [ ] Confirm `McpToolset` connection/cancellation lifecycle is usable without private-internal monkey-patching
+  - [ ] Confirm a bounded-read seam exists for enforcing `maxTransportMessageBytes` (MCP-08) on every transport
+  - [ ] Confirm Uvicorn exposes the parser bounds API-20 requires (request-line/header/header-count limits pre-allocation)
+  - [ ] If any seam is missing: revise the dependency choice, trust boundary, or phase scope before continuing
+- [ ] Minimal Dockerfile (CNT-01, CNT-04, CNT-05, CNT-06)
+  - [ ] Multi-stage build: digest-pinned `python:3.12-slim` builder installing into a venv, then a matching runtime stage
+  - [ ] `ENTRYPOINT ["python","-m","app.main"]` (exec form)
+  - [ ] `VOLUME /etc/agent`, `EXPOSE 8080`
+  - [ ] `ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1`
+  - [ ] `.dockerignore` covering the build context boundary
+- [ ] Exactly one Uvicorn worker; confirm reload/debug mode is disabled in the production entrypoint (CNT-08)
+- [ ] CI skeleton: lint, type-check, lockfile hash verification, placeholder test job
+
+---
+
+## Milestone 1 — Configuration engine
+
+- [ ] Pydantic schema (SCH-01 – SCH-09, BASE-01)
+  - [ ] Base `model_config` (camelCase alias generator, `extra="forbid"`, `strict=True`, `populate_by_name=True`) (SCH-01)
+  - [ ] Top-level fields: `$schema`, `schemaVersion`, `name`, `description`, `profile`
+  - [ ] `engine.*`: `systemInstruction`, `temperature`, `topP`, `maxTokens`, `maxOutputBytes`, `timeoutSeconds`, `maxIterations`, `historyMaxMessages`/`historyMaxBytes`, `streaming`, `overrides.*`, `tokenBudget.*`
+  - [ ] `llm.*`: `provider`, `model`, `apiKey` secret ref pair, `baseUrl`, `contextWindowTokens`, `vertex.*`, `extra` passthrough
+  - [ ] `tools.mcpServers[]` and its `SecretHeaderRef` sub-model (SCH-04)
+  - [ ] `storage.*` (SCH-05)
+  - [ ] `server.*`: protocols, CORS, auth (apiKey/JWT), rate limit, transport byte/count limits (SCH-06)
+  - [ ] `k8s.*`: `enabled`, `required`, `namespace`, `name`, `resyncSeconds` — ConfigMap-only, no `source` field (SCH-07)
+  - [ ] `observability.*` (SCH-08)
+  - [ ] Phase-gated stub sections with disabled defaults: `agents[]`, `approval`, `rag` (SCH-09)
+  - [ ] Bundled base config `/app/config/agent.yaml` matching schema defaults (BASE-01)
+  - [ ] JSON Schema generation → `schemas/agent.schema.json`, CI zero-diff check (SCH-02, DEL-02)
+- [ ] Tier 1–7 resolver (CFG-01 – CFG-11a)
+  - [ ] Tier 1/2: bundled base + profile file loading
+  - [ ] Tier 3/4: mounted base/profile file discovery in exact candidate order, first-match-only, warn on ignored siblings (CFG-03b)
+  - [ ] Tier 5: relaxed env binding — schema-aware alias matching, ambiguity detection, near-match security-sensitive warning (CFG-07, CFG-08)
+  - [ ] Tier 6: `AGENT_APPLICATION_JSON` inline JSON (fatal on invalid JSON)
+  - [ ] Tier 7: `--<dotted.path>=<value>` CLI flags, last-occurrence-wins with warning (CFG-10)
+  - [ ] Deep-merge engine: recursive mapping merge, wholesale list replacement, null-reset semantics (CFG-04 – CFG-06)
+  - [ ] Provenance tracking per leaf, including defaulted/reset values
+  - [ ] Source parsing safety: UTF-8, 1 MiB cap, single mapping root, duplicate-key rejection, immutable byte-snapshot reads (CFG-03a, CFG-03b)
+  - [ ] `--validate` (CFG-10a), `--dump-config` with canonical masked YAML + winning-source comments (CFG-11), `--version`/`--help` (CFG-11a)
+  - [ ] Verify NFR-05 as this lands: identical resolver inputs (including permuted env-var enumeration order) produce byte-identical `--dump-config` output
+- [ ] Validation pipeline (CFG-12 – CFG-15, CAP-01, CAP-02)
+  - [ ] `AgentConfig.model_validate()` + alias-only external shape walk (CFG-13)
+  - [ ] Cross-field validation checklist (CFG-14): storage↔connection-string, MCP transport↔command/url, auth-mode↔credentials, vertex↔provider, MCP name uniqueness/size caps, byte-limit orderings, `k8s.required`↔`k8s.enabled`, JWT claim/CIDR checks
+  - [ ] Deterministic aggregate error reporting sorted by path + code, secrets omitted
+  - [ ] Capability fail-closed gating: reject non-empty `agents`, `acp`/`approval`/`rag` enabled in a P1 build (CAP-01)
+  - [ ] `GET /health` capability reporting wired to build-time flags (CAP-02)
+  - [ ] Enforce the exact boot order (CFG-15)
+- [ ] Operational mode selection (MODE-01 – MODE-04)
+  - [ ] Detect `k8s.enabled` + `KUBERNETES_SERVICE_HOST`
+  - [ ] `k8s.required` fail-closed (exit 78) vs. warn-and-run-standalone behavior (MODE-03)
+
+---
+
+## Milestone 2 — Storage and sessions
+
+- [ ] Common data model & backend contract (SES-01 – SES-03)
+  - [ ] Session/run/idempotency record shapes with internal `schema_version`
+  - [ ] Storage backend interface (create/get/update/delete session, run records, idempotency records, locking)
+- [ ] `memory` backend
+  - [ ] In-process maps + locks
+  - [ ] Boot warning: data lost on restart, not shared across replicas
+- [ ] `file` backend
+  - [ ] Path layout `{path}/{agent_name}/{principal_digest}/{session_id}.json` with safe fixed-format components
+  - [ ] Atomic write: exclusive temp file → fsync contents → same-filesystem replace → fsync parent directory
+  - [ ] Symlink-traversal rejection
+  - [ ] Readiness probing: create/write/fsync/rename/delete
+- [ ] `redis` backend
+  - [ ] Key layout with shared hash tags for Cluster compatibility
+  - [ ] Atomic Lua/transaction revision mutations
+  - [ ] Fencing lease: token-valued lease + monotonic fencing number, renew/release by token match (SES-05)
+- [ ] `postgres` backend
+  - [ ] `agent_sessions` + companion run/idempotency tables, transactional versioned migrations
+  - [ ] Session-scoped advisory lock fencing on a dedicated connection (SES-05)
+- [ ] Retention & bounds (SES-06, SES-07)
+  - [ ] TTL sweep: memory/file/postgres every 10 min, Redis atomic-with-mutation
+  - [ ] Sweep skips sessions with a live run/lease, rechecks revision before delete
+  - [ ] Enforce `maxSessions` / `maxRunsPerSession` / `maxIdempotencyRecordsPerSession` atomically
+- [ ] Delete & shutdown flush (SES-08)
+- [ ] ADK session-service adapter — one revisioned transaction path shared with ADK events (SES-09)
+- [ ] Shared backend contract test suite, run against all four backends; extra fencing/multi-replica proof for Redis and PostgreSQL only (§18 ACC-01)
+
+---
+
+## Milestone 3 — Engine execution
+
+- [ ] Model connector construction (LLM-01 – LLM-03)
+  - [ ] Gemini native + Vertex AI (ADC) path
+  - [ ] LiteLLM bridge model-string mapping: `openai/{model}`, `anthropic/{model}`, `ollama_chat/{model}` (+`api_base`), `litellm` verbatim
+  - [ ] Retry policy: ≤2 retries on transport/429/5xx, 1s→2s backoff + jitter, honor `Retry-After`, never replay after a delta/tool call
+  - [ ] Credential health state machine: `unavailable`/`unknown`/`available`, file-backed re-resolve per request vs. env-backed process-start snapshot
+- [ ] ADK `LlmAgent` construction, one immutable root-agent per Applied Config generation (ENG-01)
+- [ ] `AgentRunner` façade over `Runner.run_async` + internal `AgentEvent` union (ENG-02)
+- [ ] Admission pipeline in exact order (ENG-03) — auth/rate-limit may be stubbed until Milestone 5, but enforce the 8-step ordering now
+- [ ] Context bounds & pruning: history-message/byte limits, context-window trimming, uncommitted-until-success (ENG-04)
+- [ ] Run state machine (ENG-05)
+  - [ ] `created → running → succeeded|failed|cancelled` (+ `cancelling`)
+  - [ ] Compare-and-swap terminal transition, exactly one winner under timeout/disconnect/shutdown races
+  - [ ] Restart reconciliation: `run_interrupted`, `tool_outcome_unknown` for orphaned `executing` tool records
+- [ ] Transactional persistence: admit without appending history, commit pruning+turn+usage only on success (ENG-06)
+- [ ] Iteration/output/token limits (ENG-07, ENG-08)
+  - [ ] Iteration exhaustion → `finish_reason: "length"`, `x_agent_status: "iteration_limit"`
+  - [ ] Output-byte cap → code-point-safe truncation, `x_agent_status: "output_limit"`
+  - [ ] Token budget capping `max_output_tokens`, one-call overshoot recorded, `estimated: true` for missing usage
+- [ ] Tool-call-ID dedup & side-effect safety: `executing`/`completed`/`failed` states, replay-safe, no auto-retry (ENG-09)
+- [ ] Public error sanitization — no internal exception/provider/SQL/path/secret detail leaks (ENG-10)
+
+---
+
+## Milestone 4 — MCP tool integration
+
+- [ ] `McpToolset` wiring per transport: stdio, Streamable HTTP, legacy SSE, deprecated `http` alias (MCP-01)
+- [ ] Per-server reconciler with exponential backoff (1s→2s→4s→…capped 60s + jitter), reset on success
+- [ ] Readiness gating: `/readyz` 503 while any `required: true` server disconnected (MCP-02)
+- [ ] Tool filter (allow/deny, deny wins) + collision-safe renaming (`{server}_{tool}`, `_2`, `_3`, …) with `/health` reporting (MCP-03)
+- [ ] Result handling: canonical JSON serialization, code-point-safe truncation at `maxResultBytes`, 500-code-point redacted event previews (MCP-04)
+- [ ] Global per-server toolset lifecycle manager with ref-counted close on rebuild/shutdown (MCP-05)
+- [ ] stdio sandboxing: `shell=False`, minimal inherited env (`PATH`/`LANG`/`LC_ALL`/`TMPDIR` + configured `env`), `${VAR}` interpolation at connect time (MCP-06)
+- [ ] Call outcome handling: no auto-retry, cancellation propagation to SDK/process (MCP-07)
+- [ ] Bounded parsing before buffering/decoding: `maxTransportMessageBytes` pre-parse cap, `maxTools`/name/description/schema size caps, degrade optional / unready required on overflow (MCP-08)
+- [ ] Protocol tests against the official MCP SDK: connect/reconnect/recovery, collisions, truncation, an endless/no-delimiter stdio writer, oversized HTTP/SSE frames
+
+---
+
+## Milestone 5 — API surface and security
+
+- [ ] Health/metadata endpoints (API-01 – API-04)
+  - [ ] `GET /healthz` — no I/O, live from bind to exit
+  - [ ] `GET /readyz` — full readiness rule (config valid, auth key material, storage healthy, required MCP connected, required tier-8 synced)
+  - [ ] `GET /health` — per-component status, degraded vs. ok semantics
+  - [ ] `GET /config` — Applied Config with recursive redaction
+- [ ] OpenAI-compatible chat
+  - [ ] Request validation: field subset, role/content rules, 400 on unsupported fields (API-05)
+  - [ ] Stateful (exactly one user message, server history authoritative) vs. stateless rules (API-06)
+  - [ ] `Idempotency-Key` canonicalization, hashing, replay, conflict handling (API-06a)
+  - [ ] Non-streaming response shape (API-07)
+  - [ ] SSE streaming: delta → text/extension chunks → finish chunk → optional usage chunk → `[DONE]` (API-08)
+  - [ ] Stream failure/disconnect/backpressure: post-header error event, ≤1s cancellation on disconnect/full queue (API-08a)
+- [ ] Session management endpoints: create/get/delete, no enumeration, identical 404 for unknown/expired/foreign (API-09)
+- [ ] Overrides (`temperature`/`max_tokens` gated by `overrides.allow*`), usage reporting, full error-code table (API-12 – API-15)
+- [ ] `GET /v1/models` returning the single configured model (API-17)
+- [ ] OpenAPI docs: security schemes, extensions, limits, SSE schemas documented; golden diff in CI (API-18, DEL-02)
+- [ ] Serialization case rules: camelCase config/non-`/v1/`, snake_case OpenAI-compatible surface (API-19)
+- [ ] Bounded HTTP parser (request-line/header/header-count limits pre-allocation), replica-local rate limiting (API-20)
+- [ ] Auth modes
+  - [ ] `none` — non-loopback bind emits high-severity audit warning (SEC-01)
+  - [ ] `apiKey` — constant-time compare, `Bearer`/`X-API-Key`, must-match if both present (SEC-01)
+  - [ ] `jwt` — RS256/ES256 only, JWKS refresh/rotation, stale-key cutoff, fail-closed on unreachable JWKS (SEC-03, SEC-08)
+  - [ ] Fail-closed boot: exit 78 on missing/unreadable API-key secret (SEC-03)
+- [ ] Recursive secret-redaction utility shared across dumps/API/logs/traces/status (SEC-02)
+- [ ] Secret reference resolution: file-wins, point-of-use re-read for rotation, env process-start snapshot (SEC-04)
+- [ ] Egress allowlist: only provider/MCP/JWKS/storage/K8s/OTLP targets, TLS verification never disabled (SEC-05)
+- [ ] CORS: exact origin match, `*` requires `corsAllowCredentials: false` (SEC-06)
+- [ ] Trusted-proxy forwarded-header parsing, rightmost-untrusted-hop selection (SEC-09)
+- [ ] Security audit event logging: auth, rate-limit, foreign-session-access, capability rejection, config apply/reject (SEC-10)
+- [ ] Response hardening: `nosniff`, restrictive docs CSP, log-injection guarding on IDs/claims/tool names (SEC-11)
+
+---
+
+## Milestone 6 — Kubernetes watcher and reload
+
+- [ ] ConfigMap watch client: initial GET/list, `resourceVersion` watch, 410-Gone re-list, periodic full re-list, bounded connect/read timeouts (K8S-01, K8S-02)
+- [ ] Overlay parsing under CFG-03a, merged as tier 8 (K8S-03)
+- [ ] Generate `schemas/agent-overlay.schema.json` (optional-fields variant of the full schema) for operator validation (K8S-03, DEL-02)
+- [ ] Reload categorization: live-snapshot / component-rebuild / restart-required per schema leaf (REL-02)
+- [ ] Transactional apply: build+health-check replacements before atomic swap, full rollback on any rebuild failure (REL-01, REL-03)
+  - [ ] Verify NFR-08 as this lands: a valid live/rebuild update causes zero failed admitted requests and no listener restart
+- [ ] Generation/hash tracking exposed via `/health` and `/config` (REL-04)
+- [ ] Deletion/resync: tier-8 removal falls back to tiers 1–7, `k8s.required` readiness implications (REL-05)
+- [ ] Reload audit logging: resource version, outcome, generation, sorted changed paths, duration (REL-06)
+- [ ] Watcher health: log-throttled nonfatal errors, independent per-replica no-op detection (K8S-05, K8S-07)
+- [ ] Manifests: least-privilege `rbac.yaml` (get/list/watch the one ConfigMap), illustrative `deployment.yaml`/Service with probes, security context, one worker (K8S-08)
+- [ ] AgentConfig merge exclusions: never merge K8s labels/annotations/managed-fields/resource-version (K8S-09)
+
+---
+
+## Milestone 7 — Observability
+
+- [ ] Structured logging facade: JSON/text formats, `ts`/`level`/`logger`/`event`/`msg` + request correlation fields (OBS-01)
+- [ ] Request-ID validation/generation, propagation through async tasks, independent `traceparent` handling (OBS-02)
+- [ ] `runtime_started`/`runtime_stopped` boot/shutdown events with masked secrets (OBS-03)
+- [ ] OTel tracing: `http.request → agent.execute → llm.call|mcp.tool_call` spans, config-reload/storage spans, no message-content/credential attributes (OBS-04)
+- [ ] OTel metrics: run counts/latency/tokens/denials/dependency-state/reload-outcome counters, low-cardinality labels only (OBS-05)
+- [ ] Zero-cost-when-disabled: no OTel imports/threads/allocations on the disabled path (OBS-06)
+
+---
+
+## Milestone 8 — Container hardening and release packaging
+
+- [ ] Multi-arch build (`linux/amd64` + `linux/arm64`) from one manifest/lock, digest reporting (CNT-02)
+- [ ] Non-root arbitrary-UID support: `USER 10001:0`, group-writable paths, no UID-specific assumptions (CNT-03)
+- [ ] Graceful shutdown: draining → cancel-at-grace-expiry → flush → close reconcilers/MCP/OTel → exit 0/1 (CNT-07)
+- [ ] HEALTHCHECK: bound-port file, `python -m app.healthcheck` loopback probe, Docker `HEALTHCHECK` declaration (CNT-10)
+- [ ] Read-only rootfs support: writes confined to `/tmp` and `storage.path` (CNT-11)
+- [ ] Supply chain: SPDX/CycloneDX SBOM, vulnerability scan against the (yet-to-be-written) severity policy, build provenance, keyless signing (CNT-12)
+- [ ] Secrets/build hygiene: no secrets in image layers/history, BuildKit secret mounts leave no artifact, canary-secret scan (CNT-13)
+- [ ] `docker-compose.yaml`: runtime + Redis + Postgres + one sample MCP server, mounted config + profile + auth + secrets-as-env (CNT-09)
+- [ ] Deployment/configuration documentation covering every supported auth/storage option (DEL-01)
+- [ ] Release evidence capture: image digest, commit, test results traceable per requirement (TRC-01, TRC-02)
+- [ ] Run the full §6 benchmark/chaos suite against the built image and record the report per NFR-00: startup latency (NFR-01), request overhead (NFR-02), concurrency under load (NFR-03), idle footprint (NFR-04), bounded resources under a slow/disconnected client (NFR-07), dependency-recovery races (NFR-09), and cross-platform portability (NFR-10)
+- [ ] Full acceptance suite (§18 ACC-01) passing on both architectures before calling P1 done
+
+---
+
+## Later phases (not started)
+
+- [ ] **P2 — Multi-agent** (§13): sub-agent hierarchies, ADK transfer routing, tool isolation, ACP REST surface (API-16)
+- [ ] **P3 — Human-in-the-loop** (§14): durable approval checkpoints, decision-race handling, restart reconciliation
+- [ ] **P4 — RAG / long-term memory** (§15): document ingestion, chunking, retrieval-scoped context injection
+
+Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria (§18) pass.
+
+---
+
+## Open decisions (need a human call, not an engineering call)
+
+- [ ] **Product name / trademark / domain / package-registry clearance.** "AgentStrata" is a working name (REQUIREMENTS.md header). Needs clearing before a public release, container-registry namespace, or PyPI package name is picked.
+- [ ] **OpenAI SDK compatibility range (NFR-06).** Pick the tested minimum/maximum official `openai` Python SDK versions once Milestone 5 is underway.
+- [ ] **Vulnerability severity policy (CNT-12).** Which CVE severities block a release — needs to exist before Milestone 8's scan gate is enforced.
+
+## Deferred scope — revisit only if a concrete need shows up
+
+Cut in the v2.2 scope pass. Don't reopen speculatively; reopen when an actual caller or deployment needs one.
+
+- [ ] **WebSocket API.** Revisit if a client needs bidirectional push (e.g., server-initiated cancellation notices, multiplexed tool-approval UI) that SSE can't express.
+- [ ] **Kubernetes CRD / operator.** Revisit once the product name/API-group (above) is settled and there's a real need for `kubectl get agentconfigs`, CRD-native status, or admission-webhook validation.
+- [ ] **Prometheus `/metrics` endpoint and per-request dollar-cost accounting.** Explicitly deferred (REQUIREMENTS.md §1.4) — OTel metrics cover the interim need.
