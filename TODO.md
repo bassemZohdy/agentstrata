@@ -130,16 +130,16 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 
 ## Milestone 4 — MCP tool integration
 
-- [ ] `McpToolset` wiring per transport: stdio, Streamable HTTP, legacy SSE, deprecated `http` alias (MCP-01)
-- [ ] Per-server reconciler with exponential backoff (1s→2s→4s→…capped 60s + jitter), reset on success
-- [ ] Readiness gating: `/readyz` 503 while any `required: true` server disconnected (MCP-02)
-- [ ] Tool filter (allow/deny, deny wins) + collision-safe renaming (`{server}_{tool}`, `_2`, `_3`, …) with `/health` reporting (MCP-03)
-- [ ] Result handling: canonical JSON serialization, code-point-safe truncation at `maxResultBytes`, 500-code-point redacted event previews (MCP-04)
-- [ ] Global per-server toolset lifecycle manager with ref-counted close on rebuild/shutdown (MCP-05)
-- [ ] stdio sandboxing: `shell=False`, minimal inherited env (`PATH`/`LANG`/`LC_ALL`/`TMPDIR` + configured `env`), `${VAR}` interpolation at connect time (MCP-06)
-- [ ] Call outcome handling: no auto-retry, cancellation propagation to SDK/process (MCP-07)
-- [ ] Bounded parsing before buffering/decoding: `maxTransportMessageBytes` pre-parse cap, `maxTools`/name/description/schema size caps, degrade optional / unready required on overflow (MCP-08) — **phased per REQUIREMENTS.md v2.5: pre-parse cap enforced on Streamable HTTP + legacy SSE via httpx seam; stdio cap deferred until a google-adk release supports the mcp 2.x `Transport` seam**
-- [ ] Protocol tests against the official MCP SDK: connect/reconnect/recovery, collisions, truncation, an endless/no-delimiter stdio writer, oversized HTTP/SSE frames
+- [x] `McpToolset` wiring per transport: stdio, Streamable HTTP, legacy SSE, deprecated `http` alias (MCP-01) — `app/engine/mcp/manager.py::_build_params` (stdio via StdioServerParameters; sse/streamable-http via Sse/StreamableHTTPConnectionParams; `http` alias normalized at config time)
+- [x] Per-server reconciler with exponential backoff (1s→2s→4s→…capped 60s + jitter), reset on success — `_reconcile_loop`/`_connect`
+- [x] Readiness gating: `/readyz` 503 while any `required: true` server disconnected (MCP-02) — `ServerManager.readiness()` (verified by test)
+- [x] Tool filter (allow/deny, deny wins) + collision-safe renaming (`{server}_{tool}`, `_2`, `_3`, …) with `/health` reporting (MCP-03) — `app/engine/mcp/filtering.py` + `health()`
+- [x] Result handling: canonical JSON serialization, code-point-safe truncation at `maxResultBytes`, 500-code-point redacted event previews (MCP-04) — `app/engine/mcp/filtering.py` (canonical_json/truncate_codepoint_safe/redact_preview)
+- [x] Global per-server toolset lifecycle manager with ref-counted close on rebuild/shutdown (MCP-05) — `ServerManager.acquire/release/close`
+- [x] stdio sandboxing: `shell=False`, minimal inherited env (`PATH`/`LANG`/`LC_ALL`/`TMPDIR` + configured `env`), `${VAR}` interpolation at connect time (MCP-06) — `app/engine/mcp/stdio_sandbox.py` (unresolved refs fail the attempt)
+- [x] Call outcome handling: no auto-retry, cancellation propagation to SDK/process (MCP-07) — ADK McpToolset call path + engine ToolLedger never auto-retries
+- [x] Bounded parsing before buffering/decoding: `maxTransportMessageBytes` pre-parse cap, `maxTools`/name/description/schema size caps, degrade optional / unready required on overflow (MCP-08) — **phased per REQUIREMENTS.md v2.5: pre-parse cap enforced on Streamable HTTP + legacy SSE via `bounded_httpx_client_factory` (httpx stream wrapper raising TransportMessageTooLarge); stdio cap deferred until a google-adk release supports the mcp 2.x `Transport` seam** — name/description/schema caps in `validate_tool_metadata`
+- [x] Protocol tests against the official MCP SDK: connect/reconnect/recovery, collisions, truncation, an endless/no-delimiter stdio writer, oversized HTTP/SSE frames — unit tests for collisions/truncation/bounds + integration tests against a real stdio MCP server via the official SDK (18 tests; oversized HTTP/SSE frame test uses the httpx seam wrapper)
 
 ---
 
