@@ -1,0 +1,422 @@
+"""OpenAI-compatible chat (REQUIREMENTS.md API-05 – API-08a, API-12 – API-17).
+
+POST /v1/chat/completions: request validation (API-05), stateful vs stateless
+rules (API-06), Idempotency-Key canonicalization/replay (API-06a),
+non-streaming and SSE streaming shapes (API-07/08), overrides gating
+(API-12), usage reporting, error mapping (API-15).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+from collections.abc import AsyncIterator
+from typing import Any
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from ...engine.events import Done, Iteration, RunError, TextDelta, ToolCall, ToolResult
+from ...engine.runner import RunRequest
+from ..errors import PublicErrorResponse
+
+_ALLOWED_FIELDS = {
+    "model",
+    "messages",
+    "stream",
+    "temperature",
+    "max_tokens",
+    "max_completion_tokens",
+    "session_id",
+    "idempotency_key",
+}
+
+
+def register(app: Any, config: Any, components: dict[str, Any]) -> None:
+    runner = components["runner"]
+    agent_name = config.name
+
+    router = APIRouter(prefix="/v1")
+
+    @router.post("/chat/completions")
+    async def chat_completions(request: Request):
+        body = await _read_body(request, config)
+        request_id = getattr(request.state, "request_id", "")
+
+        # API-05: field subset validation.
+        unknown = set(body) - _ALLOWED_FIELDS
+        if unknown:
+            raise PublicErrorResponse(
+                "invalid_request",
+                f"unsupported fields: {', '.join(sorted(unknown))}",
+                400,
+            )
+
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise PublicErrorResponse("invalid_request", "messages is required", 400)
+        user_message = _extract_user_message(messages)
+        if user_message is None:
+            raise PublicErrorResponse(
+                "invalid_request", "exactly one user message is required (stateful)", 400
+            )
+
+        streaming = bool(body.get("stream", False))
+        principal = getattr(request.state, "principal", "anonymous")
+
+        # API-06a: idempotency — canonicalize the key.
+        idem_key = _canonical_idempotency_key(body.get("idempotency_key"))
+        if idem_key:
+            replay = await components["backend"].get_idempotency(
+                agent_name=agent_name,
+                principal_id=principal,
+                session_id=body.get("session_id") or "",
+                key=idem_key,
+            )
+            if replay is not None and replay.status == "completed":
+                return JSONResponse(
+                    status_code=200,
+                    content=_non_streaming_from_replay(replay, request_id),
+                    headers={"Cache-Control": "no-store"},
+                )
+
+        # API-12: overrides gating.
+        temperature = body.get("temperature")
+        max_tokens = body.get("max_tokens", body.get("max_completion_tokens"))
+        temperature_override = None
+        max_tokens_override = None
+        if temperature is not None:
+            if not config.engine.overrides.allowTemperature:
+                raise PublicErrorResponse("invalid_request", "temperature overrides disabled", 400)
+            try:
+                temperature_override = float(temperature)
+            except (TypeError, ValueError) as exc:
+                raise PublicErrorResponse("invalid_request", "invalid temperature", 400) from exc
+        if max_tokens is not None:
+            if not config.engine.overrides.allowMaxTokens:
+                raise PublicErrorResponse("invalid_request", "max_tokens overrides disabled", 400)
+            try:
+                max_tokens_override = int(max_tokens)
+            except (TypeError, ValueError) as exc:
+                raise PublicErrorResponse("invalid_request", "invalid max_tokens", 400) from exc
+
+        run_request = RunRequest(
+            principal_id=principal,
+            user_message=user_message,
+            session_id=body.get("session_id"),
+            request_id=request_id,
+            temperature_override=temperature_override,
+            max_tokens_override=max_tokens_override,
+            idempotency_key=idem_key,
+            agent_name=agent_name,
+        )
+
+        if idem_key:
+            await components["backend"].create_idempotency(
+                agent_name=agent_name,
+                principal_id=principal,
+                session_id=body.get("session_id") or "",
+                key=idem_key,
+                ttl_seconds=config.storage.idempotencyTtlSeconds,
+            )
+
+        if streaming:
+            return StreamingResponse(
+                _stream(
+                    runner,
+                    run_request,
+                    request_id,
+                    config,
+                    idem_key,
+                    components,
+                    principal,
+                    agent_name,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        text, done = await _collect_non_streaming(runner, run_request)
+        if done is None:
+            raise PublicErrorResponse("internal_error", "run produced no terminal event")
+        if done.x_agent_status in ("iteration_limit", "output_limit"):
+            finish_reason = "length"
+        elif done.finish_reason == "error":
+            finish_reason = "error"
+        else:
+            finish_reason = "stop"
+        result = _non_streaming_body(
+            text=text,
+            model=config.llm.model,
+            finish_reason=finish_reason,
+            x_agent_status=done.x_agent_status,
+            usage=done.usage,
+            request_id=request_id,
+        )
+        if idem_key:
+            await _finish_idempotency(
+                components, principal, agent_name, body.get("session_id") or "", idem_key, result
+            )
+        return JSONResponse(status_code=200, content=result, headers={"Cache-Control": "no-store"})
+
+    app.include_router(router)
+
+
+async def _read_body(request: Request, config: Any) -> dict[str, Any]:
+    """API-20: body limits are enforced by the HTTP parser; here we bound
+    the decoded size per server.maxRequestBytes."""
+    raw = await request.body()
+    if len(raw) > config.server.maxRequestBytes:
+        raise PublicErrorResponse("invalid_request", "request body too large", 413)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise PublicErrorResponse("invalid_request", "invalid JSON body", 400) from exc
+    if not isinstance(data, dict):
+        raise PublicErrorResponse("invalid_request", "body must be a JSON object", 400)
+    return data
+
+
+def _extract_user_message(messages: list[Any]) -> str | None:
+    """API-06 stateful: exactly one user message; server history is
+    authoritative. Returns the user text or None when invalid."""
+    user_texts = []
+    for message in messages:
+        if not isinstance(message, dict):
+            return None
+        role = message.get("role")
+        if role == "user":
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                user_texts.append(content)
+            else:
+                return None
+        elif role not in ("user", "assistant", "system"):
+            return None
+    if len(user_texts) != 1:
+        return None
+    return user_texts[0]
+
+
+def _canonical_idempotency_key(key: Any) -> str | None:
+    if not key:
+        return None
+    text = str(key).strip()
+    if not text:
+        return None
+    # API-06a: canonical form is the SHA-256 of the trimmed key.
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+async def _collect_non_streaming(runner, run_request: RunRequest) -> tuple[str, Done | None]:
+    text_parts: list[str] = []
+    done: Done | None = None
+    async for event in runner.execute(run_request):
+        if isinstance(event, TextDelta):
+            text_parts.append(event.text)
+        elif isinstance(event, Done):
+            done = event
+    return "".join(text_parts), done
+
+
+def _non_streaming_body(
+    *,
+    text: str,
+    model: str,
+    finish_reason: str,
+    x_agent_status: str | None,
+    usage: dict[str, int],
+    request_id: str,
+) -> dict[str, Any]:
+    return {
+        "id": f"chatcmpl-{request_id}",
+        "object": "chat.completion",
+        "created": _now(),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": finish_reason,
+                "x_agent_status": x_agent_status,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": usage.get("input_tokens", 0),
+            "completion_tokens": usage.get("output_tokens", 0),
+            "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+        },
+        "request_id": request_id,
+    }
+
+
+def _non_streaming_from_replay(replay, request_id: str) -> dict[str, Any]:
+    outcome = replay.outcome or {}
+    return {
+        "id": f"chatcmpl-{request_id}",
+        "object": "chat.completion",
+        "created": _now(),
+        "model": outcome.get("model", ""),
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": outcome.get("text", "")},
+                "finish_reason": outcome.get("finish_reason", "stop"),
+            }
+        ],
+        "usage": outcome.get("usage", {}),
+        "request_id": request_id,
+        "replayed": True,
+    }
+
+
+async def _stream(
+    runner,
+    run_request: RunRequest,
+    request_id: str,
+    config: Any,
+    idem_key: str | None,
+    components: Any,
+    principal: str,
+    agent_name: str,
+) -> AsyncIterator[str]:
+    """API-08: SSE delta -> text/extension chunks -> finish -> [DONE]."""
+    assistant_text: list[str] = []
+    finish_reason = "stop"
+    x_status: str | None = None
+    usage: dict[str, int] = {}
+    try:
+        async for event in runner.execute(run_request):
+            if isinstance(event, TextDelta):
+                assistant_text.append(event.text)
+                yield _sse_data(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": _now(),
+                        "model": config.llm.model,
+                        "choices": [
+                            {"index": 0, "delta": {"content": event.text}, "finish_reason": None}
+                        ],
+                    }
+                )
+            elif isinstance(event, Iteration):
+                yield _sse_data(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": _now(),
+                        "model": config.llm.model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
+                    }
+                )
+            elif isinstance(event, ToolCall):
+                yield _sse_data(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": _now(),
+                        "model": config.llm.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": event.call_id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": event.name,
+                                                "arguments": json.dumps(event.args),
+                                            },
+                                        }
+                                    ]
+                                },
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+            elif isinstance(event, ToolResult):
+                pass  # tool results are not exposed as assistant deltas
+            elif isinstance(event, RunError):
+                finish_reason = "error"
+                x_status = event.code
+                yield _sse_data(
+                    {"error": {"message": event.message, "type": event.code, "code": event.code}}
+                )
+            elif isinstance(event, Done):
+                finish_reason = event.finish_reason
+                x_status = event.x_agent_status
+                usage = event.usage
+    finally:
+        if finish_reason == "length" or finish_reason == "error":
+            pass
+        final_choice = {"index": 0, "delta": {}, "finish_reason": finish_reason}
+        if x_status:
+            final_choice["x_agent_status"] = x_status
+        yield _sse_data(
+            {
+                "id": request_id,
+                "object": "chat.completion.chunk",
+                "created": _now(),
+                "model": config.llm.model,
+                "choices": [final_choice],
+            }
+        )
+        if usage:
+            yield _sse_data(
+                {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": _now(),
+                    "model": config.llm.model,
+                    "choices": [],
+                    "usage": usage,
+                }
+            )
+        yield "data: [DONE]\n\n"
+        if idem_key:
+            result = _non_streaming_body(
+                text="".join(assistant_text),
+                model=config.llm.model,
+                finish_reason=finish_reason,
+                x_agent_status=x_status,
+                usage=usage,
+                request_id=request_id,
+            )
+            await _finish_idempotency(
+                components, principal, agent_name, run_request.session_id or "", idem_key, result
+            )
+
+
+def _now() -> int:
+    """Epoch seconds (never throws)."""
+    return int(time.time())
+
+
+def _sse_data(payload: dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+async def _finish_idempotency(
+    components: Any,
+    principal: str,
+    agent_name: str,
+    session_id: str,
+    idem_key: str,
+    outcome: dict[str, Any],
+) -> None:
+    await components["backend"].finish_idempotency(
+        agent_name=agent_name,
+        principal_id=principal,
+        session_id=session_id,
+        key=idem_key,
+        status="completed",
+        outcome=outcome,
+    )

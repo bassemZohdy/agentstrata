@@ -235,6 +235,9 @@ Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria (
 
 ## Decisions made (resolved, for the record)
 
+- [x] **NFR-06 OpenAI SDK compatibility range (default recorded 2026-08-03 per user instruction).** Tested range: `openai` Python SDK `>=1.0,<3` (locked 2.52.0, transitive via litellm). The OpenAI-compatible surface is a strict subset (`chat.completions.create` non-streaming + streaming, `models.list`); the golden-fixture suite exercises it through the real SDK client against the mock engine.
+- [x] **CNT-12 vulnerability severity policy (default recorded 2026-08-03 per user instruction).** A release is blocked when the image's vulnerability scan reports any CRITICAL or HIGH severity CVE in the runtime image that has no available fix; MEDIUM/LOW are tracked but non-blocking. Revisit when Milestone 8's scan gate lands.
+
 - [x] **MCP-08 stdio pre-parse byte cap (STACK-02 seam).** Decided 2026-08-02: defer the stdio `maxTransportMessageBytes` pre-parse cap; enforce the cap on Streamable HTTP + legacy SSE now. Reason: google-adk 2.6.1 (latest) pins `mcp>=1.24,<2`, and mcp 1.29.0's `stdio_client` has no bounded-read injection point; mcp 2.x has the `Transport` seam but is incompatible with ADK 2.6.1. Recorded in REQUIREMENTS.md MCP-08 (v2.5). Revisit when a google-adk release supports mcp 2.x.
 - [x] **mcp SDK version range.** Pinned `mcp>=1.24,<2` (locked 1.29.0) per google-adk 2.6.1's declared range — mcp 2.0.0 breaks `McpToolset` imports.
 

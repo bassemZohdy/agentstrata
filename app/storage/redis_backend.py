@@ -61,9 +61,14 @@ def _to_int(value: Any, default: int = 0) -> int:
 
 
 class RedisClient(Protocol):
-    """The redis subset the backend uses (real client or FakeRedis)."""
+    """The redis subset the backend uses (real client or FakeRedis).
 
-    async def get(self, key: str) -> bytes | None: ...
+    Uses ``Any`` parameter/return types because redis-py's typed client is
+    structurally incompatible with the protocol's simpler shapes; FakeRedis
+    and the real client both satisfy the runtime contract.
+    """
+
+    async def get(self, key: str) -> Any: ...
     async def set(self, key: str, value: str, *, ex: int | None = None) -> None: ...
     async def delete(self, key: str) -> int: ...
     async def eval(self, script: str, keys: list[str], args: list[str]) -> Any: ...

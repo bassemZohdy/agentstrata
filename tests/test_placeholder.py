@@ -8,10 +8,11 @@ NFR-06), and the §6 benchmark/chaos suite (Milestone 8, NFR-00).
 
 
 def test_app_imports_and_boots() -> None:
-    from app.main import app
+    # app.main is the boot orchestrator (CFG-15); run() is the entrypoint.
+    import app.main as main
 
-    assert app.title == "AgentStrata"
-    assert app.version == "0.1.0"
+    assert callable(main.run)
+    assert main.build_storage is not None
 
 
 def test_healthcheck_module_is_invocable() -> None:
