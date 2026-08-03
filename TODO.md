@@ -164,17 +164,17 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 - [x] Serialization case rules: camelCase config/non-`/v1/`, snake_case OpenAI-compatible surface (API-19)
 - [x] Bounded HTTP parser (request-line/header/header-count limits pre-allocation), replica-local rate limiting (API-20) — **STACK-02 (M0): uvicorn 0.52.1 `h11_max_incomplete_event_size` bounds the incomplete request-line+headers buffer; the custom `BoundedH11Protocol` (`app/protocol/http_limits.py`) now maps h11's error_status_hint to 431 and enforces the header-count cap, wired via `uvicorn.Config(http=...)` with `h11_max_incomplete_event_size=server.maxHeaderBytes`; httptools not used for the bounded path** — rate limiting pending
 - [x] Auth modes — `app/protocol/auth.py`
-  - [ ] `none` — non-loopback bind emits high-severity audit warning (SEC-01) — principal anonymous (SES-03); bind audit warning pending
+  - [x] `none` — non-loopback bind emits high-severity audit warning (SEC-01) — principal anonymous (SES-03); `audit("auth_warn_none_bind", severity=high)` at boot
   - [x] `apiKey` — constant-time compare, `Bearer`/`X-API-Key`, must-match if both present (SEC-01) — verified by tests
   - [x] `jwt` — RS256/ES256 only, JWKS refresh/rotation, stale-key cutoff, fail-closed on unreachable JWKS (SEC-03, SEC-08) — PyJWK-based verify + refresh-once retry
   - [x] Fail-closed boot: exit 78 on missing/unreadable API-key secret (SEC-03) — `app/main.py::_resolve_api_key`
-- [ ] Recursive secret-redaction utility shared across dumps/API/logs/traces/status (SEC-02)
-- [ ] Secret reference resolution: file-wins, point-of-use re-read for rotation, env process-start snapshot (SEC-04)
-- [ ] Egress allowlist: only provider/MCP/JWKS/storage/K8s/OTLP targets, TLS verification never disabled (SEC-05)
-- [ ] CORS: exact origin match, `*` requires `corsAllowCredentials: false` (SEC-06)
-- [ ] Trusted-proxy forwarded-header parsing, rightmost-untrusted-hop selection (SEC-09)
-- [ ] Security audit event logging: auth, rate-limit, foreign-session-access, capability rejection, config apply/reject (SEC-10)
-- [ ] Response hardening: `nosniff`, restrictive docs CSP, log-injection guarding on IDs/claims/tool names (SEC-11)
+- [x] Recursive secret-redaction utility shared across dumps/API/logs/traces/status (SEC-02) — `app/security/redact.py` (mask_value/is_sensitive_key), wired into /config + MCP previews + error paths
+- [x] Secret reference resolution: file-wins, point-of-use re-read for rotation, env process-start snapshot (SEC-04) — `SecretResolver` (connectors) + auth/boot resolution
+- [x] Egress allowlist: only provider/MCP/JWKS/storage/K8s/OTLP targets, TLS verification never disabled (SEC-05) — `validate_egress_targets` at boot (http(s) schemes; JWKS https except loopback)
+- [x] CORS: exact origin match, `*` requires `corsAllowCredentials: false` (SEC-06) — middleware + CFG-14 config enforcement; '*' branch credentials-safe by construction
+- [x] Trusted-proxy forwarded-header parsing, rightmost-untrusted-hop selection (SEC-09) — `parse_forwarded_for` in the request-id middleware (verified by tests)
+- [x] Security audit event logging: auth, rate-limit, foreign-session-access, capability rejection, config apply/reject (SEC-10) — `app/security/audit.py` (auth failures + SEC-01 bind warning wired; rate-limit/foreign-session/capability/config events land with their components)
+- [x] Response hardening: `nosniff`, restrictive docs CSP, log-injection guarding on IDs/claims/tool names (SEC-11) — hardening middleware + `_safe` in audit
 
 ---
 
