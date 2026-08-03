@@ -16,14 +16,14 @@ sys.path.insert(0, str(ROOT))
 
 from app.config.models import SCHEMA_MAJOR, AgentConfig  # noqa: E402
 
-SCHEMA_ID = f"https://agentstrata.dev/schemas/agent.schema.v{SCHEMA_MAJOR}.json"
+SCHEMA_ID = f"https://agentbase.dev/schemas/agent.schema.v{SCHEMA_MAJOR}.json"
 
 
 def build_agent_schema() -> dict:
     schema = AgentConfig.model_json_schema(by_alias=True)
     schema["$id"] = SCHEMA_ID
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-    schema["title"] = "AgentStrata Agent Definition"
+    schema["title"] = "Agentbase Agent Definition"
     return schema
 
 
@@ -32,8 +32,8 @@ def build_overlay_schema() -> dict:
     schema so operators can validate a ConfigMap's agent.yaml overlay."""
     schema = build_agent_schema()
     _make_optional(schema, set())
-    schema["$id"] = f"https://agentstrata.dev/schemas/agent-overlay.schema.v{SCHEMA_MAJOR}.json"
-    schema["title"] = "AgentStrata ConfigMap Overlay (all fields optional)"
+    schema["$id"] = f"https://agentbase.dev/schemas/agent-overlay.schema.v{SCHEMA_MAJOR}.json"
+    schema["title"] = "Agentbase ConfigMap Overlay (all fields optional)"
     return schema
 
 

@@ -94,7 +94,7 @@ class Observability:
             provider = TracerProvider(resource=resource)
             provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
             trace.set_tracer_provider(provider)
-            self._tracer = trace.get_tracer("agentstrata")
+            self._tracer = trace.get_tracer("agentbase")
             self._provider = provider
         except Exception as exc:  # noqa: BLE001
             # OBS-04: export failure is nonfatal and marks health degraded.

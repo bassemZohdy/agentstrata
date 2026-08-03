@@ -30,7 +30,7 @@ def _config(otel_enabled: bool = False) -> AgentConfig:
 class TestJsonLogs:
     def test_json_formatter_fields(self):
         record = logging.LogRecord(
-            name="agentstrata",
+            name="agentbase",
             level=logging.INFO,
             pathname=__file__,
             lineno=1,

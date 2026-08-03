@@ -1,6 +1,6 @@
 # Deployment and configuration
 
-This document covers running AgentStrata everywhere and every supported
+This document covers running Agentbase everywhere and every supported
 configuration option. The authoritative contract is
 [REQUIREMENTS.md](../REQUIREMENTS.md); this is the operator-facing summary.
 
@@ -71,8 +71,8 @@ Postgres (session fencing, SES-05).
 ## Docker
 
 ```bash
-docker build -t agentstrata:latest .
-docker run --rm -p 8080:8080 -e GEMINI_API_KEY=... agentstrata:latest
+docker build -t agentbase:latest .
+docker run --rm -p 8080:8080 -e GEMINI_API_KEY=... agentbase:latest
 docker compose up -d --build   # full stack: runtime + Redis + Postgres + MCP sample
 ```
 

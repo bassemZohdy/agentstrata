@@ -82,7 +82,7 @@ class FileBackend(StorageBackend):
     def _probe(self) -> None:
         """SES-04: create/write/fsync/rename/delete probe before readiness."""
         self._check_base()
-        probe = self._base / ".agentstrata-probe"
+        probe = self._base / ".agentbase-probe"
         fd, tmp = tempfile.mkstemp(prefix=".probe-", dir=self._base)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:

@@ -1,4 +1,4 @@
-# AgentStrata development stack (REQUIREMENTS.md CNT-09): the runtime wired
+# Agentbase development stack (REQUIREMENTS.md CNT-09): the runtime wired
 # with Redis, PostgreSQL, and one sample MCP server, demonstrating mounted
 # config + profile + runtime authentication + secrets-as-env.
 #
@@ -14,14 +14,14 @@
 services:
   runtime:
     build: .
-    image: agentstrata:compose
+    image: agentbase:compose
     environment:
       AGENT_CONFIG_DIR: /etc/agent
       AGENT_SERVER_AUTH_MODE: apiKey
       AGENT_SERVER_AUTH_APIKEYENV: AGENT_API_KEY
       AGENT_API_KEY: ${AGENT_API_KEY:?set AGENT_API_KEY in .env}
       AGENT_REDIS_URL: redis://redis:6379/0
-      AGENT_PG_DSN: postgresql://agentstrata:agentstrata@postgres:5432/agentstrata
+      AGENT_PG_DSN: postgresql://agentbase:agentbase@postgres:5432/agentbase
     ports:
       - "8080:8080"
     volumes:
@@ -43,11 +43,11 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: agentstrata
-      POSTGRES_PASSWORD: agentstrata
-      POSTGRES_DB: agentstrata
+      POSTGRES_USER: agentbase
+      POSTGRES_PASSWORD: agentbase
+      POSTGRES_DB: agentbase
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentstrata"]
+      test: ["CMD-SHELL", "pg_isready -U agentbase"]
       interval: 5s
       timeout: 3s
       retries: 10

@@ -14,12 +14,12 @@ from app.security.audit import (
 
 class TestAudit:
     def test_audit_emits_structured_line(self, caplog):
-        with caplog.at_level(logging.INFO, logger="agentstrata.audit"):
+        with caplog.at_level(logging.INFO, logger="agentbase.audit"):
             audit("auth_failure", code="auth_error", path="/v1/models")
         assert any("audit_event=auth_failure" in r.message for r in caplog.records)
 
     def test_audit_guards_log_injection(self, caplog):
-        with caplog.at_level(logging.INFO, logger="agentstrata.audit"):
+        with caplog.at_level(logging.INFO, logger="agentbase.audit"):
             audit("auth_failure", request_id="abc\nINJECTED")
         assert not any("\nINJECTED" in r.message for r in caplog.records)
 

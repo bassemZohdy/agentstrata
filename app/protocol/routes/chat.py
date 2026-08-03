@@ -8,10 +8,12 @@ non-streaming and SSE streaming shapes (API-07/08), overrides gating
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -32,6 +34,10 @@ _ALLOWED_FIELDS = {
     "idempotency_key",
 }
 
+# Producer->consumer sentinel: the run finished naturally (or was cancelled by
+# the producer) and no more events are coming.
+_STREAM_DONE = object()
+
 
 def register(app: Any, config: Any, components: dict[str, Any]) -> None:
     runner = components["runner"]
@@ -41,6 +47,21 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
 
     @router.post("/chat/completions")
     async def chat_completions(request: Request):
+        # CNT-07: reject new runs once draining begins (existing runs keep
+        # their deadline up to shutdownGraceSeconds).
+        shutdown = components.get("shutdown")
+        if shutdown is not None and shutdown.is_draining():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": {
+                        "message": "Server is shutting down",
+                        "type": "service_unavailable",
+                        "code": "service_unavailable",
+                    },
+                    "request_id": getattr(request.state, "request_id", ""),
+                },
+            )
         body = await _read_body(request, config)
         request_id = getattr(request.state, "request_id", "")
 
@@ -126,6 +147,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 _stream(
                     runner,
                     run_request,
+                    request,
                     request_id,
                     config,
                     idem_key,
@@ -277,6 +299,7 @@ def _non_streaming_from_replay(replay, request_id: str) -> dict[str, Any]:
 async def _stream(
     runner,
     run_request: RunRequest,
+    request: Request,
     request_id: str,
     config: Any,
     idem_key: str | None,
@@ -284,13 +307,68 @@ async def _stream(
     principal: str,
     agent_name: str,
 ) -> AsyncIterator[str]:
-    """API-08: SSE delta -> text/extension chunks -> finish -> [DONE]."""
+    """API-08 + API-08a: SSE delta -> text/extension chunks -> finish -> [DONE].
+
+    A producer task drives ``runner.execute`` into a bounded output queue
+    (``server.streamQueueEvents``); this generator is the consumer. The consumer
+    polls client-disconnect at a <=1 s cadence; the producer's ``put`` times out
+    after ``server.slowConsumerSeconds`` of a full queue. Either trigger
+    requests run cancellation within 1 s (the producer task is cancelled, which
+    drives the run's CancelledError path; the runner commits a terminal state
+    and any lingering nonterminal run is reconciled by the storage sweep).
+    After headers are sent, a mid-stream cancellation emits one ``x_agent_event``
+    error chunk then ``[DONE]``; HTTP status stays 200 and no nonstandard
+    finish reason is used (API-08a). Partial assistant text is never persisted
+    (ENG-06 — the runner only commits the turn on success).
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=config.server.streamQueueEvents)
+    slow_seconds = config.server.slowConsumerSeconds
+    slow_consumer = asyncio.Event()
+    gen = runner.execute(run_request)
+
+    async def produce() -> None:
+        try:
+            async for event in gen:
+                try:
+                    await asyncio.wait_for(queue.put(event), timeout=slow_seconds)
+                except TimeoutError:
+                    # Output queue has been full for slowConsumerSeconds: the
+                    # client is not keeping up. Stop driving the run and let the
+                    # consumer cancel + tear it down.
+                    slow_consumer.set()
+                    break
+            queue.put_nowait(_STREAM_DONE)
+        except BaseException:
+            # On cancel/teardown, still unblock the consumer so it can finish.
+            with suppress(asyncio.QueueFull):
+                queue.put_nowait(_STREAM_DONE)
+            raise
+
+    producer = asyncio.create_task(produce())
     assistant_text: list[str] = []
     finish_reason = "stop"
     x_status: str | None = None
     usage: dict[str, int] = {}
+    mid_stream_cancel: str | None = None
     try:
-        async for event in runner.execute(run_request):
+        while True:
+            # Disconnect poll: the queue.get timeout bounds this to <=1 s.
+            if await request.is_disconnected():
+                mid_stream_cancel = "client_disconnected"
+                break
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=1.0)
+            except TimeoutError:
+                if producer.done() and queue.empty():
+                    if slow_consumer.is_set():
+                        mid_stream_cancel = "slow_consumer"
+                    break
+                continue
+            if item is _STREAM_DONE:
+                if slow_consumer.is_set():
+                    mid_stream_cancel = "slow_consumer"
+                break
+            event = item
             if isinstance(event, TextDelta):
                 assistant_text.append(event.text)
                 yield _sse_data(
@@ -354,9 +432,41 @@ async def _stream(
                 finish_reason = event.finish_reason
                 x_status = event.x_agent_status
                 usage = event.usage
+            if slow_consumer.is_set():
+                mid_stream_cancel = "slow_consumer"
+                break
     finally:
-        if finish_reason == "length" or finish_reason == "error":
-            pass
+        # Request run cancellation within 1 s: cancel the producer (which drives
+        # the run) and close the engine generator. Best-effort teardown — the
+        # runner commits a terminal state on CancelledError; any lingering
+        # nonterminal run is reconciled by the storage sweep (run_interrupted).
+        if not producer.done():
+            producer.cancel()
+        with suppress(BaseException):
+            await producer
+        with suppress(BaseException):
+            await gen.aclose()
+        # API-08a: after headers are sent, a mid-stream cancellation emits one
+        # x_agent_event error chunk then [DONE]; status stays 200 and no
+        # nonstandard finish reason is used.
+        if mid_stream_cancel:
+            finish_reason = "stop"
+            x_status = None
+            usage = {}
+            yield _sse_data(
+                {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": _now(),
+                    "model": config.llm.model,
+                    "choices": [],
+                    "x_agent_event": {
+                        "type": "error",
+                        "code": "agent_timeout",
+                        "message": "The run was cancelled by timeout or disconnect.",
+                    },
+                }
+            )
         final_choice = {"index": 0, "delta": {}, "finish_reason": finish_reason}
         if x_status:
             final_choice["x_agent_status"] = x_status
@@ -369,7 +479,8 @@ async def _stream(
                 "choices": [final_choice],
             }
         )
-        if usage:
+        # A disconnected stream may not receive its usage chunk (API-08a).
+        if usage and not mid_stream_cancel:
             yield _sse_data(
                 {
                     "id": request_id,
@@ -390,9 +501,15 @@ async def _stream(
                 usage=usage,
                 request_id=request_id,
             )
-            await _finish_idempotency(
-                components, principal, agent_name, run_request.session_id or "", idem_key, result
-            )
+            with suppress(BaseException):
+                await _finish_idempotency(
+                    components,
+                    principal,
+                    agent_name,
+                    run_request.session_id or "",
+                    idem_key,
+                    result,
+                )
 
 
 def _now() -> int:

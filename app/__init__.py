@@ -1,4 +1,4 @@
-"""AgentStrata runtime package.
+"""Agentbase runtime package.
 
 Milestone 0 bootstrap: package skeleton only — no application functionality yet.
 

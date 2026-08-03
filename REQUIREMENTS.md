@@ -1,9 +1,9 @@
-# AgentStrata — Universal Cloud-Native Agent Runtime
+# Agentbase — Universal Cloud-Native Agent Runtime
 
 | | |
 | --- | --- |
 | **Document** | Product and Software Requirements Specification (SRS) — authoritative implementation baseline |
-| **Working name** | **AgentStrata** (pending trademark, domain, and package-registry clearance) |
+| **Product name** | **Agentbase** (chosen; pending trademark, domain, and package-registry clearance) |
 | **Version** | 2.4 |
 | **Date** | 2026-08-02 |
 | **Status** | Draft requirements baseline — see §18 for the acceptance criteria a release must satisfy |

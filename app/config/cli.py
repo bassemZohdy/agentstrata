@@ -33,7 +33,7 @@ BOOTSTRAP_FLAGS = (
     "--help",
 )
 
-HELP_TEXT = """AgentStrata runtime configuration CLI
+HELP_TEXT = """Agentbase runtime configuration CLI
 
 Usage: python -m app.main [options] [--<dotted.path>=<value> ...]
 
@@ -137,7 +137,7 @@ def _version_string() -> str:
     import app
 
     return (
-        f"agentstrata {app.__version__}\n"
+        f"agentbase {app.__version__}\n"
         f"commit {_build_commit()}\n"
         f"schema major {SCHEMA_MAJOR} (version {SCHEMA_VERSION})\n"
         f"phase {capabilities.PHASE}"

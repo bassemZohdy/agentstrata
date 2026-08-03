@@ -1,5 +1,5 @@
 [project]
-name = "agentstrata"
+name = "agentbase"
 version = "0.1.0"
 description = "A declarative, production-grade AI agent runtime (Phase 1 core). Working name — pending trademark/package clearance."
 requires-python = ">=3.12"

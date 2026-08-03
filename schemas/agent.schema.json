@@ -911,7 +911,7 @@
       "type": "object"
     }
   },
-  "$id": "https://agentstrata.dev/schemas/agent.schema.v1.json",
+  "$id": "https://agentbase.dev/schemas/agent.schema.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The complete Agent Definition document (camelCase, external format).",
@@ -980,6 +980,6 @@
     "engine",
     "llm"
   ],
-  "title": "AgentStrata Agent Definition",
+  "title": "Agentbase Agent Definition",
   "type": "object"
 }

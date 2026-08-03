@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# AgentStrata runtime image.
+# Agentbase runtime image.
 # REQUIREMENTS.md: CNT-01 (builder base + venv + lock hashes), CNT-02
 # (multi-arch), CNT-03 (non-root arbitrary UID), CNT-04 (exec ENTRYPOINT),
 # CNT-05 (VOLUME/EXPOSE), CNT-06 (env), CNT-08 (single worker, no reload),
@@ -45,15 +45,15 @@ COPY LICENSE /app/LICENSE
 
 # CNT-03: non-root arbitrary-UID (OpenShift-compatible): run as UID 10001
 # group 0; paths are group-writable so a platform-assigned UID still works.
-RUN useradd --uid 10001 --gid 0 --no-create-home --shell /usr/sbin/nologin agentstrata \
-    && mkdir -p /tmp /var/lib/agentstrata \
-    && chmod -R g+w /tmp /var/lib/agentstrata /app \
-    && chown -R 10001:0 /tmp /var/lib/agentstrata /app
+RUN useradd --uid 10001 --gid 0 --no-create-home --shell /usr/sbin/nologin agentbase \
+    && mkdir -p /tmp /var/lib/agentbase \
+    && chmod -R g+w /tmp /var/lib/agentbase /app \
+    && chown -R 10001:0 /tmp /var/lib/agentbase /app
 USER 10001:0
 
 # CNT-11: read-only rootfs — writes confined to /tmp and storage.path
 # (the image is run with --read-only + tmpfs mounts for those).
-VOLUME ["/tmp", "/var/lib/agentstrata"]
+VOLUME ["/tmp", "/var/lib/agentbase"]
 
 # CNT-10: HEALTHCHECK uses the loopback probe (bound-port marker file).
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \

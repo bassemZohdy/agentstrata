@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 def create_app(config: Any, components: dict[str, Any], mode: str = "standalone") -> FastAPI:
     """Build the FastAPI app (API-00 surface-wide contract)."""
     app = FastAPI(
-        title="AgentStrata",
+        title="Agentbase",
         version=__version__,
         docs_url=None,  # API-18: documented OpenAPI, no interactive docs by default
         redoc_url=None,

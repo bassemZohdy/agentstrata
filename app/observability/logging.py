@@ -78,7 +78,7 @@ def normalize_request_id(incoming: str | None) -> str:
     if incoming and REQUEST_ID_RE.match(incoming):
         return incoming
     if incoming is not None:
-        logging.getLogger("agentstrata").warning(
+        logging.getLogger("agentbase").warning(
             "invalid_request_id", extra={"event": "invalid_request_id"}
         )
     return str(uuid.uuid4())
@@ -107,4 +107,4 @@ def _iso_time(epoch: float) -> str:
 
 def event_logger(event: str) -> logging.Logger:
     """Logger for a named event with correlation support."""
-    return logging.getLogger("agentstrata.events")
+    return logging.getLogger("agentbase.events")

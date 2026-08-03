@@ -31,6 +31,17 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
     @router.get("/readyz")
     async def readyz(request: Request):
         # API-02: full readiness.
+        # CNT-07: once draining begins, readiness fails immediately so the
+        # platform stops sending new requests while in-flight runs drain.
+        shutdown = components.get("shutdown")
+        if shutdown is not None and shutdown.is_draining():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "draining",
+                    "request_id": getattr(request.state, "request_id", ""),
+                },
+            )
         storage_ok = await backend.health()
         mcp_ok = mcp.readiness()
         if storage_ok and mcp_ok:

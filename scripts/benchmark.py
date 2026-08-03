@@ -136,7 +136,7 @@ def _container_probe() -> dict:
                 "docker",
                 "run",
                 "--rm",
-                "agentstrata:m0",
+                "agentbase:m0",
                 "python",
                 "-c",
                 "import app.main; print('up')",

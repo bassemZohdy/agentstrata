@@ -58,7 +58,7 @@ class TestDump:
         )
         assert code == EX_OK
         assert "temperature: 0.25  # tier 5: env" in out
-        assert "agentstrata" not in out  # stdout contains only YAML
+        assert "agentbase" not in out  # stdout contains only YAML
 
     def test_dump_invalid_exits_78(self, monkeypatch):
         code, _, err = run_cli(monkeypatch, "--dump-config", env={"AGENT_STORAGE_TYPE": "redis"})
@@ -70,7 +70,7 @@ class TestVersion:
     def test_version_fields(self, monkeypatch):
         code, out, _ = run_cli(monkeypatch, "--version")
         assert code == EX_OK
-        assert "agentstrata 0.1.0" in out
+        assert "agentbase 0.1.0" in out
         assert "schema major 1" in out
         assert "phase P1" in out
 

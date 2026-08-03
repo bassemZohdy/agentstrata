@@ -253,7 +253,7 @@ def run(argv: list[str] | None = None) -> int:
     app = create_app(config, components, mode=selected_mode)
     import uvicorn
 
-    uvicorn.run(
+    server_config = uvicorn.Config(
         app,
         host=config.server.host,
         port=config.server.port,
@@ -262,6 +262,16 @@ def run(argv: list[str] | None = None) -> int:
         http=BoundedH11Protocol,
         h11_max_incomplete_event_size=config.server.maxHeaderBytes,
     )
+    # CNT-07: graceful shutdown — first signal drains (readyz/chat 503), the
+    # grace timer then flushes storage and closes reconcilers/MCP/OTel before
+    # the listener stops; a second signal hard-exits 1.
+    from .lifecycle import ManagedServer, ShutdownManager
+
+    shutdown_mgr = ShutdownManager(components, config.server.shutdownGraceSeconds)
+    components["shutdown"] = shutdown_mgr
+    server = ManagedServer(server_config, shutdown_mgr)
+    shutdown_mgr.server = server._server
+    server.run()
     return EX_OK
 
 

@@ -1,4 +1,4 @@
-# AgentStrata
+# Agentbase
 
 *Working name — pending trademark, domain, and package-registry clearance.*
 
@@ -8,7 +8,7 @@ The runtime, not an agent builder: the same Agent Definition runs unmodified loc
 
 ## Status
 
-**Requirements-defined, pre-implementation.** [REQUIREMENTS.md](REQUIREMENTS.md) is the authoritative specification; no runtime code exists yet. See [PLAN.md](PLAN.md) for the build order and [TODO.md](TODO.md) for what's still open.
+**Phase 1 implemented — finishing the release gate.** [REQUIREMENTS.md](REQUIREMENTS.md) is the authoritative specification; milestones 0–8 are implemented and passing the host-based test suite (324 tests). The only remaining P1 work is the **image-based M8 exit checks** (NFR-00 benchmark/chaos, NFR-08 zero-downtime reload proof, §18 ACC-01 acceptance on both architectures) — see [TODO.md](TODO.md). The build order and per-milestone rationale are in [PLAN.md](PLAN.md), and what landed per milestone is in [CHANGELOG.md](CHANGELOG.md).
 
 ## What it does (Phase 1 / core runtime)
 
@@ -41,9 +41,9 @@ Each phase is independently releasable and gated by its own acceptance criteria 
 |---|---|
 | [REQUIREMENTS.md](REQUIREMENTS.md) | The single source of truth for what the runtime must do. Every rule has a stable ID (e.g. `CFG-03`, `API-07`) that code and tests trace back to. |
 | [PLAN.md](PLAN.md) | Build order and milestones for turning the requirements into a working runtime. |
-| [TODO.md](TODO.md) | The actionable checklist: every task and subtask for each PLAN.md milestone, plus open decisions, deferred-scope items, and unstarted phase work. |
+| [TODO.md](TODO.md) | The remaining-work checklist: open P1 items, unstarted phase work (P2–P4), resolved decisions, the open human-call decision, and explicitly deferred scope. Completed milestone detail lives in CHANGELOG.md. |
 | [CHANGELOG.md](CHANGELOG.md) | History of what changed and why, release by release. |
 
 ## Contributing
 
-This repository has no code yet — the immediate work is implementing P1 against REQUIREMENTS.md. Read [PLAN.md](PLAN.md) for the build order and start checking off Milestone 0 in [TODO.md](TODO.md).
+Phase 1 is fully implemented (the API-08a stream-backpressure and CNT-07 graceful-shutdown code work landed). The only remaining P1 items are the **image-based M8 exit checks** in [TODO.md](TODO.md) — the NFR-00 benchmark/chaos run, the NFR-08 zero-downtime reload proof, and the §18 ACC-01 acceptance run on both architectures — which require the built Docker image and a cluster/chaos harness. Read [PLAN.md](PLAN.md) for the milestone structure and [REQUIREMENTS.md](REQUIREMENTS.md) for the stable requirement IDs (`CFG-03`, `API-07`, …) that code and tests trace back to.

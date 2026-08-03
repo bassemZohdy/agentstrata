@@ -14,7 +14,7 @@ from pathlib import Path
 
 # CNT-10: bound-port file lives under /tmp (read-only rootfs: /tmp is the
 # writable scratch; the runtime touches this file once the listener binds).
-MARKER = Path(os.environ.get("AGENT_HEALTH_MARKER", "/tmp/agentstrata.ready"))
+MARKER = Path(os.environ.get("AGENT_HEALTH_MARKER", "/tmp/agentbase.ready"))
 
 
 def main() -> int:

@@ -9,7 +9,7 @@ import logging
 import re
 from typing import Any
 
-audit_logger = logging.getLogger("agentstrata.audit")
+audit_logger = logging.getLogger("agentbase.audit")
 
 # SEC-10: audit-worthy events
 AUDIT_EVENTS = {

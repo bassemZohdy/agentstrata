@@ -331,7 +331,7 @@ def _t_truncate_session(fake: FakeRedis, keys: list[str], args: list[str]) -> An
 def _t_sweep_runs(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
     now_ts, ttl = _i(args[0]), _i(args[1])
     deleted = 0
-    for k in fake._keys("agentstrata:*:run:*"):
+    for k in fake._keys("agentbase:*:run:*"):
         r = fake._get_decoded(k)
         if r and r.get("status") in ("succeeded", "failed", "cancelled"):
             updated = _i(r.get("updated_at", 0))

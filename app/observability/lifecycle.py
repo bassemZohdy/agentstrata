@@ -15,7 +15,7 @@ from typing import Any
 
 from .. import __version__
 
-logger = logging.getLogger("agentstrata.events")
+logger = logging.getLogger("agentbase.events")
 
 
 def runtime_started(

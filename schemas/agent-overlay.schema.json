@@ -901,7 +901,7 @@
       "type": "object"
     }
   },
-  "$id": "https://agentstrata.dev/schemas/agent-overlay.schema.v1.json",
+  "$id": "https://agentbase.dev/schemas/agent-overlay.schema.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The complete Agent Definition document (camelCase, external format).",
@@ -965,6 +965,6 @@
       "$ref": "#/$defs/Tools"
     }
   },
-  "title": "AgentStrata ConfigMap Overlay (all fields optional)",
+  "title": "Agentbase ConfigMap Overlay (all fields optional)",
   "type": "object"
 }

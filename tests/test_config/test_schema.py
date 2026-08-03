@@ -194,7 +194,7 @@ class TestSchemaMeta:
         schema = json.loads(Path("schemas/agent.schema.json").read_text(encoding="utf-8"))
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
         assert schema["$id"] == (
-            f"https://agentstrata.dev/schemas/agent.schema.v{SCHEMA_MAJOR}.json"
+            f"https://agentbase.dev/schemas/agent.schema.v{SCHEMA_MAJOR}.json"
         )
         props = set(schema["properties"])
         assert {"name", "engine", "llm", "k8s", "agents", "approval", "rag"} <= props

@@ -9,19 +9,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agentstrata
+  name: agentbase
   namespace: default
 spec:
   replicas: 1 # memory/file storage: MUST stay 1 (SES-01)
   selector:
     matchLabels:
-      app: agentstrata
+      app: agentbase
   template:
     metadata:
       labels:
-        app: agentstrata
+        app: agentbase
     spec:
-      serviceAccountName: agentstrata
+      serviceAccountName: agentbase
+      # CNT-07: terminationGracePeriodSeconds MUST be >= shutdownGraceSeconds
+      # (default 25) + 10s, so the platform waits for the drain/flush/close
+      # sequence before sending SIGKILL. Manifests use 35s for the default.
+      terminationGracePeriodSeconds: 35
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -29,7 +33,7 @@ spec:
         fsGroup: 0
       containers:
         - name: runtime
-          image: agentstrata:latest
+          image: agentbase:latest
           imagePullPolicy: IfNotPresent
           args: []
           env:
@@ -40,7 +44,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: AGENT_K8S_NAME
-              value: agentstrata-config
+              value: agentbase-config
             - name: AGENT_SERVER_AUTH_MODE
               value: apiKey
             - name: AGENT_SERVER_AUTH_APIKEYFILE
@@ -84,10 +88,10 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: agentstrata-config
+            name: agentbase-config
         - name: secrets
           secret:
-            secretName: agentstrata-api-key
+            secretName: agentbase-api-key
             defaultMode: 0400
         - name: tmp
           emptyDir: {}
@@ -95,11 +99,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: agentstrata
+  name: agentbase
   namespace: default
 spec:
   selector:
-    app: agentstrata
+    app: agentbase
   ports:
     - port: 8080
       targetPort: 8080

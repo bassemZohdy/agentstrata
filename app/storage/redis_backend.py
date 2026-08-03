@@ -1,7 +1,7 @@
 """Redis storage backend (REQUIREMENTS.md SES-01 redis row, SES-05).
 
 Key layout shares one hash tag per session for Redis Cluster compatibility:
-``agentstrata:{principal_digest}`` wrapped in ``{...}`` so session, run,
+``agentbase:{principal_digest}`` wrapped in ``{...}`` so session, run,
 idempotency, index, and fence keys land in the same slot. Revision mutations
 and fence lease ops are atomic Lua scripts; the contract suite runs the same
 scripts through an in-memory substitute (``FakeRedis``), and the real-instance
@@ -39,7 +39,7 @@ from .model import (
 
 logger = logging.getLogger(__name__)
 
-PREFIX = "agentstrata"
+PREFIX = "agentbase"
 
 
 # The hash tag is the principal digest — every key of a session shares it.
@@ -84,7 +84,7 @@ class RedisBackend(StorageBackend):
 
     async def initialize(self) -> None:
         try:
-            await self._client.get("agentstrata:ping")
+            await self._client.get("agentbase:ping")
             self._ready = True
         except Exception as exc:  # noqa: BLE001
             raise BackendUnavailableError(f"redis storage unavailable: {exc}") from exc
@@ -653,7 +653,7 @@ SWEEP_RUNS = """
 local now = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
 local deleted = 0
-for _, k in ipairs(redis.call('KEYS', 'agentstrata:*:run:*')) do
+for _, k in ipairs(redis.call('KEYS', 'agentbase:*:run:*')) do
   local raw = redis.call('GET', k)
   if raw then
     local r = cjson.decode(raw)
