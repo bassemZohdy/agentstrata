@@ -294,7 +294,11 @@ def _cross_field(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
 
     temp_max = doc.get("engine.overrides.temperatureMax")
     temperature = doc.get("engine.temperature")
-    if temp_max is not None and temperature is not None and temp_max < temperature:
+    if (
+        isinstance(temp_max, (int, float))
+        and isinstance(temperature, (int, float))
+        and temp_max < temperature
+    ):
         issue(
             "engine.overrides.temperatureMax",
             "temperatureMax must be >= configured temperature",

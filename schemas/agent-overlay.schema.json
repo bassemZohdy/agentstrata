@@ -1,0 +1,970 @@
+{
+  "$defs": {
+    "ApprovalConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "ApprovalConfig",
+      "type": "object"
+    },
+    "Auth": {
+      "additionalProperties": false,
+      "properties": {
+        "apiKeyEnv": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Apikeyenv"
+        },
+        "apiKeyFile": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Apikeyfile"
+        },
+        "jwt": {
+          "$ref": "#/$defs/JwtAuth"
+        },
+        "mode": {
+          "$ref": "#/$defs/AuthMode",
+          "default": "none"
+        }
+      },
+      "title": "Auth",
+      "type": "object"
+    },
+    "AuthMode": {
+      "enum": [
+        "none",
+        "apiKey",
+        "jwt"
+      ],
+      "title": "AuthMode",
+      "type": "string"
+    },
+    "Engine": {
+      "additionalProperties": false,
+      "properties": {
+        "historyMaxBytes": {
+          "default": 4194304,
+          "maximum": 67108864,
+          "minimum": 1024,
+          "title": "Historymaxbytes",
+          "type": "integer"
+        },
+        "historyMaxMessages": {
+          "default": 200,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Historymaxmessages",
+          "type": "integer"
+        },
+        "maxIterations": {
+          "default": 10,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Maxiterations",
+          "type": "integer"
+        },
+        "maxOutputBytes": {
+          "default": 1048576,
+          "maximum": 16777216,
+          "minimum": 1,
+          "title": "Maxoutputbytes",
+          "type": "integer"
+        },
+        "maxTokens": {
+          "default": 4096,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Maxtokens",
+          "type": "integer"
+        },
+        "overrides": {
+          "$ref": "#/$defs/EngineOverrides"
+        },
+        "streaming": {
+          "$ref": "#/$defs/StreamingMode",
+          "default": "text"
+        },
+        "systemInstruction": {
+          "minLength": 1,
+          "title": "Systeminstruction",
+          "type": "string"
+        },
+        "temperature": {
+          "default": 0.7,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Temperature",
+          "type": "number"
+        },
+        "timeoutSeconds": {
+          "default": 300,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeoutseconds",
+          "type": "integer"
+        },
+        "tokenBudget": {
+          "$ref": "#/$defs/TokenBudget"
+        },
+        "topP": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Topp",
+          "type": "number"
+        }
+      },
+      "title": "Engine",
+      "type": "object"
+    },
+    "EngineOverrides": {
+      "additionalProperties": false,
+      "properties": {
+        "allowMaxTokens": {
+          "default": true,
+          "title": "Allowmaxtokens",
+          "type": "boolean"
+        },
+        "allowTemperature": {
+          "default": true,
+          "title": "Allowtemperature",
+          "type": "boolean"
+        },
+        "maxTokensMax": {
+          "default": 8192,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Maxtokensmax",
+          "type": "integer"
+        },
+        "temperatureMax": {
+          "default": 2.0,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Temperaturemax",
+          "type": "number"
+        }
+      },
+      "title": "EngineOverrides",
+      "type": "object"
+    },
+    "JwtAuth": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "default": "",
+          "title": "Audience",
+          "type": "string"
+        },
+        "issuer": {
+          "default": "",
+          "title": "Issuer",
+          "type": "string"
+        },
+        "jwksUrl": {
+          "default": "",
+          "title": "Jwksurl",
+          "type": "string"
+        },
+        "principalClaim": {
+          "default": "sub",
+          "title": "Principalclaim",
+          "type": "string"
+        },
+        "refreshSeconds": {
+          "default": 3600,
+          "minimum": 60,
+          "title": "Refreshseconds",
+          "type": "integer"
+        },
+        "timeoutSeconds": {
+          "default": 5,
+          "exclusiveMinimum": 0,
+          "title": "Timeoutseconds",
+          "type": "integer"
+        }
+      },
+      "title": "JwtAuth",
+      "type": "object"
+    },
+    "K8s": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "namespace": {
+          "default": "default",
+          "title": "Namespace",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "resyncSeconds": {
+          "default": 300,
+          "minimum": 30,
+          "title": "Resyncseconds",
+          "type": "integer"
+        }
+      },
+      "title": "K8s",
+      "type": "object"
+    },
+    "Llm": {
+      "additionalProperties": false,
+      "properties": {
+        "apiKeyEnv": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Apikeyenv"
+        },
+        "apiKeyFile": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Apikeyfile"
+        },
+        "baseUrl": {
+          "default": "",
+          "title": "Baseurl",
+          "type": "string"
+        },
+        "contextWindowTokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Contextwindowtokens",
+          "type": "integer"
+        },
+        "extra": {
+          "additionalProperties": true,
+          "title": "Extra",
+          "type": "object"
+        },
+        "model": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/Provider",
+          "default": "gemini"
+        },
+        "vertex": {
+          "$ref": "#/$defs/VertexConfig"
+        }
+      },
+      "title": "Llm",
+      "type": "object"
+    },
+    "LogFormat": {
+      "enum": [
+        "json",
+        "text"
+      ],
+      "title": "LogFormat",
+      "type": "string"
+    },
+    "LogLevel": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR"
+      ],
+      "title": "LogLevel",
+      "type": "string"
+    },
+    "McpServer": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Args",
+          "type": "array"
+        },
+        "authTokenEnv": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authtokenenv"
+        },
+        "authTokenFile": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authtokenfile"
+        },
+        "command": {
+          "default": "",
+          "title": "Command",
+          "type": "string"
+        },
+        "connectTimeoutSeconds": {
+          "default": 10,
+          "exclusiveMinimum": 0,
+          "title": "Connecttimeoutseconds",
+          "type": "integer"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Env",
+          "type": "object"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Headers",
+          "type": "object"
+        },
+        "maxResultBytes": {
+          "default": 100000,
+          "maximum": 4194304,
+          "minimum": 1,
+          "title": "Maxresultbytes",
+          "type": "integer"
+        },
+        "maxTools": {
+          "default": 128,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Maxtools",
+          "type": "integer"
+        },
+        "maxTransportMessageBytes": {
+          "default": 1048576,
+          "maximum": 16777216,
+          "minimum": 4096,
+          "title": "Maxtransportmessagebytes",
+          "type": "integer"
+        },
+        "name": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "secretHeaders": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SecretHeaderRef"
+          },
+          "title": "Secretheaders",
+          "type": "object"
+        },
+        "timeoutSeconds": {
+          "default": 30,
+          "exclusiveMinimum": 0,
+          "title": "Timeoutseconds",
+          "type": "integer"
+        },
+        "toolFilter": {
+          "$ref": "#/$defs/ToolFilter"
+        },
+        "transport": {
+          "$ref": "#/$defs/McpTransport"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "title": "McpServer",
+      "type": "object"
+    },
+    "McpTransport": {
+      "enum": [
+        "stdio",
+        "sse",
+        "streamable-http",
+        "http"
+      ],
+      "title": "McpTransport",
+      "type": "string"
+    },
+    "Observability": {
+      "additionalProperties": false,
+      "properties": {
+        "includeToolArguments": {
+          "default": false,
+          "title": "Includetoolarguments",
+          "type": "boolean"
+        },
+        "logFormat": {
+          "$ref": "#/$defs/LogFormat",
+          "default": "json"
+        },
+        "logLevel": {
+          "$ref": "#/$defs/LogLevel",
+          "default": "INFO"
+        },
+        "otel": {
+          "$ref": "#/$defs/Otel"
+        }
+      },
+      "title": "Observability",
+      "type": "object"
+    },
+    "Otel": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "serviceName": {
+          "default": "",
+          "title": "Servicename",
+          "type": "string"
+        }
+      },
+      "title": "Otel",
+      "type": "object"
+    },
+    "Protocols": {
+      "additionalProperties": false,
+      "properties": {
+        "acp": {
+          "default": false,
+          "title": "Acp",
+          "type": "boolean"
+        },
+        "openaiCompat": {
+          "default": true,
+          "title": "Openaicompat",
+          "type": "boolean"
+        }
+      },
+      "title": "Protocols",
+      "type": "object"
+    },
+    "Provider": {
+      "enum": [
+        "gemini",
+        "openai",
+        "anthropic",
+        "ollama",
+        "litellm"
+      ],
+      "title": "Provider",
+      "type": "string"
+    },
+    "RagConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "store": {
+          "$ref": "#/$defs/RagStore"
+        }
+      },
+      "title": "RagConfig",
+      "type": "object"
+    },
+    "RagStore": {
+      "additionalProperties": false,
+      "properties": {
+        "options": {
+          "additionalProperties": true,
+          "title": "Options",
+          "type": "object"
+        }
+      },
+      "title": "RagStore",
+      "type": "object"
+    },
+    "RateLimit": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "requestsPerMinute": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "title": "Requestsperminute",
+          "type": "integer"
+        }
+      },
+      "title": "RateLimit",
+      "type": "object"
+    },
+    "SecretHeaderRef": {
+      "additionalProperties": false,
+      "properties": {
+        "env": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "prefix": {
+          "default": "",
+          "title": "Prefix",
+          "type": "string"
+        }
+      },
+      "title": "SecretHeaderRef",
+      "type": "object"
+    },
+    "Server": {
+      "additionalProperties": false,
+      "properties": {
+        "auth": {
+          "$ref": "#/$defs/Auth"
+        },
+        "corsAllowCredentials": {
+          "default": false,
+          "title": "Corsallowcredentials",
+          "type": "boolean"
+        },
+        "corsOrigins": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Corsorigins",
+          "type": "array"
+        },
+        "exposeSystemInstruction": {
+          "default": false,
+          "title": "Exposesysteminstruction",
+          "type": "boolean"
+        },
+        "host": {
+          "default": "0.0.0.0",
+          "title": "Host",
+          "type": "string"
+        },
+        "maxConcurrentRequests": {
+          "default": 100,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Maxconcurrentrequests",
+          "type": "integer"
+        },
+        "maxHeaderBytes": {
+          "default": 32768,
+          "maximum": 131072,
+          "minimum": 4096,
+          "title": "Maxheaderbytes",
+          "type": "integer"
+        },
+        "maxHeaderCount": {
+          "default": 100,
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Maxheadercount",
+          "type": "integer"
+        },
+        "maxMessageBytes": {
+          "default": 262144,
+          "maximum": 4194304,
+          "minimum": 1,
+          "title": "Maxmessagebytes",
+          "type": "integer"
+        },
+        "maxRequestBytes": {
+          "default": 1048576,
+          "maximum": 16777216,
+          "minimum": 1024,
+          "title": "Maxrequestbytes",
+          "type": "integer"
+        },
+        "maxRequestLineBytes": {
+          "default": 8192,
+          "maximum": 16384,
+          "minimum": 1024,
+          "title": "Maxrequestlinebytes",
+          "type": "integer"
+        },
+        "port": {
+          "default": 8080,
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocols": {
+          "$ref": "#/$defs/Protocols"
+        },
+        "rateLimit": {
+          "$ref": "#/$defs/RateLimit"
+        },
+        "shutdownGraceSeconds": {
+          "default": 25,
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Shutdowngraceseconds",
+          "type": "integer"
+        },
+        "slowConsumerSeconds": {
+          "default": 10,
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Slowconsumerseconds",
+          "type": "integer"
+        },
+        "streamQueueEvents": {
+          "default": 64,
+          "maximum": 1024,
+          "minimum": 1,
+          "title": "Streamqueueevents",
+          "type": "integer"
+        },
+        "trustedProxyCidrs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Trustedproxycidrs",
+          "type": "array"
+        }
+      },
+      "title": "Server",
+      "type": "object"
+    },
+    "Storage": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionStringEnv": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connectionstringenv"
+        },
+        "connectionStringFile": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connectionstringfile"
+        },
+        "idempotencyTtlSeconds": {
+          "default": 86400,
+          "minimum": 60,
+          "title": "Idempotencyttlseconds",
+          "type": "integer"
+        },
+        "lockAcquireSeconds": {
+          "default": 0.0,
+          "maximum": 5.0,
+          "minimum": 0.0,
+          "title": "Lockacquireseconds",
+          "type": "number"
+        },
+        "maxIdempotencyRecordsPerSession": {
+          "default": 1000,
+          "exclusiveMinimum": 0,
+          "title": "Maxidempotencyrecordspersession",
+          "type": "integer"
+        },
+        "maxRunsPerSession": {
+          "default": 1000,
+          "exclusiveMinimum": 0,
+          "title": "Maxrunspersession",
+          "type": "integer"
+        },
+        "maxSessions": {
+          "default": 10000,
+          "exclusiveMinimum": 0,
+          "title": "Maxsessions",
+          "type": "integer"
+        },
+        "path": {
+          "default": "",
+          "title": "Path",
+          "type": "string"
+        },
+        "runTtlSeconds": {
+          "default": 604800,
+          "minimum": 60,
+          "title": "Runttlseconds",
+          "type": "integer"
+        },
+        "sessionTtlSeconds": {
+          "default": 86400,
+          "minimum": 0,
+          "title": "Sessionttlseconds",
+          "type": "integer"
+        },
+        "type": {
+          "$ref": "#/$defs/StorageType",
+          "default": "memory"
+        }
+      },
+      "title": "Storage",
+      "type": "object"
+    },
+    "StorageType": {
+      "enum": [
+        "memory",
+        "file",
+        "redis",
+        "postgres"
+      ],
+      "title": "StorageType",
+      "type": "string"
+    },
+    "StreamingMode": {
+      "enum": [
+        "text",
+        "events",
+        "debug"
+      ],
+      "title": "StreamingMode",
+      "type": "string"
+    },
+    "TokenBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "perRequest": {
+          "default": 0,
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Perrequest",
+          "type": "integer"
+        },
+        "perSession": {
+          "default": 0,
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Persession",
+          "type": "integer"
+        }
+      },
+      "title": "TokenBudget",
+      "type": "object"
+    },
+    "ToolFilter": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allow",
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Deny",
+          "type": "array"
+        }
+      },
+      "title": "ToolFilter",
+      "type": "object"
+    },
+    "Tools": {
+      "additionalProperties": false,
+      "properties": {
+        "mcpServers": {
+          "items": {
+            "$ref": "#/$defs/McpServer"
+          },
+          "title": "Mcpservers",
+          "type": "array"
+        }
+      },
+      "title": "Tools",
+      "type": "object"
+    },
+    "VertexConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "location": {
+          "default": "us-central1",
+          "title": "Location",
+          "type": "string"
+        },
+        "project": {
+          "default": "",
+          "title": "Project",
+          "type": "string"
+        }
+      },
+      "title": "VertexConfig",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentstrata.dev/schemas/agent-overlay.schema.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The complete Agent Definition document (camelCase, external format).",
+  "properties": {
+    "$schema": {
+      "default": "",
+      "title": "$Schema",
+      "type": "string"
+    },
+    "agents": {
+      "items": {},
+      "title": "Agents",
+      "type": "array"
+    },
+    "approval": {
+      "$ref": "#/$defs/ApprovalConfig"
+    },
+    "description": {
+      "default": "",
+      "maxLength": 2000,
+      "title": "Description",
+      "type": "string"
+    },
+    "engine": {
+      "$ref": "#/$defs/Engine"
+    },
+    "k8s": {
+      "$ref": "#/$defs/K8s"
+    },
+    "llm": {
+      "$ref": "#/$defs/Llm"
+    },
+    "name": {
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+      "title": "Name",
+      "type": "string"
+    },
+    "observability": {
+      "$ref": "#/$defs/Observability"
+    },
+    "profile": {
+      "default": "",
+      "title": "Profile",
+      "type": "string"
+    },
+    "rag": {
+      "$ref": "#/$defs/RagConfig"
+    },
+    "schemaVersion": {
+      "default": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "server": {
+      "$ref": "#/$defs/Server"
+    },
+    "storage": {
+      "$ref": "#/$defs/Storage"
+    },
+    "tools": {
+      "$ref": "#/$defs/Tools"
+    }
+  },
+  "title": "AgentStrata ConfigMap Overlay (all fields optional)",
+  "type": "object"
+}

@@ -27,6 +27,42 @@ def build_agent_schema() -> dict:
     return schema
 
 
+def build_overlay_schema() -> dict:
+    """K8S-03/DEL-02: optional-fields variant of the full Agent Definition
+    schema so operators can validate a ConfigMap's agent.yaml overlay."""
+    schema = build_agent_schema()
+    _make_optional(schema, set())
+    schema["$id"] = f"https://agentstrata.dev/schemas/agent-overlay.schema.v{SCHEMA_MAJOR}.json"
+    schema["title"] = "AgentStrata ConfigMap Overlay (all fields optional)"
+    return schema
+
+
+def _make_optional(node: dict, seen: set[str]) -> None:
+    ref = node.get("$ref")
+    if ref:
+        if ref in seen:
+            return
+        seen.add(ref)
+        target = node.get("$defs", {}).get(ref.rsplit("/", 1)[-1])
+        if isinstance(target, dict):
+            _make_optional(target, seen)
+            return
+    if "properties" in node:
+        node.pop("required", None)
+        for child in node["properties"].values():
+            if isinstance(child, dict):
+                _make_optional(child, seen)
+    for key in ("allOf", "anyOf", "oneOf"):
+        for child in node.get(key, []) or []:
+            if isinstance(child, dict):
+                _make_optional(child, seen)
+    defs = node.get("$defs")
+    if isinstance(defs, dict):
+        for def_node in defs.values():
+            if isinstance(def_node, dict):
+                _make_optional(def_node, seen)
+
+
 def build_openapi() -> dict:
     """API-18: generate openapi.json from the running app's OpenAPI schema."""
     from google.adk.runners import Runner as AdkRunner
@@ -79,8 +115,15 @@ def main() -> int:
         encoding="utf-8",
         newline="\n",
     )
+    overlay = ROOT / "schemas" / "agent-overlay.schema.json"
+    overlay.write_text(
+        json.dumps(build_overlay_schema(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     print(f"wrote {agent}")
     print(f"wrote {openapi}")
+    print(f"wrote {overlay}")
     return 0
 
 

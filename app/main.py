@@ -220,6 +220,25 @@ def run(argv: list[str] | None = None) -> int:
     from .protocol.app import create_app
     from .protocol.http_limits import BoundedH11Protocol
 
+    # Watcher mode (MODE-01/MODE-02): start the tier-8 reconciler.
+    if selected_mode == mode_mod.WATCHER:
+        from .watcher.reload import ReloadManager
+        from .watcher.watcher import ConfigMapWatcher, RealKubeClient
+
+        reload_manager = ReloadManager(
+            build_components, config, components, bundled_dir="/app/config"
+        )
+        watcher = ConfigMapWatcher(
+            RealKubeClient(),
+            config.k8s.namespace,
+            config.k8s.name,
+            config.k8s.required,
+            config.k8s.resyncSeconds,
+            reload_manager.apply_tier8,
+        )
+        components["watcher"] = watcher
+        components["reload_manager"] = reload_manager
+
     app = create_app(config, components, mode=selected_mode)
     import uvicorn
 
