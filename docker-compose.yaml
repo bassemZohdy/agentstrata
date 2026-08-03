@@ -1,0 +1,59 @@
+# AgentStrata development stack (REQUIREMENTS.md CNT-09): the runtime wired
+# with Redis, PostgreSQL, and one sample MCP server, demonstrating mounted
+# config + profile + runtime authentication + secrets-as-env.
+#
+# Usage: docker compose up -d --build
+#   Runtime: http://localhost:8080  (health: /healthz, /readyz, /health)
+#   Config:  ./compose/agent.yaml is mounted at /etc/agent/agent.yaml (tier 3)
+#   Secret:  the API key comes from the AGENT_API_KEY env var (secrets-as-env)
+#
+# NOTE: storage.type is 'memory' by default here (single replica). To use
+# Redis/Postgres, set storage.type accordingly in compose/agent.yaml and
+# point storage.connectionStringEnv at AGENT_REDIS_URL / AGENT_PG_DSN below.
+
+services:
+  runtime:
+    build: .
+    image: agentstrata:compose
+    environment:
+      AGENT_CONFIG_DIR: /etc/agent
+      AGENT_SERVER_AUTH_MODE: apiKey
+      AGENT_SERVER_AUTH_APIKEYENV: AGENT_API_KEY
+      AGENT_API_KEY: ${AGENT_API_KEY:?set AGENT_API_KEY in .env}
+      AGENT_REDIS_URL: redis://redis:6379/0
+      AGENT_PG_DSN: postgresql://agentstrata:agentstrata@postgres:5432/agentstrata
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./compose/agent.yaml:/etc/agent/agent.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agentstrata
+      POSTGRES_PASSWORD: agentstrata
+      POSTGRES_DB: agentstrata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentstrata"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Sample MCP server (stdio) the runtime can connect to.
+  mcp-sample:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp-sample

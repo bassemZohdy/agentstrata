@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 #
-# AgentStrata runtime image (Milestone 0 — functionally empty FastAPI service).
-# REQUIREMENTS.md: CNT-01 (builder/runtime base + venv + lock hashes),
-# CNT-04 (exec-form ENTRYPOINT), CNT-05 (VOLUME/EXPOSE), CNT-06 (env),
-# CNT-08 (single worker, no reload/debug).
+# AgentStrata runtime image.
+# REQUIREMENTS.md: CNT-01 (builder base + venv + lock hashes), CNT-02
+# (multi-arch), CNT-03 (non-root arbitrary UID), CNT-04 (exec ENTRYPOINT),
+# CNT-05 (VOLUME/EXPOSE), CNT-06 (env), CNT-08 (single worker, no reload),
+# CNT-10 (HEALTHCHECK), CNT-11 (read-only rootfs), CNT-13 (secrets hygiene).
 
 # --- Builder stage -----------------------------------------------------------
-# CNT-01: digest-pinned python:3.12-slim, lock hash-verified, install into a venv.
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
 
 ENV PYTHONUNBUFFERED=1 \
@@ -26,7 +26,6 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip check
 
 # --- Runtime stage -----------------------------------------------------------
-# Same pinned slim family; only the venv, app/, schemas/, and license travel.
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
@@ -44,6 +43,21 @@ COPY config /app/config
 COPY schemas /app/schemas
 COPY LICENSE /app/LICENSE
 
-# CNT-04: exec form — PID 1 is python directly (no shell wrapper, no tini),
-# so signals reach the process; Uvicorn handles shutdown.
+# CNT-03: non-root arbitrary-UID (OpenShift-compatible): run as UID 10001
+# group 0; paths are group-writable so a platform-assigned UID still works.
+RUN useradd --uid 10001 --gid 0 --no-create-home --shell /usr/sbin/nologin agentstrata \
+    && mkdir -p /tmp /var/lib/agentstrata \
+    && chmod -R g+w /tmp /var/lib/agentstrata /app \
+    && chown -R 10001:0 /tmp /var/lib/agentstrata /app
+USER 10001:0
+
+# CNT-11: read-only rootfs — writes confined to /tmp and storage.path
+# (the image is run with --read-only + tmpfs mounts for those).
+VOLUME ["/tmp", "/var/lib/agentstrata"]
+
+# CNT-10: HEALTHCHECK uses the loopback probe (bound-port marker file).
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["python", "-m", "app.healthcheck"]
+
+# CNT-04: exec form — PID 1 is python directly (no shell wrapper, no tini).
 ENTRYPOINT ["python", "-m", "app.main"]

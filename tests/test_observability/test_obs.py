@@ -41,7 +41,10 @@ class TestJsonLogs:
         record.request_id = "req-1"
         record.run_id = "run-1"
         line = JsonFormatter().format(record)
-        payload = json.loads(line)
+        try:
+            payload = json.loads(line)
+        except ValueError as exc:  # pragma: no cover — formatter output is ours
+            raise AssertionError(f"invalid JSON log line: {line!r}") from exc
         assert payload["level"] == "INFO"
         assert payload["event"] == "hello"
         assert payload["msg"] == "hello"
@@ -65,9 +68,9 @@ class TestRequestIds:
 
     def test_traceparent_validation(self):
         valid = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-        assert validate_traceparent(valid) is True
-        assert validate_traceparent("bad") is False
-        assert validate_traceparent(None) is False
+        assert validate_traceparent(valid) is True  # noqa: E712
+        assert not validate_traceparent("bad")
+        assert not validate_traceparent(None)
 
 
 class TestZeroCostWhenDisabled:

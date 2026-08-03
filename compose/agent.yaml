@@ -1,0 +1,23 @@
+# Mounted Agent Definition used by docker-compose (CNT-09 demo).
+# Tier 3 (mounted base) — see REQUIREMENTS.md CFG-01.
+schemaVersion: 1
+name: "agent"
+engine:
+  systemInstruction: "You are a helpful assistant. You have tools available; use them when asked."
+llm:
+  provider: "gemini"
+  model: "gemini-2.5-flash"
+  apiKeyEnv: "GEMINI_API_KEY"
+storage:
+  type: "memory" # single replica; switch to redis/postgres for multi-replica
+server:
+  auth:
+    mode: "apiKey"
+    apiKeyEnv: "AGENT_API_KEY"
+tools:
+  mcpServers:
+    - name: "echo"
+      transport: "stdio"
+      command: "python"
+      args: ["/srv/server.py"]
+      required: false

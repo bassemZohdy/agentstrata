@@ -1,0 +1,22 @@
+{
+  "startup_latency_seconds": 3.459,
+  "request_overhead": {
+    "healthz": {
+      "count": 200,
+      "p50_ms": 281.57,
+      "p95_ms": 487.81
+    },
+    "health": {
+      "count": 200,
+      "p50_ms": 432.77,
+      "p95_ms": 681.37
+    }
+  },
+  "idle_footprint": {
+    "max_rss_kb": "n/a (non-POSIX)"
+  },
+  "container_probe": {
+    "container_start_seconds": "n/a (Command '['docker', 'run', '--rm', 'agentstrata:m0', 'python', '-c', \"import app.main; print('up')\"]' timed out after 120 seconds)"
+  },
+  "note": "Feasibility probes measured on the host; the full NFR-00 suite against the built image is the Milestone 8 acceptance run."
+}
