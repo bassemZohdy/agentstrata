@@ -48,6 +48,10 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
     @router.get("/health")
     async def health(request: Request):
         # API-03: per-component status; degraded vs ok.
+        # REL-04: expose the Applied Config generation + configHash.
+        reload = components.get("reload_manager")
+        generation = reload.generation if reload is not None else 1
+        config_hash = reload.config_hash if reload is not None else ""
         storage_ok = await backend.health()
         components_status = {
             "storage": {
@@ -66,6 +70,8 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
                 "components": components_status,
                 "mode": mode,
                 "capabilities": _capabilities(),
+                "configGeneration": generation,
+                "configHash": config_hash,
                 "request_id": getattr(request.state, "request_id", ""),
             },
         )

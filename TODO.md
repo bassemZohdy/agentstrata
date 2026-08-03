@@ -180,18 +180,18 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 
 ## Milestone 6 — Kubernetes watcher and reload
 
-- [ ] ConfigMap watch client: initial GET/list, `resourceVersion` watch, 410-Gone re-list, periodic full re-list, bounded connect/read timeouts (K8S-01, K8S-02)
-- [ ] Overlay parsing under CFG-03a, merged as tier 8 (K8S-03)
-- [ ] Generate `schemas/agent-overlay.schema.json` (optional-fields variant of the full schema) for operator validation (K8S-03, DEL-02)
-- [ ] Reload categorization: live-snapshot / component-rebuild / restart-required per schema leaf (REL-02)
-- [ ] Transactional apply: build+health-check replacements before atomic swap, full rollback on any rebuild failure (REL-01, REL-03)
-  - [ ] Verify NFR-08 as this lands: a valid live/rebuild update causes zero failed admitted requests and no listener restart
-- [ ] Generation/hash tracking exposed via `/health` and `/config` (REL-04)
-- [ ] Deletion/resync: tier-8 removal falls back to tiers 1–7, `k8s.required` readiness implications (REL-05)
-- [ ] Reload audit logging: resource version, outcome, generation, sorted changed paths, duration (REL-06)
-- [ ] Watcher health: log-throttled nonfatal errors, independent per-replica no-op detection (K8S-05, K8S-07)
-- [ ] Manifests: least-privilege `rbac.yaml` (get/list/watch the one ConfigMap), illustrative `deployment.yaml`/Service with probes, security context, one worker (K8S-08)
-- [ ] AgentConfig merge exclusions: never merge K8s labels/annotations/managed-fields/resource-version (K8S-09)
+- [x] ConfigMap watch client: initial GET/list, `resourceVersion` watch, 410-Gone re-list, periodic full re-list, bounded connect/read timeouts (K8S-01, K8S-02) — `app/watcher/watcher.py::ConfigMapWatcher` (+ RealKubeClient/FakeKubeClient)
+- [x] Overlay parsing under CFG-03a, merged as tier 8 (K8S-03) — `_resolve_with_overlay` (CFG-03a parse + _apply_tier tier 8)
+- [x] Generate `schemas/agent-overlay.schema.json` (optional-fields variant of the full schema) for operator validation (K8S-03, DEL-02) — all fields optional incl. $defs; CI zero-diff
+- [x] Reload categorization: live-snapshot / component-rebuild / restart-required per schema leaf (REL-02) — `classify_change` with recursive `changed_paths` (verified by tests)
+- [x] Transactional apply: build+health-check replacements before atomic swap, full rollback on any rebuild failure (REL-01, REL-03) — `ReloadManager.apply_tier8` with in-place swap + last-known-good (verified: noop/rejected/rebuild_failed do not increment generation)
+  - [ ] Verify NFR-08 as this lands: a valid live/rebuild update causes zero failed admitted requests and no listener restart — pending the full acceptance/chaos run (M8)
+- [x] Generation/hash tracking exposed via `/health` and `/config` (REL-04) — configGeneration + configHash in /health
+- [x] Deletion/resync: tier-8 removal falls back to tiers 1–7, `k8s.required` readiness implications (REL-05) — `on_overlay(None)` fallback + watcher health
+- [x] Reload audit logging: resource version, outcome, generation, sorted changed paths, duration (REL-06) — `ReloadManager._audit`
+- [x] Watcher health: log-throttled nonfatal errors, independent per-replica no-op detection (K8S-05, K8S-07) — `_throttled` (60s) + per-instance watchers + deterministic no-op detection
+- [x] Manifests: least-privilege `rbac.yaml` (get/list/watch the one ConfigMap), illustrative `deployment.yaml`/Service with probes, security context, one worker (K8S-08) — `manifests/`
+- [x] AgentConfig merge exclusions: never merge K8s labels/annotations/managed-fields/resource-version (K8S-09) — `_extract_overlay` reads only data.agent.yaml
 
 ---
 
