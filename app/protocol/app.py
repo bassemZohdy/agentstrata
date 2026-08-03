@@ -34,12 +34,30 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
         openapi_url="/openapi.json",
     )
 
+    # SEC-11: response hardening + SEC-09 trusted-proxy + SEC-10 audit.
+    from ..security.audit import HARDENING_HEADERS, audit, parse_forwarded_for
+
+    trusted_cidrs = list(config.server.trustedProxyCidrs)
+
+    @app.middleware("http")
+    async def hardening_middleware(request: Request, call_next):
+        response = await call_next(request)
+        for key, value in HARDENING_HEADERS.items():
+            response.headers.setdefault(key, value)
+        return response
+
     # Per-request request id (API-00: every response after scope creation
     # includes X-Request-Id).
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
         request.state.request_id = request_id
+        if trusted_cidrs:
+            direct = request.client.host if request.client else ""
+            client = parse_forwarded_for(
+                request.headers.get("x-forwarded-for", ""), trusted_cidrs, direct
+            )
+            request.state.client_ip = client or direct
         response = await call_next(request)
         response.headers["X-Request-Id"] = request_id
         return response
@@ -75,6 +93,12 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
         principal, error = await auth.authenticate(request)
         if error is not None:
             request_id = getattr(request.state, "request_id", "")
+            audit(
+                "auth_failure",
+                code=error.code,
+                path=request.url.path,
+                request_id=request_id,
+            )
             return JSONResponse(status_code=error.status, content=error.body(request_id))
         request.state.principal = principal
         return await call_next(request)
@@ -82,16 +106,10 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
     # CORS (SEC-06).
     from fastapi.middleware.cors import CORSMiddleware
 
+    # CORS (SEC-06): exact-origin matching; '*' only with credentials
+    # disabled (CFG-14 rejects '*' + credentials at config validation).
     origins = list(config.server.corsOrigins)
-    if "*" in origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=config.server.corsAllowCredentials,
-            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-            allow_headers=["*"],
-        )
-    elif origins:
+    if origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,

@@ -179,6 +179,24 @@ def run(argv: list[str] | None = None) -> int:
     for warning in mode_warnings:
         print(f"warning: {warning}", file=sys.stderr)
 
+    from .security.audit import audit, validate_egress_targets
+
+    # SEC-05: egress allowlist validation before bind.
+    for problem in validate_egress_targets(config):
+        print(f"configuration error: {problem}", file=sys.stderr)
+        return EX_CONFIG
+
+    # SEC-01: auth disabled + non-loopback bind -> high-severity audit warning.
+    if config.server.auth.mode.value == "none":
+        bind_host = config.server.host
+        if bind_host not in ("127.0.0.1", "localhost", "::1"):
+            audit(
+                "auth_warn_none_bind",
+                severity="high",
+                host=bind_host,
+                note="auth disabled on a non-loopback bind",
+            )
+
     # SEC-03: fail-closed auth state before bind.
     if config.server.auth.mode.value == "apiKey":
         key = _resolve_api_key(config, env)
