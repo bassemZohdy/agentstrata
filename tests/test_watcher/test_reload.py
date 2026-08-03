@@ -160,7 +160,7 @@ class TestWatcher:
         await asyncio.gather(task, return_exceptions=True)
         # REL-05: deletion/missing -> None overlay (tiers 1-7 fallback)
         assert None in applied
-        assert watcher.health["connected"] is False  # noqa: E712
+        assert not watcher.health["connected"]
 
     @pytest.mark.asyncio
     async def test_watcher_applies_overlay_on_start(self):
@@ -185,4 +185,4 @@ class TestWatcher:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         assert applied and applied[0] == {"engine": {"maxIterations": 42}}
-        assert watcher.health["connected"] is True  # noqa: E712
+        assert watcher.health["connected"]

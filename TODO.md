@@ -197,12 +197,12 @@ Requirement IDs in parentheses are what each task traces back to (REQUIREMENTS.m
 
 ## Milestone 7 — Observability
 
-- [ ] Structured logging facade: JSON/text formats, `ts`/`level`/`logger`/`event`/`msg` + request correlation fields (OBS-01)
-- [ ] Request-ID validation/generation, propagation through async tasks, independent `traceparent` handling (OBS-02)
-- [ ] `runtime_started`/`runtime_stopped` boot/shutdown events with masked secrets (OBS-03)
-- [ ] OTel tracing: `http.request → agent.execute → llm.call|mcp.tool_call` spans, config-reload/storage spans, no message-content/credential attributes (OBS-04)
-- [ ] OTel metrics: run counts/latency/tokens/denials/dependency-state/reload-outcome counters, low-cardinality labels only (OBS-05)
-- [ ] Zero-cost-when-disabled: no OTel imports/threads/allocations on the disabled path (OBS-06)
+- [x] Structured logging facade: JSON/text formats, `ts`/`level`/`logger`/`event`/`msg` + request correlation fields (OBS-01) — `app/observability/logging.py::JsonFormatter/TextFormatter`
+- [x] Request-ID validation/generation, propagation through async tasks, independent `traceparent` handling (OBS-02) — `normalize_request_id` (pattern + value-free warning) + `validate_traceparent`; request id threaded via RunRequest
+- [x] `runtime_started`/`runtime_stopped` boot/shutdown events with masked secrets (OBS-03) — `app/observability/lifecycle.py` (version/phase/generation/hash/agent/mode/provider/model/storage/mcp/auth/bind/uid-gid)
+- [x] OTel tracing: `http.request → agent.execute → llm.call|mcp.tool_call` spans, config-reload/storage spans, no message-content/credential attributes (OBS-04) — `Observability` facade with OTLP HTTP exporter (lazy imports, bounded queues, export failure nonfatal); opentelemetry-exporter-otlp-proto-http added to the lock
+- [x] OTel metrics: run counts/latency/tokens/denials/dependency-state/reload-outcome counters, low-cardinality labels only (OBS-05) — meter facade (counters/histograms)
+- [x] Zero-cost-when-disabled: no OTel imports/threads/allocations on the disabled path (OBS-06) — verified by subprocess test: opentelemetry absent from sys.modules when disabled
 
 ---
 

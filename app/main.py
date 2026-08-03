@@ -179,6 +179,11 @@ def run(argv: list[str] | None = None) -> int:
     for warning in mode_warnings:
         print(f"warning: {warning}", file=sys.stderr)
 
+    # OBS-01: structured logging (json/text per config) before component logs.
+    from .observability.logging import configure_logging
+
+    configure_logging(config.observability)
+    from .observability.otel import Observability
     from .security.audit import audit, validate_egress_targets
 
     # SEC-05: egress allowlist validation before bind.
@@ -213,9 +218,15 @@ def run(argv: list[str] | None = None) -> int:
 
         asyncio.run(backend.initialize())
         components = build_components(config, backend)
+        components["observability"] = Observability(config)
     except (BackendUnavailableError, ConfigError) as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return EX_CONFIG
+
+    # OBS-03: runtime_started event (masked secrets).
+    from .observability.lifecycle import runtime_started
+
+    runtime_started(config, components, selected_mode)
 
     from .protocol.app import create_app
     from .protocol.http_limits import BoundedH11Protocol

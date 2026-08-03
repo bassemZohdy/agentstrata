@@ -17,3 +17,4 @@ kubernetes>=36,<37
 redis>=8,<9
 psycopg[binary]>=3.3,<4
 PyJWT[crypto]>=2.13,<3
+opentelemetry-exporter-otlp-proto-http>=1.42,<2
