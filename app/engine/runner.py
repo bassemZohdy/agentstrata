@@ -135,6 +135,15 @@ class AgentRunner:
             async with asyncio.timeout(max(run_deadline, 0.001)):
                 rag_context = await self._rag_context(request)
                 if rag_context == "degraded":
+                    if self._applied.config.rag.required:
+                        # RAG-04: when rag is required the run FAILS with
+                        # rag_unavailable instead of answering without
+                        # context.
+                        yield RunError(
+                            code="rag_unavailable",
+                            message="retrieval backend unavailable",
+                        )
+                        return
                     yield RagDegraded()
                 async for adk_event in self._adk_runner.run_async(
                     user_id=request.principal_id,

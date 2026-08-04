@@ -227,3 +227,53 @@ async def test_ingestion_failure_never_silent():
         )
     finally:
         await mcp.close()
+
+
+async def test_readyz_required_and_optional():
+    """RAG-04: required rag gates /readyz; optional rag never does."""
+    import httpx
+
+    from app.engine.rag import MemoryRagStore, RagRetriever
+
+    class BrokenStore(MemoryRagStore):
+        async def health(self):
+            return False
+
+        async def search(self, **kwargs):
+            raise ConnectionError("down")
+
+    # optional: readiness stays 200
+    transport, components = await _build_app()
+    try:
+        r = await _request(transport, "GET", "/readyz")
+        assert r.status_code == 200
+        r = await _request(transport, "GET", "/health")
+        assert r.json()["components"]["rag"]["status"] == "ok"
+    finally:
+        await components["mcp"].close()
+
+    # required + broken: readyz 503 with the rag flag
+    config = _config({"enabled": True, "required": True})
+    applied = AppliedConfig.from_config(config)
+    component = build_agent_component(config)
+    backend = MemoryBackend()
+    mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+    mcp.configure(config.tools.mcpServers)
+    await mcp.start()
+    retriever = RagRetriever(config=config.rag, store=BrokenStore(), embedding=DeterministicEmbedding())
+    comp = {
+        "applied": applied,
+        "agent": component,
+        "runner": type("R", (), {})(),
+        "mcp": mcp,
+        "backend": backend,
+        "session_service": AdkSessionService(backend),
+        "rag": retriever,
+    }
+    transport2 = httpx.ASGITransport(app=create_app(config, comp, mode="standalone"))
+    try:
+        r = await _request(transport2, "GET", "/readyz")
+        assert r.status_code == 503
+        assert r.json()["rag"] is False
+    finally:
+        await mcp.close()

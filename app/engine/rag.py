@@ -354,6 +354,14 @@ class RagRetriever:
             )
         except Exception:  # noqa: BLE001 - RAG-04 degraded path
             self.degraded = True
+            # RAG-04: one redacted error log — never the query or any
+            # document content (RAG-05).
+            import logging
+
+            logging.getLogger("app.engine.rag").error(
+                "rag store/embedding unavailable (degraded): %s",
+                type(self.store).__name__,
+            )
             return None
         if not hits:
             return None

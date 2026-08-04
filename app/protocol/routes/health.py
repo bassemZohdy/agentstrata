@@ -44,7 +44,13 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
             )
         storage_ok = await backend.health()
         mcp_ok = mcp.readiness()
-        if storage_ok and mcp_ok:
+        # RAG-04: when rag is required, store/embedding availability gates
+        # readiness; optional rag never affects /readyz.
+        rag_ok = True
+        rag = components.get("rag")
+        if rag is not None and config.rag.enabled and config.rag.required:
+            rag_ok = await rag.store.health()
+        if storage_ok and mcp_ok and rag_ok:
             return JSONResponse(status_code=200, content={"status": "ready"})
         return JSONResponse(
             status_code=503,
@@ -52,6 +58,7 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
                 "status": "not_ready",
                 "storage": storage_ok,
                 "mcp": mcp_ok,
+                "rag": rag_ok,
                 "request_id": getattr(request.state, "request_id", ""),
             },
         )
@@ -72,7 +79,14 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
             "mcp": {"status": "ok" if mcp.readiness() else "degraded", "servers": mcp.health()},
             "llm": {"status": "unknown"},
             "auth": {"mode": config.server.auth.mode.value},
+            "rag": {"status": "disabled"},
         }
+        rag = components.get("rag")
+        if rag is not None and config.rag.enabled:
+            components_status["rag"] = {
+                "status": "ok" if await rag.store.health() else "unavailable",
+                "required": config.rag.required,
+            }
         overall = "ok" if storage_ok and mcp.readiness() else "degraded"
         return JSONResponse(
             status_code=200,

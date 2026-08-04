@@ -460,3 +460,62 @@ class TestStreamRendering:
             )
         )
         assert '"rag_degraded": true' in events_body
+
+
+class TestAvailabilityRAG04:
+    @pytest.mark.asyncio
+    async def test_required_store_fails_run(self):
+        """RAG-04: required + unavailable -> the run FAILS with
+        rag_unavailable (never answers without context)."""
+
+        class BrokenStore(MemoryRagStore):
+            async def search(self, **kwargs):
+                raise ConnectionError("store down")
+
+        config = AgentConfig.model_validate(
+            {
+                "name": "agent",
+                "engine": {"systemInstruction": "t"},
+                "llm": {"provider": "gemini", "model": "mock"},
+                "rag": {"enabled": True, "required": True},
+            }
+        )
+        applied = AppliedConfig.from_config(config)
+        component = build_agent_component(config)
+        backend = MemoryBackend()
+        mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+        mcp.configure(config.tools.mcpServers)
+        await mcp.start()
+        component.agent.model = RecordingLlm()
+        RecordingLlm.seen = []
+        from app.engine.events import RunError
+
+        retriever = RagRetriever(
+            config=config.rag, store=BrokenStore(), embedding=DeterministicEmbedding()
+        )
+        service = AdkSessionService(backend)
+        runner = AgentRunner(
+            applied,
+            AdkRunner(agent=component.agent, app_name="agent", session_service=service),
+            backend,
+            app_name="agent",
+            mcp=mcp,
+            rag=retriever,
+        )
+        try:
+            events = [
+                e
+                async for e in runner.execute(
+                    RunRequest(
+                        principal_id="p1",
+                        user_message="hello",
+                        request_id="r-rag-3",
+                        session_id="s-rag-3",
+                    )
+                )
+            ]
+            errors = [e for e in events if isinstance(e, RunError)]
+            assert errors and errors[0].code == "rag_unavailable"
+            assert not any(isinstance(e, Done) for e in events)
+        finally:
+            await mcp.close()
