@@ -155,7 +155,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             )
 
         try:
-            text, done = await _collect_non_streaming(runner, run_request)
+            text, done, _paused = await _collect_non_streaming(runner, run_request)
         finally:
             if slots is not None:
                 slots.release()

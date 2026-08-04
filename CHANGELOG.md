@@ -4,6 +4,32 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### P3 — human-in-the-loop approvals (HITL, in progress)
+
+- **HITL-01/02 (complete):** `ApprovalConfig` (enabled/tools/timeoutSeconds/
+  onTimeout deny|allow) with fail-closed cross-field rules (approval requires
+  auth + redis/postgres storage; `onTimeout: allow` requires an explicit boot
+  audit); durable `ApprovalRecord` on all four backends — public surface is
+  the args hash + redacted preview, the protected checkpoint holds the exact
+  resume arguments; memory/file/redis (Lua CAS + global index)/postgres
+  (`agent_approvals` table) implementations with 24 shared contract tests.
+- **HITL-03/04 (complete):** the engine pauses before a matched tool executes
+  (`RunState.AWAITING_APPROVAL`, `ApprovalRequired` event, checkpoint commit);
+  `resume_approval` is a CAS decide (first wins) that executes the approved
+  tool from the checkpoint via a minimal ADK `ToolContext` reusing the
+  ORIGINAL tool-call ID, injects the function response into the session, and
+  continues the conversation to a terminal event — resume exactly once, no
+  duplicated side effects, no double gating. Client surface: chat rejects
+  stateless requests with `approval_session_required` (400) while enabled;
+  non-streaming pauses detach with 202 `run.pending_approval`; SSE emits
+  `approval_required` then `[DONE]` (the sole API-08a disconnect exception);
+  `POST /v1/approvals/{id}` (approve resumes, repeat → stored outcome,
+  conflict → 409, expired → 410), `GET /v1/approvals?session_id=`
+  (pending-only, public metadata), `GET/DELETE /v1/runs/{id}` (owner-scoped
+  state + idempotent cancellation that cancels the pending approval).
+
+
+
 Phase 1 milestones 0–8 are complete; the §18 ACC-01 acceptance run now passes
 inside the shipped image on both architectures (336/336 each) and the NFR-08
 zero-downtime reload proof passes. The only remaining M8 exit check tracked in

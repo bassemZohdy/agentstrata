@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...engine.events import (
     AgentTransfer,
+    ApprovalRequired,
     Done,
     Iteration,
     RunError,
@@ -97,6 +98,14 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
 
         streaming = bool(body.get("stream", False))
         principal = getattr(request.state, "principal", "anonymous")
+        # HITL-01: while approval is enabled every chat request MUST be
+        # stateful; reject a stateless request BEFORE any model work.
+        if config.approval.enabled and not body.get("session_id"):
+            raise PublicErrorResponse(
+                "approval_session_required",
+                "approval mode requires a session_id",
+                400,
+            )
 
         # API-06a: idempotency — canonicalize the key.
         idem_key = _canonical_idempotency_key(body.get("idempotency_key"))
@@ -189,12 +198,28 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             )
 
         try:
-            text, done = await _collect_non_streaming(runner, run_request)
+            text, done, paused = await _collect_non_streaming(runner, run_request)
         finally:
             if slots is not None:
                 slots.release()
             if run_registry is not None and current_task is not None:
                 run_registry.discard(current_task)
+        if paused is not None:
+            # HITL-03: non-streaming detach — 202 with the approval reference;
+            # this is the sole exception to API-08a disconnect cancellation.
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "object": "run.pending_approval",
+                    "run_id": paused.run_id or run_request.request_id,
+                    "session_id": run_request.session_id or "",
+                    "approval_id": paused.approval_id,
+                    "tool": paused.tool_name,
+                    "expires_at": paused.expires_at,
+                    "request_id": request_id,
+                },
+                headers={"Cache-Control": "no-store"},
+            )
         if done is None:
             raise PublicErrorResponse("internal_error", "run produced no terminal event")
         if done.x_agent_status in ("iteration_limit", "output_limit"):
@@ -271,15 +296,20 @@ def _producer_finished(producer: Any, queue: asyncio.Queue) -> bool:
     return producer.done() and queue.empty()
 
 
-async def _collect_non_streaming(runner, run_request: RunRequest) -> tuple[str, Done | None]:
+async def _collect_non_streaming(
+    runner, run_request: RunRequest
+) -> tuple[str, Done | None, Any | None]:
     text_parts: list[str] = []
     done: Done | None = None
+    paused: Any | None = None
     async for event in runner.execute(run_request):
         if isinstance(event, TextDelta):
             text_parts.append(event.text)
+        elif isinstance(event, ApprovalRequired):
+            paused = event
         elif isinstance(event, Done):
             done = event
-    return "".join(text_parts), done
+    return "".join(text_parts), done, paused
 
 
 def _non_streaming_body(
@@ -435,6 +465,27 @@ async def _stream(
                         "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
                     }
                 )
+            elif isinstance(event, ApprovalRequired):
+                # HITL-03: SSE emits approval_required then [DONE]; the run
+                # DETACHES (the sole API-08a exception) — it is not cancelled.
+                yield _sse_data(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": _now(),
+                        "model": config.llm.model,
+                        "choices": [],
+                        "approval_required": {
+                            "approval_id": event.approval_id,
+                            "tool": event.tool_name,
+                            "expires_at": event.expires_at,
+                            "run_id": event.run_id,
+                        },
+                    }
+                )
+                yield "data: [DONE]\n\n"
+
+                return
             elif isinstance(event, AgentTransfer):
                 # MA-04: event/debug streams only; text mode stays text-only.
                 if stream_mode == "text":

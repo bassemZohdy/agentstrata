@@ -23,7 +23,7 @@ from .. import __version__
 from ..config.capabilities import capability_status
 from .auth import AuthProvider
 from .ratelimit import FixedWindowLimiter
-from .routes import chat, health, sessions
+from .routes import approvals, chat, health, sessions
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,7 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
     # Routes.
     health.register(app, config, components, mode)
     chat.register(app, config, components)
+    approvals.register(app, config, components)
     sessions.register(app, config, components)
     sessions.register_models(app, config)
     # API-16: the ACP surface registers only when enabled; otherwise the

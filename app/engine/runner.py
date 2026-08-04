@@ -544,6 +544,7 @@ class AgentRunner:
                                 tool_name=call.name or "",
                                 preview=gate.args_preview,
                                 expires_at=gate.expires_at.isoformat(),
+                                run_id=run_id,
                             )
                             return
                     record = await ledger.begin(call.id or "", call.name or "")

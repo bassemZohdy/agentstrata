@@ -312,6 +312,12 @@ class StorageBackend(ABC):
     def max_idempotency_records(self, config: Any) -> int:
         return getattr(config.storage, "maxIdempotencyRecordsPerSession", 1000)
 
+    @abstractmethod
+    async def find_run(
+        self, *, agent_name: str, principal_id: str, run_id: str
+    ) -> RunRecord | None:
+        """Owner-scoped run lookup by run id (HITL-03 GET /v1/runs/{id})."""
+
     # -- approvals (HITL-02/04, P3) ------------------------------------------
 
     @abstractmethod

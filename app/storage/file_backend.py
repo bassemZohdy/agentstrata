@@ -632,6 +632,18 @@ class FileBackend(StorageBackend):
     ) -> Fence | None:
         return self._fences.get(self._fkey(agent_name, principal_id, session_id))
 
+    async def find_run(
+        self, *, agent_name: str, principal_id: str, run_id: str
+    ) -> RunRecord | None:
+        directory = self._session_dir(agent_name, principal_id)
+        if not directory.is_dir():
+            return None
+        for path in directory.glob("run-*.json"):
+            record = await asyncio.to_thread(self._read_record, path, RunRecord.from_json)
+            if record is not None and record.run_id == run_id:
+                return record
+        return None
+
     # -- approvals (HITL-02/04) ----------------------------------------------
 
     def _approval_path(self, agent_name: str, principal_id: str, approval_id: str) -> Path:

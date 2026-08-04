@@ -124,6 +124,10 @@ SQL = {
         " AND principal_id = %s AND approval_id = %s AND data->>'status' = 'pending'"
         " AND (data->>'expires_at' > %s OR %s = 'timed_out') RETURNING data"
     ),
+    "find_run": (
+        "SELECT session_id, data FROM agent_runs"
+        " WHERE agent_name = %s AND principal_id = %s AND run_id = %s"
+    ),
     "expire_approvals": (
         "SELECT agent_name, principal_id, approval_id, data FROM agent_approvals"
         " WHERE data->>'status' = 'pending' AND data->>'expires_at' < %s"
@@ -764,6 +768,17 @@ class PostgresBackend(StorageBackend):
         # real driver both expose the held-lock state via try_advisory_lock
         # semantics (a second try fails while held).
         return None
+
+    async def find_run(
+        self, *, agent_name: str, principal_id: str, run_id: str
+    ) -> RunRecord | None:
+        rows = await self._db.query(SQL["find_run"], (agent_name, principal_id, run_id))
+        if not rows:
+            return None
+        try:
+            return RunRecord.from_json(json.loads(rows[0]["data"]))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
 
     # -- approvals (HITL-02/04) ----------------------------------------------
 

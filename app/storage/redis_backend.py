@@ -545,6 +545,26 @@ class RedisBackend(StorageBackend):
     # Scripts are identified by their source; FakeRedis maps source -> python fn.
     # ---------------------------------------------------------------------------
 
+    async def find_run(
+        self, *, agent_name: str, principal_id: str, run_id: str
+    ) -> RunRecord | None:
+        raw = await self._client.eval(
+            LIST_RUNS,
+            [_k(self._tag(principal_id), "run", agent_name)],
+            [],
+        )
+        for key in raw or []:
+            value = await self._client.get(key)
+            if not value:
+                continue
+            try:
+                record = RunRecord.from_json(json.loads(value))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if record.run_id == run_id:
+                return record
+        return None
+
     # -- approvals (HITL-02/04) ----------------------------------------------
 
     async def create_approval(

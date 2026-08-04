@@ -56,6 +56,7 @@ class ApprovalRequired:
     tool_name: str
     preview: str
     expires_at: str
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)

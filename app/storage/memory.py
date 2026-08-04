@@ -425,6 +425,14 @@ class MemoryBackend(StorageBackend):
         if len(records) >= self._settings.max_idempotency_records_per_session:
             raise CapacityError("maxIdempotencyRecordsPerSession reached")
 
+    async def find_run(
+        self, *, agent_name: str, principal_id: str, run_id: str
+    ) -> RunRecord | None:
+        for (a, p, _s, r), record in self._runs.items():
+            if a == agent_name and p == principal_id and r == run_id:
+                return record
+        return None
+
     # -- approvals (HITL-02/04) ----------------------------------------------
 
     async def create_approval(
