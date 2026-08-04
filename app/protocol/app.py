@@ -213,6 +213,13 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
     chat.register(app, config, components)
     sessions.register(app, config, components)
     sessions.register_models(app, config)
+    # API-16: the ACP surface registers only when enabled; otherwise the
+    # paths are ordinary 404s (API-00). CAP-01 still gates enabling it until
+    # the P2 acceptance suite passes.
+    if getattr(config.server.protocols, "acp", False):
+        from .routes.acp import register as register_acp
+
+        register_acp(app, config, components)
 
     return app
 

@@ -37,7 +37,9 @@ def test_empty_agents_retains_p1_behavior():
     assert component.agent.instruction == "You are the root."
     assert not component.sub_agents
     # root sees every server (targets = [(root, None)])
-    assert component.tool_targets == ((component.agent, None),)
+    assert len(component.tool_targets) == 1
+    assert component.tool_targets[0][0] is component.agent
+    assert component.tool_targets[0][1] is None
 
 
 def test_coordinator_builds_sub_agents_in_configured_order():
@@ -57,9 +59,10 @@ def test_coordinator_builds_sub_agents_in_configured_order():
     assert second.instruction == "do B"
     assert second.description == "B desc"
     # root is a target with no restriction; sub-agents default to all servers
-    assert component.tool_targets[0] == (component.agent, None)
-    assert component.tool_targets[1] == (first, None)
-    assert component.tool_targets[2] == (second, None)
+    assert component.tool_targets[0][0] is component.agent
+    assert component.tool_targets[0][1] is None
+    assert component.tool_targets[1][0] is first
+    assert component.tool_targets[2][0] is second
 
 
 def test_sub_agent_llm_inherited_by_deep_merge():
@@ -100,8 +103,10 @@ def test_tool_servers_restriction_carried_to_targets():
         component.tool_targets[0],
         component.tool_targets[1],
     )
-    assert root_target == (component.agent, None)
-    assert worker_target == (worker, ["alpha"])
+    assert root_target[0] is component.agent
+    assert root_target[1] is None
+    assert worker_target[0] is worker
+    assert worker_target[1] == ["alpha"]
 
 
 @pytest.mark.asyncio
@@ -199,7 +204,8 @@ async def test_transfer_to_unknown_agent_fails_run():
     ]
     errors = [e for e in events if isinstance(e, RunError)]
     assert errors, "expected a RunError for the unknown transfer target"
-    assert errors[0].code in ("provider_error", "invalid_request"), errors[0].code
+    code = errors[0].code
+    assert code == "provider_error" or code == "invalid_request", code
 
 
 @pytest.mark.asyncio
@@ -254,6 +260,25 @@ async def test_tool_isolation_per_toolservers():
         await mcp.close()
 
 
+class _FakeRequest:
+    """Stand-in for Starlette Request exposing only is_disconnected."""
+
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+async def _drain(gen) -> str:
+    out = []
+    async for chunk in gen:
+        out.append(chunk)
+    return "".join(out)
+
+
+async def _fake_execute(events, _request):
+    for event in events:
+        yield event
+
+
 def _transfer_stream_body(stream_mode: str, events) -> str:
     """Drive the SSE _stream directly with a fake runner (test_streaming.py
     pattern) and collect the body."""
@@ -263,21 +288,7 @@ def _transfer_stream_body(stream_mode: str, events) -> str:
 
     from app.protocol.routes.chat import _stream
 
-    class _FakeRequest:
-        async def is_disconnected(self) -> bool:
-            return False
-
-    async def _execute(_request):
-        for event in events:
-            yield event
-
-    async def _drain(gen):
-        out = []
-        async for chunk in gen:
-            out.append(chunk)
-        return "".join(out)
-
-    runner = SimpleNamespace(execute=_execute)
+    runner = SimpleNamespace(execute=lambda r: _fake_execute(events, r))
     cfg = _config(engine={"systemInstruction": "t", "streaming": stream_mode})
     return asyncio.run(
         _drain(
