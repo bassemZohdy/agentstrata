@@ -253,7 +253,11 @@ async def test_tool_isolation_per_toolservers():
         window = float(__import__("os").environ.get("AGENT_TEST_MCP_CONNECT_SECONDS", "10"))
         deadline = __import__("time").monotonic() + window
         while __import__("time").monotonic() < deadline:
-            if mcp.readiness() and component.agent.tools and component.sub_agents[0].tools:
+            root_now = {getattr(t, "name", "") for t in component.agent.tools}
+            # both servers must be attached (the collision rename beta_echo
+            # proves the second server's toolset landed; a bare non-empty
+            # check races the async attach under slow emulation)
+            if mcp.readiness() and root_now >= {"echo", "beta_echo"} and component.sub_agents[0].tools:
                 break
             await asyncio.sleep(0.1)
         root_names = sorted(getattr(t, "name", "") for t in component.agent.tools)

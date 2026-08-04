@@ -13,6 +13,15 @@ dependency-lock hash, and test results that verified it.
 | Schema artifacts | `sha256sum schemas/*.json` |
 | Test results | `pytest --tb=short -q` output archive |
 
+## Recorded evidence — P3 acceptance run (2026-08-04)
+
+| Field | Value |
+| --- | --- |
+| Source commit | P3 acceptance run: `4c5c5bc` + `p3-acceptance` commit (capability flip) |
+| Acceptance | **417/417 passed inside the image on linux/amd64 AND linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}` — HITL-01..05 suites included) |
+| Host suite | **417 passed**, ruff + mypy clean, schemas zero-diff, traceability 164 IDs mapped |
+| Capabilities | phase `P3`; `multiAgent`/`acp`/`approval` true, `rag` fail-closed (CAP-02) |
+
 ## Recorded evidence — M8 exit-check run (2026-08-04)
 
 | Field | Value |

@@ -268,20 +268,20 @@ class TestCapability:
     def test_disabled_stubs_accepted(self):
         assert valid({"agents": [], "approval": {"enabled": False}, "rag": {"enabled": False}})
 
-    def test_capability_status_reports_p2(self):
+    def test_capability_status_reports_p3(self):
         from app.config.capabilities import BUILD_CAPABILITIES, capability_status
 
         assert BUILD_CAPABILITIES == {
             "multiAgent": True,
             "acp": True,
-            "approval": False,
+            "approval": True,
             "rag": False,
         }
         status = capability_status()
-        assert status["phase"] == "P2"
+        assert status["phase"] == "P3"
         assert status["multiAgent"] is True
         assert status["acp"] is True
-        assert status["approval"] is False
+        assert status["approval"] is True
         assert status["rag"] is False
 
 

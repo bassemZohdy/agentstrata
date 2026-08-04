@@ -192,3 +192,87 @@ with `provider_error`.
 **Exit check:** the full P1 regression set + the P2 suite pass on the host and
 in the image on both architectures; docs/TODO/CHANGELOG updated; release
 evidence recorded per TRC-02.
+
+---
+
+## Phase 3 — Human-in-the-loop approvals (P3, §14)
+
+P2's §18 acceptance criteria pass; P3 is independently releasable per
+PHASE-01. The capability flip (`approval` true in `/health`) is the LAST
+commit of the phase (CAP-02); `approval` is classified as component-rebuild
+in REL-02.
+
+## Milestone P3-1 — Schema and gating (HITL-01)
+
+- Full `approval` field contract in the Pydantic schema: `enabled`, `tools`
+  (patterns over final tool names), `timeoutSeconds`, `onTimeout`
+  (deny|allow). Fail-closed cross-field rules: approval requires an
+  auth mode other than `none` and a redis/postgres storage type; explicit
+  `onTimeout: allow` is accepted only with a boot audit entry. Capability
+  gating stays fail-closed (`approval` false in `/health`) until the suite
+  passes.
+
+**Exit check:** schema + validation tests pass; `approval.enabled` under
+`none` auth or memory/file storage is rejected with a stable error.
+
+## Milestone P3-2 — Durable checkpoints (HITL-02)
+
+- `ApprovalRecord` on all four backends: the public surface is the args
+  hash + redacted preview; the protected checkpoint (exact args, tool-call
+  ID, session/run/principal) is never returned by any API. Memory/file/
+  redis (Lua CAS + global index)/postgres (`agent_approvals` table)
+  implementations share one contract suite.
+
+**Exit check:** the shared approval contract tests pass on all four
+backends (memory + file + the recorded redis/postgres substitutes per the
+ACC-01 deviation).
+
+## Milestone P3-3 — Engine gate + decision races (HITL-04)
+
+- The engine pauses BEFORE a matched tool executes: `RunState
+  .AWAITING_APPROVAL`, `ApprovalRequired` event, checkpoint committed
+  durably. `resume_approval` is a CAS decide (first wins): approve executes
+  the tool from the checkpoint via a minimal ADK `ToolContext` reusing the
+  ORIGINAL tool-call ID, injects the function response into the session,
+  and continues the conversation to a terminal event; deny/timeout return
+  structured outcomes and the tool never runs. The gate skips calls with a
+  resolved approval (resumed replays do not double-gate or duplicate side
+  effects).
+
+**Exit check:** approve-and-continue, deny, race-loss, and repeat-decision
+tests pass; no path executes the tool twice for one call ID.
+
+## Milestone P3-4 — Client surface (HITL-03)
+
+- Chat is stateful-only while approval is enabled (400
+  `approval_session_required`); non-streaming pauses detach with 202
+  `run.pending_approval` (the sole API-08a exception); SSE emits
+  `approval_required` then `[DONE]`. `POST /v1/approvals/{id}` (repeat
+  decision -> stored outcome, conflicting -> 409, expired -> 410),
+  `GET /v1/approvals?session_id=` (pending-only, public metadata),
+  `GET/DELETE /v1/runs/{id}` (owner-scoped state + idempotent cancellation
+  that cancels the pending approval).
+
+**Exit check:** the endpoint suite passes over the real HTTP surface,
+including the error table.
+
+## Milestone P3-5 — Restart reconciler (HITL-05)
+
+- Startup + periodic reconcile: expired pendings follow the onTimeout
+  policy (deny finishes the run denied; allow resumes only after the same
+  stale/cancellation checks); decided-while-down approvals resume exactly
+  once (the deterministic resume run guards re-entry); pendings from a
+  retired config generation terminate `stale_approval` and the tool MUST
+  NOT execute. Reconciliation failures never block boot.
+
+**Exit check:** stale/deny/allow/decided-while-down tests pass; a second
+reconcile is a no-op.
+
+## Milestone P3-6 — Acceptance (CAP-02)
+
+- Capability flip: `approval` true in `/health`, phase `P3`; P1's
+  fail-closed tests re-baselined. Docs/TODO/CHANGELOG updated; traceability
+  regenerated (HITL-01..05); image acceptance on both architectures.
+
+**Exit check:** the full regression set + the P3 suite pass on the host and
+in the image on both architectures; release evidence recorded per TRC-02.

@@ -4,7 +4,19 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
-### P3 — human-in-the-loop approvals (HITL, in progress)
+### P3 — human-in-the-loop approvals (HITL-01..05, §14, complete)
+
+- **HITL-05 (complete):** the restart/config-change reconciler — startup
+  pass + periodic loop (failures never block boot); `resume_approval` checks
+  the config generation BEFORE the CAS decide (stale approvals terminate
+  `stale_approval`, the tool MUST NOT execute); timeout follows the
+  onTimeout policy with the same stale/cancellation checks; decided-while-
+  down approvals resume exactly once via the deterministic `resume-{id}`
+  run guard; `list_all_approvals` (agent-scoped) on all four backends.
+- **Capability flip (CAP-02):** phase `P3`, `approval` true in `/health`;
+  P1 fail-closed tests re-baselined; traceability regenerated (164 IDs);
+  **417/417 acceptance inside the image on linux/amd64 AND linux/arm64**.
+
 
 - **HITL-01/02 (complete):** `ApprovalConfig` (enabled/tools/timeoutSeconds/
   onTimeout deny|allow) with fail-closed cross-field rules (approval requires

@@ -147,10 +147,38 @@ Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria
 - [x] **P2 — Multi-agent** (§13 + API-16): **DONE** — milestone
       breakdown in PLAN.md (§13.1 ACP annex frozen in REQUIREMENTS.md);
       task breakdown below.
-- [ ] **P3 — Human-in-the-loop** (§14): durable approval checkpoints,
-      decision-race handling, restart reconciliation.
+- [x] **P3 — Human-in-the-loop** (§14): **DONE** — milestone breakdown in
+      PLAN.md; task breakdown below.
 - [ ] **P4 — RAG / long-term memory** (§15): document ingestion, chunking,
       retrieval-scoped context injection.
+
+### P3 — Human-in-the-loop (HITL-01..05, §14)
+
+- [x] **P3-1 Schema + gating (HITL-01):** `approval` field contract
+      (enabled/tools/timeoutSeconds/onTimeout deny|allow); fail-closed
+      cross-field rules (approval requires auth + redis/postgres storage);
+      boot audit for explicit `onTimeout: allow`.
+- [x] **P3-2 Durable checkpoints (HITL-02):** `ApprovalRecord` on all four
+      backends (memory/file/redis Lua CAS + global index/postgres table);
+      public surface = args hash + redacted preview; protected checkpoint
+      holds the exact resume arguments; 24+ shared contract tests.
+- [x] **P3-3 Decision races (HITL-04):** CAS decide first-wins; approve
+      executes the tool from the checkpoint reusing the ORIGINAL tool-call
+      ID, injects the function response, and continues the conversation;
+      deny/timeout return structured outcomes; the gate skips calls with a
+      resolved approval (no double gating, no duplicated side effects).
+- [x] **P3-4 Client surface (HITL-03):** stateful-only chat while enabled
+      (400 `approval_session_required`); non-streaming pause -> 202
+      `run.pending_approval` (the sole API-08a exception); SSE emits
+      `approval_required` then `[DONE]`; `POST /v1/approvals/{id}` (repeat
+      -> stored outcome, conflict -> 409, expired -> 410); `GET
+      /v1/approvals?session_id=` pending-only public metadata; `GET/DELETE
+      /v1/runs/{id}` owner-scoped state + idempotent cancellation.
+- [x] **P3-5 Restart reconciler (HITL-05):** startup + periodic reconcile;
+      stale approvals (config generation changed) terminate `stale_approval`
+      and never execute the tool; timeout follows onTimeout policy with the
+      same stale/cancellation checks; decided-while-down approvals resume
+      exactly once (deterministic resume run guard).
 
 ### P2 — Multi-agent and ACP (MA-01..05 + API-16, annex §13.1)
 
