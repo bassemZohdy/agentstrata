@@ -58,7 +58,8 @@ class TestDump:
         )
         assert code == EX_OK
         assert "temperature: 0.25  # tier 5: env" in out
-        assert "agentbase" not in out  # stdout contains only YAML
+        # stdout contains only YAML (no CLI banner/provenance preamble)
+        assert out.startswith("$schema:")
 
     def test_dump_invalid_exits_78(self, monkeypatch):
         code, _, err = run_cli(monkeypatch, "--dump-config", env={"AGENT_STORAGE_TYPE": "redis"})

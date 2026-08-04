@@ -12,7 +12,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, TypeGuard, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 SCHEMA_MAJOR = 1
@@ -319,18 +319,68 @@ class ApprovalConfig(BaseModel):
     onTimeout: ApprovalTimeout = Field(default=ApprovalTimeout.DENY, strict=False)
 
 
+class RagStoreType(StrEnum):
+    CHROMA = "chroma"
+    PGVECTOR = "pgvector"
+
+
+class RagEmbeddingProvider(StrEnum):
+    GEMINI = "gemini"
+    OPENAI = "openai"
+
+
 class RagStore(BaseModel):
+    """RAG-01: the vector store; connectionString follows SEC-04 Env/File."""
+
     model_config = BASE_CONFIG
 
+    type: RagStoreType = Field(default=RagStoreType.CHROMA, strict=False)
+    connectionStringEnv: str | None = _SECRET_REF
+    connectionStringFile: str | None = _SECRET_REF
+    # Chroma collection / pgvector relation: safe backend identifier
+    # (DNS-1123, the same family as session IDs).
+    collection: str = Field(default="agentbase", pattern=_DNS_1123)
     # rag.store.options is the second explicit passthrough map (CFG-13).
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class RagEmbedding(BaseModel):
+    """RAG-01: the embedding provider; apiKey follows SEC-04 Env/File."""
+
+    model_config = BASE_CONFIG
+
+    provider: RagEmbeddingProvider = Field(
+        default=RagEmbeddingProvider.GEMINI, strict=False
+    )
+    model: str = Field(default="text-embedding-004", min_length=1, max_length=200)
+    apiKeyEnv: str | None = _SECRET_REF
+    apiKeyFile: str | None = _SECRET_REF
+
+
 class RagConfig(BaseModel):
+    """RAG-01: retrieval-augmented generation (P4, §15)."""
+
     model_config = BASE_CONFIG
 
     enabled: bool = False
+    required: bool = False
     store: RagStore = Field(default_factory=RagStore)
+    embedding: RagEmbedding = Field(default_factory=RagEmbedding)
+    topK: int = Field(default=5, ge=1, le=100)
+    minScore: float = Field(default=0.0, ge=0.0, le=1.0)
+    chunkChars: int = Field(default=1000, ge=1)
+    chunkOverlapChars: int = Field(default=200, ge=0)
+    maxDocumentBytes: int = Field(default=10485760, ge=1)
+
+    @model_validator(mode="after")
+    def _check_overlap(self):
+        # RAG-01: overlap < chunk size (a degenerate overlap degenerates the
+        # chunk identity).
+        if self.chunkOverlapChars >= self.chunkChars:
+            raise ValueError(
+                "rag.chunkOverlapChars must be smaller than rag.chunkChars"
+            )
+        return self
 
 
 class AgentDefinition(BaseModel):

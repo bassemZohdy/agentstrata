@@ -599,30 +599,169 @@
     },
     "RagConfig": {
       "additionalProperties": false,
+      "description": "RAG-01: retrieval-augmented generation (P4, \u00a715).",
       "properties": {
+        "chunkChars": {
+          "default": 1000,
+          "minimum": 1,
+          "title": "Chunkchars",
+          "type": "integer"
+        },
+        "chunkOverlapChars": {
+          "default": 200,
+          "minimum": 0,
+          "title": "Chunkoverlapchars",
+          "type": "integer"
+        },
+        "embedding": {
+          "$ref": "#/$defs/RagEmbedding"
+        },
         "enabled": {
           "default": false,
           "title": "Enabled",
           "type": "boolean"
         },
+        "maxDocumentBytes": {
+          "default": 10485760,
+          "minimum": 1,
+          "title": "Maxdocumentbytes",
+          "type": "integer"
+        },
+        "minScore": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minscore",
+          "type": "number"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
         "store": {
           "$ref": "#/$defs/RagStore"
+        },
+        "topK": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Topk",
+          "type": "integer"
         }
       },
       "title": "RagConfig",
       "type": "object"
     },
+    "RagEmbedding": {
+      "additionalProperties": false,
+      "description": "RAG-01: the embedding provider; apiKey follows SEC-04 Env/File.",
+      "properties": {
+        "apiKeyEnv": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Apikeyenv"
+        },
+        "apiKeyFile": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Apikeyfile"
+        },
+        "model": {
+          "default": "text-embedding-004",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/RagEmbeddingProvider",
+          "default": "gemini"
+        }
+      },
+      "title": "RagEmbedding",
+      "type": "object"
+    },
+    "RagEmbeddingProvider": {
+      "enum": [
+        "gemini",
+        "openai"
+      ],
+      "title": "RagEmbeddingProvider",
+      "type": "string"
+    },
     "RagStore": {
       "additionalProperties": false,
+      "description": "RAG-01: the vector store; connectionString follows SEC-04 Env/File.",
       "properties": {
+        "collection": {
+          "default": "agentbase",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "title": "Collection",
+          "type": "string"
+        },
+        "connectionStringEnv": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connectionstringenv"
+        },
+        "connectionStringFile": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connectionstringfile"
+        },
         "options": {
           "additionalProperties": true,
           "title": "Options",
           "type": "object"
+        },
+        "type": {
+          "$ref": "#/$defs/RagStoreType",
+          "default": "chroma"
         }
       },
       "title": "RagStore",
       "type": "object"
+    },
+    "RagStoreType": {
+      "enum": [
+        "chroma",
+        "pgvector"
+      ],
+      "title": "RagStoreType",
+      "type": "string"
     },
     "RateLimit": {
       "additionalProperties": false,

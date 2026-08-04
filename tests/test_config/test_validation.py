@@ -257,9 +257,11 @@ class TestCapability:
             }
         )
 
-    def test_approval_forbidden(self):
-        assert ("approval.enabled", "capability_error") in issues_for(
-            {"approval": {"enabled": True}}
+    def test_approval_accepted(self):
+        # CAP-02 (P3): approval.enabled is accepted by the capability gate;
+        # the cross-field rules still apply (auth + redis/postgres storage).
+        assert not any(
+            c == "capability_error" for _p, c in issues_for({"approval": {"enabled": True}})
         )
 
     def test_rag_forbidden(self):
@@ -317,12 +319,11 @@ class TestAggregate:
 class TestBootOrder:
     def test_validate_then_capability_order(self):
         # A config with BOTH a schema error and a capability error must report
-        # both, with capability checks not masking schema checks (P2: acp is
-        # accepted; approval still gates).
-        issues = issues_for({"approval": {"enabled": True}, "engine": {"bogus": 1}})
-        approval_codes = {code for path, code in issues if path == "approval.enabled"}
-        assert "capability_error" in approval_codes
-        assert "cross_field" in approval_codes
+        # both, with capability checks not masking schema checks (P3: approval
+        # is accepted; RAG still gates).
+        issues = issues_for({"rag": {"enabled": True}, "engine": {"bogus": 1}})
+        rag_codes = {code for path, code in issues if path == "rag.enabled"}
+        assert "capability_error" in rag_codes
         assert ("engine.bogus", "unknown_field") in issues
 
 
@@ -405,13 +406,16 @@ class TestMultiAgentSchemaMA01:
             )
         )
 
-    def test_capability_gate_fail_closed_for_p3_p4(self):
-        # CAP-01: P3/P4 capabilities stay fail-closed; multi-agent and ACP are
-        # accepted (the P2 flip, CAP-02).
+    def test_capability_gate_fail_closed_for_p4(self):
+        # CAP-01: P4 (RAG) stays fail-closed; multi-agent, ACP, and approval
+        # are accepted (the P2/P3 flips, CAP-02).
         assert issues_for(self._base(agents=[{"name": "worker", "systemInstruction": "a"}])) == []
         assert issues_for(self._base(server={"protocols": {"acp": True}})) == []
-        assert ("approval.enabled", "capability_error") in issues_for(
-            self._base(approval={"enabled": True})
+        # approval is capability-accepted (P3); the minimal base has no
+        # auth + memory storage, so the HITL-01 cross-field rules still fire
+        assert not any(
+            code == "capability_error"
+            for _p, code in issues_for(self._base(approval={"enabled": True}))
         )
         assert ("rag.enabled", "capability_error") in issues_for(self._base(rag={"enabled": True}))
 
@@ -434,11 +438,9 @@ class TestApprovalSchemaHITL01:
         return doc
 
     def test_valid_approval_configuration(self):
-        # with auth + redis storage the config is valid per HITL-01; the only
-        # issue is the P3 capability gate (flips when P3 acceptance passes)
-        issues = issues_for(self._approval_doc())
-        assert ("approval.enabled", "capability_error") in issues
-        assert not any(code == "cross_field" for _p, code in issues)
+        # with auth + redis storage the config is valid per HITL-01 (the P3
+        # capability flip, CAP-02)
+        assert issues_for(self._approval_doc()) == []
 
     def test_enabled_requires_auth_not_none(self):
         doc = self._approval_doc()
@@ -467,11 +469,8 @@ class TestApprovalSchemaHITL01:
         assert cfg.approval.onTimeout.value == "deny"
 
     def test_on_timeout_allow_explicit_and_constrained(self):
-        # explicit allow is accepted by the schema (the boot audit warns);
-        # the only issue is the P3 capability gate
-        assert issues_for(self._approval_doc(onTimeout="allow")) == [
-            ("approval.enabled", "capability_error")
-        ]
+        # explicit allow is accepted by the schema (the boot audit warns)
+        assert issues_for(self._approval_doc(onTimeout="allow")) == []
         # invalid values rejected by the schema itself
         assert ("approval.onTimeout", "enum") in [
             (p, c) for p, c in issues_for(self._approval_doc(onTimeout="maybe"))
@@ -480,7 +479,96 @@ class TestApprovalSchemaHITL01:
         assert not valid(self._approval_doc(timeoutSeconds=999999))
 
     def test_tool_patterns_shape(self):
-        assert issues_for(self._approval_doc(tools=["server/*", "echo_ping"])) == [
-            ("approval.enabled", "capability_error")
-        ]
+        assert issues_for(self._approval_doc(tools=["server/*", "echo_ping"])) == []
         assert not valid(self._approval_doc(tools=["server/*", 5]))
+
+
+class TestRagSchemaRAG01:
+    """RAG-01: rag field contract + constraints (P4)."""
+
+    def _doc(self, **rag) -> dict:
+        return {
+            "name": "agent",
+            "engine": {"systemInstruction": "t"},
+            "llm": {"provider": "gemini", "model": "m"},
+            "rag": {"enabled": True, **rag},
+        }
+
+    def test_defaults(self):
+        from app.config.models import AgentConfig
+
+        cfg = AgentConfig.model_validate(
+            {
+                "name": "agent",
+                "engine": {"systemInstruction": "t"},
+                "llm": {"provider": "gemini", "model": "m"},
+            }
+        )
+        assert cfg.rag.enabled is False
+        assert cfg.rag.required is False
+        assert cfg.rag.store.type.value == "chroma"
+        assert cfg.rag.store.collection == "agentbase"
+        assert cfg.rag.embedding.provider.value == "gemini"
+        assert cfg.rag.embedding.model == "text-embedding-004"
+        assert cfg.rag.topK == 5
+        assert cfg.rag.minScore == 0.0
+        assert cfg.rag.chunkChars == 1000
+        assert cfg.rag.chunkOverlapChars == 200
+        assert cfg.rag.maxDocumentBytes == 10485760
+
+    def test_full_valid_document(self):
+        doc = self._doc(
+            required=True,
+            store={
+                "type": "pgvector",
+                "connectionStringEnv": "PG",
+                "collection": "kb_prod",
+                "options": {"hnsw": True},
+            },
+            embedding={"provider": "openai", "model": "text-embedding-3-small", "apiKeyEnv": "OK"},
+            topK=20,
+            minScore=0.3,
+            chunkChars=500,
+            chunkOverlapChars=50,
+            maxDocumentBytes=2048,
+        )
+        assert not valid(doc)
+
+    def test_store_types_enum(self):
+        assert ("rag.store.type", "enum") in [
+            (p, c) for p, c in issues_for(self._doc(store={"type": "pinecone"}))
+        ]
+        assert ("rag.embedding.provider", "enum") in [
+            (p, c) for p, c in issues_for(self._doc(embedding={"provider": "anthropic"}))
+        ]
+
+    def test_topk_bounds(self):
+        assert not valid(self._doc(topK=0))
+        assert not valid(self._doc(topK=101))
+        assert not valid(self._doc(minScore=-0.1))
+        assert not valid(self._doc(minScore=1.1))
+
+    def test_overlap_must_be_smaller_than_chunk(self):
+        # the P4 capability gate is still fail-closed, so the schema-level
+        # assertion filters it: a degenerate overlap adds a schema code
+        def codes(rag: dict) -> set[str]:
+            return {c for _p, c in issues_for(self._doc(**rag))}
+
+        assert codes({"chunkChars": 100, "chunkOverlapChars": 100}) != {"capability_error"}
+        assert codes({"chunkChars": 100, "chunkOverlapChars": 200}) != {"capability_error"}
+        assert codes({"chunkChars": 100, "chunkOverlapChars": 99}) == {"capability_error"}
+
+    def test_collection_is_safe_identifier(self):
+        def codes(rag: dict) -> set[str]:
+            return {c for _p, c in issues_for(self._doc(**rag))}
+
+        assert codes({"store": {"collection": "bad name!"}}) != {"capability_error"}
+        assert codes({"store": {"collection": "-leading-dash"}}) != {"capability_error"}
+        assert codes({"store": {"collection": "kb-prod-v1"}}) == {"capability_error"}
+
+    def test_document_size_bound(self):
+        def codes(rag: dict) -> set[str]:
+            return {c for _p, c in issues_for(self._doc(**rag))}
+
+        assert codes({"maxDocumentBytes": 0}) != {"capability_error"}
+        assert codes({"maxDocumentBytes": 1024}) == {"capability_error"}
