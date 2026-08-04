@@ -24,16 +24,19 @@ Policy (recorded in TODO.md "Decisions made"): a release is blocked when the
 scan reports any CRITICAL or HIGH CVE **with no available fix**; MEDIUM/LOW are
 tracked, non-blocking.
 
-Result: **23 OS-level HIGH/CRITICAL findings in the pinned base image
-(`python:3.12-slim` @ `sha256:57cd7c3a…` — verified to be the current latest
-digest), all with NO available fix yet** (Debian trixie has not published
-updates; CVE-2026-53615 util-linux family, CVE-2025-69720 ncurses,
+Result (re-verified 2026-08-04 against the rebuilt image): **23 OS-level
+HIGH/CRITICAL findings (19 HIGH, 4 CRITICAL), ALL without an upstream fix
+yet** (Debian trixie has not published updates; CVE-2026-53615 util-linux
+family, CVE-2025-69720 ncurses,
 CVE-2026-13221/42496/42497/48962/57432/57433/8376/9538 perl-base,
 CVE-2026-41992 gzip, CVE-2026-54369 libacl1, CVE-2026-53615 bsdutils/mount).
 
-**Status: release-blocking until Debian ships fixes.** The gate re-runs the
-scan; when fixes land, bump the base-image digest (a reviewed change per
-CNT-12) and re-verify.
+**Status: the CNT-12 publication gate FAILS CLOSED until Debian ships
+fixes** — this is an upstream-environment constraint (the base image's OS
+packages), not a code-side gap; per PHASE-01 the phases remain
+independently releasable on their §18 acceptance. The release workflow
+re-runs the scan on every release; when fixes land, bump the base-image
+digest (a reviewed change per CNT-12) and re-verify.
 
 Fixable findings: the scan initially also reported 2 HIGH python-pkg findings
 (msgpack 1.1.2, setuptools 70.3.0) — both were pip's vendored packages. The

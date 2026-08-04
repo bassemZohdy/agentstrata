@@ -50,4 +50,4 @@ tests/test_engine/test_rag.py::TestMockModelHook::test_mock_runner_env_selects_d
   See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-450 passed, 28 warnings in 141.35s (0:02:21)
+450 passed, 28 warnings in 140.91s (0:02:20)

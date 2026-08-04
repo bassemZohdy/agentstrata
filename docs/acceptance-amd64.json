@@ -2,7 +2,7 @@
   "platform": "linux/amd64",
   "test_image": "agentbase-test:amd64",
   "image_id": "sha256:7b69c065f04fd241350d11f9f9e9befe9341871a60dd56d085dedee752112efd",
-  "source_commit": "1fb386e1535d733c02579efeac4c8de66634022e",
+  "source_commit": "32d048aaf3b0a5a912de0053ea843f036a61a605",
   "lock_hash": "e6f4ec176f693a1305a5b1d0c5e7bfcb09163adf65ecb13c6ed2579689af4944",
   "status": "pass",
   "staleness_check": "pass",

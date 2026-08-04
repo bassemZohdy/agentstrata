@@ -17,9 +17,9 @@ dependency-lock hash, and test results that verified it.
 
 | Field | Value |
 | --- | --- |
-| Source commit | `8e534dc` (exact final candidate — post-flip code, CI gates green) |
-| Image digest | amd64 `agentbase@sha256:f232df741db80fd224e8b66af87d147661522101f4f83eac0de70f15446ca049`; arm64 `agentbase@sha256:d453c4a823442ec33f8d7098bb368c5ce857954537a40cc66d1d8575b748187c` (re-verify per build) |
-| ACC-01 exact-candidate | `docs/acceptance-{amd64,arm64}.json` record `source_commit: 8e534dc` == HEAD, staleness pass, 446/446 both archs |
+| Source commit | `32d048a` (exact final candidate — all audit fixes, CI gates green) |
+| Image digest | amd64 `agentbase@sha256:f9831410d2a06b71afd9b1f5b619de4c32fd2109000cf034afe90278f3158dac`; arm64 `agentbase@sha256:d83d97b9249c0641aa25e3d9a9f82430127ce685f8b7cddae1980cbc7eca235a` (re-verify per build) |
+| ACC-01 exact-candidate | `docs/acceptance-{amd64,arm64}.json` record `source_commit: 32d048a` == HEAD, staleness pass, **450/450 both archs** |
 | Acceptance | **446/446 passed inside the image on linux/amd64 AND linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}` — RAG-01..06 suites included) |
 | Host suite | **446 passed**, ruff + mypy clean, schemas zero-diff, traceability 164 IDs mapped |
 | Capabilities | phase `P4`; `multiAgent`/`acp`/`approval`/`rag` all true (CAP-02) |
@@ -42,7 +42,7 @@ dependency-lock hash, and test results that verified it.
 | Lock hash | `e6f4ec176f693a1305a5b1d0c5e7bfcb09163adf65ecb13c6ed2579689af4944` (`requirements.lock`) |
 | Acceptance | **339/339 passed inside the image on linux/amd64 AND linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}`, incl. image ID / commit / lock hash / staleness check) |
 | Host suite | **340 passed**, ruff + mypy clean, schemas zero-diff |
-| NFR-00 | `docs/nfr-report.json` — 6 gates pass; NFR-02 fails as measured (recorded with breakdown; spec's gate assumes an in-process mock) |
+| NFR-00 | `docs/nfr-report.json` — **7/7 gates pass** incl. NFR-02 (p95 18.4 ms < 50 ms, spec-conformant measurement with the deterministic in-process mock AgentRunner per §6; end-to-end reference recorded alongside) |
 | NFR-08 | zero-downtime reload PASS (live 1→2, rebuild 2→3, 0 failures, no restart) |
 | Supply chain | `docs/supplychain/` — CycloneDX + SPDX SBOMs, trivy scan (23 OS HIGH/CRIT with no fix yet — release-blocking per CNT-12 until Debian ships; 0 fixable python findings), buildx SLSA v1 provenance, keyless-signing workflow, canary scan passed |
 | Compose smoke | PASS (runtime healthy, MCP sample connected, redis/postgres healthy, auth 401/200) |
