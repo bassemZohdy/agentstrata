@@ -144,7 +144,7 @@ deferred (low priority or needs a concrete scale/deployment trigger).
 Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria
 (§18) pass.
 
-- [x] **P2 — Multi-agent** (§13 + API-16): **IN PROGRESS** — milestone
+- [x] **P2 — Multi-agent** (§13 + API-16): **DONE** — milestone
       breakdown in PLAN.md (§13.1 ACP annex frozen in REQUIREMENTS.md);
       task breakdown below.
 - [ ] **P3 — Human-in-the-loop** (§14): durable approval checkpoints,
@@ -154,31 +154,31 @@ Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria
 
 ### P2 — Multi-agent and ACP (MA-01..05 + API-16, annex §13.1)
 
-- [ ] **P2-1 Schema + gating (MA-01):** `agents[]` field contract (DNS-label
+- [x] **P2-1 Schema + gating (MA-01):** `agents[]` field contract (DNS-label
       unique `name` distinct from root, required non-empty `systemInstruction`,
       `description` ≤ 2 000 code points, optional `llm` deep-merged over
       root, `toolServers` defaulting to every MCP server); flat one level,
       nested/cyclic rejected, every tool-server reference exists; schema
       artifacts regenerated with CI zero-diff.
-- [ ] **P2-2 Construction + routing (MA-02):** root becomes an ADK coordinator
+- [x] **P2-2 Construction + routing (MA-02):** root becomes an ADK coordinator
       with `sub_agents` in configured order; ADK native transfer routing by
       name/description; empty list retains P1 behavior and public fixtures;
       shared principal/session/cancellation/deadline/iteration/budget/
       generation.
-- [ ] **P2-3 Tool isolation (MA-03):** sub-agents get only
+- [x] **P2-3 Tool isolation (MA-03):** sub-agents get only
       `toolServers`-named toolsets AFTER MCP filter/collision mapping (final
       names); no coordinator hidden tools; no direct cross-agent calls except
       transfer; transfer grants no new principal/budget.
-- [ ] **P2-4 Transfer events + audit (MA-04):** `agent_transfer` events in
+- [x] **P2-4 Transfer events + audit (MA-04):** `agent_transfer` events in
       event/debug streams only; transfers in the run audit, never user-visible
       session messages; unknown/unavailable target fails the run with
       `provider_error`, no silent fallback.
-- [ ] **P2-5 ACP surface (API-16, annex §13.1):** `GET /acp/agents` +
+- [x] **P2-5 ACP surface (API-16, annex §13.1):** `GET /acp/agents` +
       `POST /acp/runs` per the frozen annex (auth, session, idempotency,
       error schemas); ACP-disabled = ordinary 404; no 501 stubs.
-- [ ] **P2-6 Reload (MA-05):** `agents` component-rebuild with transactional
+- [x] **P2-6 Reload (MA-05):** `agents` component-rebuild with transactional
       apply/rollback + in-flight run safety.
-- [ ] **P2-7 Acceptance + capability flip (MA-05, CAP-02):** deterministic
+- [x] **P2-7 Acceptance + capability flip (MA-05, CAP-02):** deterministic
       construction, routing fixtures, tool isolation, shared
       limits/cancellation, transfer events, session replay, reload with
       in-flight runs, single-agent regression suite; `multiAgent`/`acp` true

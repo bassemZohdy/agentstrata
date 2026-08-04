@@ -1,8 +1,9 @@
-........................................................................ [ 21%]
-........................................................................ [ 42%]
-........................................................................ [ 63%]
-........................................................................ [ 84%]
-...................................................                      [100%]
+........................................................................ [ 19%]
+........................................................................ [ 39%]
+........................................................................ [ 58%]
+........................................................................ [ 78%]
+........................................................................ [ 97%]
+........                                                                 [100%]
 =============================== warnings summary ===============================
 <frozen abc>:106
 <frozen abc>:106
@@ -22,17 +23,19 @@ tests/test_engine/test_limits.py::TestIterationLimit::test_iteration_exhaustion_
   /opt/venv/lib/python3.12/site-packages/google/adk/models/llm_request.py:273: UserWarning: [EXPERIMENTAL] feature FeatureName.JSON_SCHEMA_FOR_FUNC_DECL is enabled.
     declaration = tool._get_declaration()
 
-tests/test_mcp/test_integration.py::TestStdioIntegration::test_connect_discover_readiness_close
+tests/test_engine/test_multiagent.py::test_tool_isolation_per_toolservers
   /opt/venv/lib/python3.12/site-packages/google/adk/tools/mcp_tool/mcp_toolset.py:346: UserWarning: [EXPERIMENTAL] feature FeatureName._MCP_GRACEFUL_ERROR_HANDLING is enabled.
     session = await self._mcp_session_manager.create_session(
 
+tests/test_engine/test_multiagent.py::test_tool_isolation_per_toolservers
+tests/test_engine/test_multiagent.py::test_tool_isolation_per_toolservers
 tests/test_mcp/test_integration.py::TestStdioIntegration::test_connect_discover_readiness_close
   /opt/venv/lib/python3.12/site-packages/google/adk/tools/mcp_tool/mcp_toolset.py:388: DeprecationWarning: MCPTool class is deprecated, use `McpTool` instead.
     mcp_tool = MCPTool(
 
-tests/test_mcp/test_integration.py::TestStdioIntegration::test_connect_discover_readiness_close
+tests/test_engine/test_multiagent.py::test_tool_isolation_per_toolservers
   /opt/venv/lib/python3.12/site-packages/google/adk/features/_feature_decorator.py:72: UserWarning: [EXPERIMENTAL] feature FeatureName.BASE_AUTHENTICATED_TOOL is enabled.
     check_feature_enabled()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-339 passed, 10 warnings in 130.09s (0:02:10)
+368 passed, 12 warnings in 131.49s (0:02:11)

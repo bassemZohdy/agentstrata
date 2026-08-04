@@ -9,6 +9,7 @@ transfer, and MCP tool isolation per toolServers (root = all servers).
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -224,13 +225,13 @@ async def test_tool_isolation_per_toolservers():
                     "name": "alpha",
                     "transport": "stdio",
                     "command": sys.executable,
-                    "args": ["scripts/spike_mcp_server.py"],
+                    "args": [str(Path(__file__).resolve().parents[2] / "scripts" / "spike_mcp_server.py")],
                 },
                 {
                     "name": "beta",
                     "transport": "stdio",
                     "command": sys.executable,
-                    "args": ["scripts/spike_mcp_server.py"],
+                    "args": [str(Path(__file__).resolve().parents[2] / "scripts" / "spike_mcp_server.py")],
                 },
             ]
         },
@@ -243,7 +244,11 @@ async def test_tool_isolation_per_toolservers():
     mcp.configure(config.tools.mcpServers)
     await mcp.start()
     try:
-        for _ in range(100):
+        # env-tunable connect window (same knob as tests/test_mcp: slow
+        # emulated/container platforms raise it)
+        window = float(__import__("os").environ.get("AGENT_TEST_MCP_CONNECT_SECONDS", "10"))
+        deadline = __import__("time").monotonic() + window
+        while __import__("time").monotonic() < deadline:
             if mcp.readiness() and component.agent.tools and component.sub_agents[0].tools:
                 break
             await asyncio.sleep(0.1)
