@@ -14,7 +14,9 @@ import asyncio
 import logging
 import time
 import uuid
+from asyncio import CancelledError
 from collections.abc import AsyncGenerator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -172,12 +174,20 @@ class AgentRunner:
                         "output_tokens": limiter.account.output_tokens,
                     },
                 )
-        except asyncio.CancelledError:
-            if state.begin_cancel() or not state.terminal:
-                state.cancel()
+        except CancelledError:
+            self._mark_cancelled(state)
             await self._commit_failure(request, sid, run_id, state.state)
             raise
-        except BaseException as exc:  # noqa: BLE001
+        except GeneratorExit:
+            # Generator closed mid-run (API-08a stream teardown): persist a
+            # terminal state WITHOUT yielding — yielding during GeneratorExit
+            # is illegal and would raise RuntimeError out of aclose().
+            if not state.terminal:
+                state.fail()
+            with suppress(BaseException):
+                await self._commit_failure(request, sid, run_id, state.state)
+            raise
+        except Exception as exc:  # noqa: BLE001 — transport/model errors
             logger.exception("run %s failed: %s", run_id, type(exc).__name__)
             # A wrapped timeout (ADK cleanup may re-raise its own error) is
             # still a deadline violation — report agent_timeout (ENG-07).
@@ -187,11 +197,17 @@ class AgentRunner:
                 public = sanitize_error(exc)
             if not state.terminal:
                 state.fail()
-            await self._commit_failure(request, sid, run_id, state.state, public.code)
+            with suppress(BaseException):
+                await self._commit_failure(request, sid, run_id, state.state, public.code)
             yield RunError(code=public.code, message=public.message)
             yield Done(finish_reason="error", x_agent_status=public.code)
 
     # -- admission (ENG-03 order; auth/rate-limit stubbed until M5) -----------------
+
+    def _mark_cancelled(self, state: RunStateMachine) -> None:
+        """CAS running→cancelling→cancelled; no-op when already terminal."""
+        if state.begin_cancel() or not state.terminal:
+            state.cancel()
 
     async def _admit(
         self,
@@ -418,22 +434,30 @@ _PUBLIC_MESSAGES = {
 }
 
 
+def _token_count(value: Any) -> int:
+    """Provider usage metadata is untrusted (TRUST-01): coerce defensively."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _usage_dict(metadata: Any) -> dict[str, int]:
     """ENG-08: extract provider-reported usage from an ADK event."""
     if metadata is None:
         return {}
     if isinstance(metadata, dict):
         return {
-            "input_tokens": int(
-                metadata.get("promptTokenCount", metadata.get("prompt_token_count", 0)) or 0
+            "input_tokens": _token_count(
+                metadata.get("promptTokenCount", metadata.get("prompt_token_count", 0))
             ),
-            "output_tokens": int(
-                metadata.get("candidatesTokenCount", metadata.get("candidates_token_count", 0)) or 0
+            "output_tokens": _token_count(
+                metadata.get("candidatesTokenCount", metadata.get("candidates_token_count", 0))
             ),
         }
     return {
-        "input_tokens": int(getattr(metadata, "prompt_token_count", 0) or 0),
-        "output_tokens": int(getattr(metadata, "candidates_token_count", 0) or 0),
+        "input_tokens": _token_count(getattr(metadata, "prompt_token_count", 0)),
+        "output_tokens": _token_count(getattr(metadata, "candidates_token_count", 0)),
     }
 
 

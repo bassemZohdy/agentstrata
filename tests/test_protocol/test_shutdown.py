@@ -8,6 +8,7 @@ through the real FastAPI app to verify ``/readyz`` 503, new chat 503, and
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -53,6 +54,37 @@ class _FakeServer:
 
 
 class TestShutdownManagerStateMachine:
+    async def test_grace_expiry_cancels_inflight_runs_before_close(self):
+        order: list[str] = []
+
+        async def held_run():
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                order.append("run_cancelled")
+                raise
+
+        task = asyncio.create_task(held_run())
+        components = {
+            "run_registry": {task},
+            "watcher": _FakeStop("watcher", order),
+            "mcp": _FakeClosable("mcp", order),
+            "backend": _FakeClosable("storage", order),
+            "observability": SimpleNamespace(shutdown=lambda: order.append("otel")),
+        }
+        server = _FakeServer()
+        mgr = ShutdownManager(components, grace_seconds=0, server=server)
+
+        await mgr.request_shutdown()
+        assert mgr._drain_task is not None
+        await mgr._drain_task
+
+        # CNT-07: the in-flight run was cancelled and its teardown ran BEFORE
+        # any component closed (so terminal states persist while storage is
+        # still open).
+        assert task.cancelled()
+        assert order == ["run_cancelled", "watcher", "mcp", "storage", "otel"]
+
     async def test_first_signal_drains_and_closes_components_in_order(self):
         order: list[str] = []
         components = {

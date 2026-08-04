@@ -32,3 +32,4 @@ Thumbs.db
 
 # pi harness session state
 .pi/
+.pi-subagents/

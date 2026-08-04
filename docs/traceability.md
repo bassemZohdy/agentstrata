@@ -86,6 +86,11 @@ verified by the Milestone 8 acceptance/chaos run.
 | LLM-01 | app/engine/connectors.py::build_llm |
 | LLM-02 | app/engine/connectors.py (CredentialHealth/SecretResolver) |
 | LLM-03 | app/engine/connectors.py::RetryableLlm |
+| MA-01 | P2 — deferred (multi-agent schema) |
+| MA-02 | P2 — deferred (construction/routing) |
+| MA-03 | P2 — deferred (tool isolation) |
+| MA-04 | P2 — deferred (transfer events) |
+| MA-05 | P2 — deferred (reload/acceptance) |
 | MCP-01 | app/engine/mcp/manager.py |
 | MCP-02 | app/engine/mcp/manager.py::readiness |
 | MCP-03 | app/engine/mcp/filtering.py |

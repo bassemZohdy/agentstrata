@@ -233,11 +233,18 @@ def run(argv: list[str] | None = None) -> int:
 
     # Watcher mode (MODE-01/MODE-02): start the tier-8 reconciler.
     if selected_mode == mode_mod.WATCHER:
+        import functools
+
         from .watcher.reload import ReloadManager
         from .watcher.watcher import ConfigMapWatcher, RealKubeClient
 
+        # Rebuilds reuse the SAME backend (sessions must survive reloads) and
+        # the reload call is (config, generation) — bind backend here so the
+        # signature collision (build_components(config, backend, generation))
+        # cannot silently bind the generation as the backend.
+        reload_builder = functools.partial(build_components, backend=backend)
         reload_manager = ReloadManager(
-            build_components, config, components, bundled_dir="/app/config"
+            reload_builder, config, components, bundled_dir="/app/config"
         )
         watcher = ConfigMapWatcher(
             RealKubeClient(),

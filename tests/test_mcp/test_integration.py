@@ -4,7 +4,9 @@ official MCP SDK — not a hand-written fake)."""
 
 from __future__ import annotations
 
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,13 @@ from app.engine.agent import AppliedConfig
 from app.engine.mcp.manager import ServerManager, ServerState
 
 SERVER_SCRIPT = str(Path(__file__).resolve().parents[2] / "scripts" / "spike_mcp_server.py")
+
+# Readiness wait window (seconds). The native default is 10 s; slow emulated
+# platforms (arm64 via QEMU: the stdio initialize handshake alone can exceed
+# 10 s) raise it through AGENT_TEST_MCP_CONNECT_SECONDS — set by
+# scripts/run-image-acceptance.sh. The loop breaks as soon as readiness
+# flips, so a larger window costs nothing on fast platforms.
+MCP_CONNECT_WINDOW = float(os.environ.get("AGENT_TEST_MCP_CONNECT_SECONDS", "10"))
 
 
 def _config_with_servers(servers: list[dict]) -> AppliedConfig:
@@ -47,7 +56,8 @@ class TestStdioIntegration:
         await manager.start()
 
         # readiness gates until the required server connects (MCP-02)
-        for _ in range(100):
+        deadline = time.monotonic() + MCP_CONNECT_WINDOW
+        while time.monotonic() < deadline:
             if manager.readiness():
                 break
             await asyncio_sleep(0.1)
@@ -81,11 +91,21 @@ class TestStdioIntegration:
         manager = ServerManager(applied)
         manager.configure(applied.config.tools.mcpServers)
         await manager.start()
-        for _ in range(20):
+        # The bogus command keeps readiness false (MCP-02). ADK retries the
+        # failed connect once internally (retry_on_errors), so the handle may
+        # stay CONNECTING past a fixed 2 s window under load; poll within the
+        # same configurable window as the connect test.
+        deadline = time.monotonic() + MCP_CONNECT_WINDOW
+        while time.monotonic() < deadline:
             if manager.readiness():
                 break
             await asyncio_sleep(0.1)
         assert not manager.readiness()
+        while time.monotonic() < deadline:
+            handle = manager.handle("bad")
+            if handle is not None and handle.state != ServerState.CONNECTING:
+                break
+            await asyncio_sleep(0.1)
         handle = manager.handle("bad")
         assert handle is not None and handle.state == ServerState.DISCONNECTED
         assert handle.last_error

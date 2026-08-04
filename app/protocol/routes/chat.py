@@ -40,7 +40,6 @@ _STREAM_DONE = object()
 
 
 def register(app: Any, config: Any, components: dict[str, Any]) -> None:
-    runner = components["runner"]
     agent_name = config.name
 
     router = APIRouter(prefix="/v1")
@@ -82,6 +81,11 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             raise PublicErrorResponse(
                 "invalid_request", "exactly one user message is required (stateful)", 400
             )
+
+        # Resolve the runner per request: a component-rebuild reload swaps
+        # components["runner"] in place (same dict), so new requests must pick
+        # up the new generation (NFR-08: later requests use the new config).
+        runner = components["runner"]
 
         streaming = bool(body.get("stream", False))
         principal = getattr(request.state, "principal", "anonymous")
@@ -142,6 +146,18 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 ttl_seconds=config.storage.idempotencyTtlSeconds,
             )
 
+        # NFR-03: in-flight run cap (server.maxConcurrentRequests) - reject
+        # with 503 `overloaded` (API-15) BEFORE any model work starts.
+        slots = components.get("run_slots")
+        if slots is not None and not await slots.try_acquire():
+            raise PublicErrorResponse("overloaded", "Too many concurrent runs", 503) from None
+        # CNT-07: track the driving task so grace-expiry shutdown can cancel
+        # it (persisting a terminal state) before storage closes.
+        run_registry = components.get("run_registry")
+        current_task = asyncio.current_task()
+        if run_registry is not None and current_task is not None:
+            run_registry.add(current_task)
+
         if streaming:
             return StreamingResponse(
                 _stream(
@@ -154,6 +170,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                     components,
                     principal,
                     agent_name,
+                    slots,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -162,7 +179,13 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 },
             )
 
-        text, done = await _collect_non_streaming(runner, run_request)
+        try:
+            text, done = await _collect_non_streaming(runner, run_request)
+        finally:
+            if slots is not None:
+                slots.release()
+            if run_registry is not None and current_task is not None:
+                run_registry.discard(current_task)
         if done is None:
             raise PublicErrorResponse("internal_error", "run produced no terminal event")
         if done.x_agent_status in ("iteration_limit", "output_limit"):
@@ -232,6 +255,11 @@ def _canonical_idempotency_key(key: Any) -> str | None:
         return None
     # API-06a: canonical form is the SHA-256 of the trimmed key.
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _producer_finished(producer: Any, queue: asyncio.Queue) -> bool:
+    """True when the run producer is done and the queue drained (stream end)."""
+    return producer.done() and queue.empty()
 
 
 async def _collect_non_streaming(runner, run_request: RunRequest) -> tuple[str, Done | None]:
@@ -306,6 +334,7 @@ async def _stream(
     components: Any,
     principal: str,
     agent_name: str,
+    slots: Any = None,
 ) -> AsyncIterator[str]:
     """API-08 + API-08a: SSE delta -> text/extension chunks -> finish -> [DONE].
 
@@ -359,7 +388,7 @@ async def _stream(
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=1.0)
             except TimeoutError:
-                if producer.done() and queue.empty():
+                if _producer_finished(producer, queue):
                     if slow_consumer.is_set():
                         mid_stream_cancel = "slow_consumer"
                     break
@@ -440,81 +469,91 @@ async def _stream(
         # the run) and close the engine generator. Best-effort teardown — the
         # runner commits a terminal state on CancelledError; any lingering
         # nonterminal run is reconciled by the storage sweep (run_interrupted).
+        # NOTE: no yields here — yielding from a finally during generator
+        # close (client disconnect) raises RuntimeError. Final chunks are
+        # emitted after this block, only on the normal completion path.
         if not producer.done():
             producer.cancel()
         with suppress(BaseException):
             await producer
         with suppress(BaseException):
             await gen.aclose()
-        # API-08a: after headers are sent, a mid-stream cancellation emits one
-        # x_agent_event error chunk then [DONE]; status stays 200 and no
-        # nonstandard finish reason is used.
-        if mid_stream_cancel:
-            finish_reason = "stop"
-            x_status = None
-            usage = {}
-            yield _sse_data(
-                {
-                    "id": request_id,
-                    "object": "chat.completion.chunk",
-                    "created": _now(),
-                    "model": config.llm.model,
-                    "choices": [],
-                    "x_agent_event": {
-                        "type": "error",
-                        "code": "agent_timeout",
-                        "message": "The run was cancelled by timeout or disconnect.",
-                    },
-                }
-            )
-        final_choice = {"index": 0, "delta": {}, "finish_reason": finish_reason}
-        if x_status:
-            final_choice["x_agent_status"] = x_status
+        if slots is not None:
+            slots.release()
+        run_registry = components.get("run_registry")
+        current_task = asyncio.current_task()
+        if run_registry is not None and current_task is not None:
+            run_registry.discard(current_task)
+
+    # API-08a: after headers are sent, a mid-stream cancellation emits one
+    # x_agent_event error chunk then [DONE]; status stays 200 and no
+    # nonstandard finish reason is used.
+    if mid_stream_cancel:
+        finish_reason = "stop"
+        x_status = None
+        usage = {}
         yield _sse_data(
             {
                 "id": request_id,
                 "object": "chat.completion.chunk",
                 "created": _now(),
                 "model": config.llm.model,
-                "choices": [final_choice],
+                "choices": [],
+                "x_agent_event": {
+                    "type": "error",
+                    "code": "agent_timeout",
+                    "message": "The run was cancelled by timeout or disconnect.",
+                },
             }
         )
-        # A disconnected stream may not receive its usage chunk (API-08a).
-        if usage and not mid_stream_cancel:
-            yield _sse_data(
-                {
-                    "id": request_id,
-                    "object": "chat.completion.chunk",
-                    "created": _now(),
-                    "model": config.llm.model,
-                    "choices": [],
-                    "usage": usage,
-                }
+    final_choice = {"index": 0, "delta": {}, "finish_reason": finish_reason}
+    if x_status:
+        final_choice["x_agent_status"] = x_status
+    yield _sse_data(
+        {
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": _now(),
+            "model": config.llm.model,
+            "choices": [final_choice],
+        }
+    )
+    # A disconnected stream may not receive its usage chunk (API-08a).
+    if usage and not mid_stream_cancel:
+        yield _sse_data(
+            {
+                "id": request_id,
+                "object": "chat.completion.chunk",
+                "created": _now(),
+                "model": config.llm.model,
+                "choices": [],
+                "usage": usage,
+            }
+        )
+    yield "data: [DONE]\n\n"
+    if idem_key:
+        result = _non_streaming_body(
+            text="".join(assistant_text),
+            model=config.llm.model,
+            finish_reason=finish_reason,
+            x_agent_status=x_status,
+            usage=usage,
+            request_id=request_id,
+        )
+        with suppress(BaseException):
+            await _finish_idempotency(
+                components,
+                principal,
+                agent_name,
+                run_request.session_id or "",
+                idem_key,
+                result,
             )
-        yield "data: [DONE]\n\n"
-        if idem_key:
-            result = _non_streaming_body(
-                text="".join(assistant_text),
-                model=config.llm.model,
-                finish_reason=finish_reason,
-                x_agent_status=x_status,
-                usage=usage,
-                request_id=request_id,
-            )
-            with suppress(BaseException):
-                await _finish_idempotency(
-                    components,
-                    principal,
-                    agent_name,
-                    run_request.session_id or "",
-                    idem_key,
-                    result,
-                )
 
 
 def _now() -> int:
     """Epoch seconds (never throws)."""
-    return int(time.time())
+    return time.time_ns() // 1_000_000_000
 
 
 def _sse_data(payload: dict[str, Any]) -> str:

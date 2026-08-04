@@ -23,7 +23,19 @@ from google.adk.tools import McpToolset
 from ..agent import AppliedConfig
 from .bounds import bounded_httpx_client_factory
 from .filtering import apply_tool_filter, rename_collision_safe
-from .stdio_sandbox import build_stdio_params
+from .stdio_sandbox import build_stdio_params, wrap_stdio_params
+
+logger = logging.getLogger(__name__)
+
+# Stdio connect+initialize deadline (seconds). google-adk 2.6.1 wraps plain
+# StdioServerParameters in its own StdioConnectionParams with a hardcoded
+# timeout=5; on slow platforms (cold start, arm64 under QEMU: the initialize
+# handshake alone can exceed 10 s) that deadline fires and the session teardown
+# race surfaces as anyio.WouldBlock, failing the connect. Passing ADK's own
+# StdioConnectionParams with an explicit timeout is the documented way to set
+# it (google/adk/tools/mcp_tool/mcp_toolset.py). The value stays bounded:
+# reconnect pacing still comes from the backoff loop.
+STDIO_CONNECT_TIMEOUT_SECONDS = 30.0
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +126,8 @@ class ServerManager:
         await asyncio.gather(*self._tasks.values(), return_exceptions=True)
         self._tasks.clear()
         for handle in self._handles.values():
-            await self._release(handle)
+            # Shutdown: close the shared toolset regardless of reference count.
+            await self._close_toolset(handle)
 
     async def acquire(self, name: str) -> ServerHandle | None:
         """MCP-05: acquire a reference for a run; used by the engine."""
@@ -129,14 +142,24 @@ class ServerManager:
             await self._release(handle)
 
     async def _release(self, handle: ServerHandle) -> None:
-        handle.ref_count = max(0, handle.ref_count - 1)
-        if handle.toolset is not None and (handle.ref_count == 0 or self._closed):
-            try:
-                await handle.toolset.close()
-            except Exception:  # noqa: BLE001
-                logger.exception("error closing MCP toolset %s", handle.name)
-            handle.toolset = None
-            handle.state = ServerState.DISCONNECTED
+        if handle.ref_count <= 0:
+            # Spurious release (no matching acquire) must not destroy the
+            # shared toolset other users may still hold (MCP-05).
+            logger.warning("MCP release without acquire: %s", handle.name)
+            return
+        handle.ref_count -= 1
+        if handle.ref_count == 0:
+            await self._close_toolset(handle)
+
+    async def _close_toolset(self, handle: ServerHandle) -> None:
+        if handle.toolset is None:
+            return
+        try:
+            await handle.toolset.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("error closing MCP toolset %s", handle.name)
+        handle.toolset = None
+        handle.state = ServerState.DISCONNECTED
 
     # -- readiness ---------------------------------------------------------------
 
@@ -209,6 +232,7 @@ class ServerManager:
                     f"unresolved env references for stdio server {handle.name}: "
                     + ", ".join(unresolved)
                 )
+            return wrap_stdio_params(params)
             return params
         if handle.transport in ("sse", "streamable-http"):
             from google.adk.tools.mcp_tool.mcp_session_manager import (

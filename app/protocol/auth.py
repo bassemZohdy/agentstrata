@@ -13,6 +13,7 @@ Principal IDs follow SES-03: ``apikey:<sha256(key)>`` and
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -88,7 +89,11 @@ class _ApiKeyAuth(AuthProvider):
         x_api_key = request.headers.get("x-api-key")
         bearer = header[7:] if header.lower().startswith("bearer ") else None
 
-        if bearer is not None and x_api_key is not None and bearer != x_api_key:
+        if (
+            bearer is not None
+            and x_api_key is not None
+            and not _constant_time_eq(bearer, x_api_key)
+        ):
             return "", AuthFailure(401, "auth_error", "conflicting credentials")
         candidate = bearer if bearer is not None else x_api_key
         if candidate is None:
@@ -119,6 +124,9 @@ class _JwtAuth(AuthProvider):
         self._timeout_seconds = timeout_seconds
         self._jwks: dict[str, Any] = {}
         self._jwks_failed = False  # SEC-03: fail-closed on unreachable JWKS
+        # Serialize concurrent refresh attempts (stampede protection); cache
+        # reads outside the lock are benign dict reads.
+        self._jwks_lock = asyncio.Lock()
 
     async def authenticate(self, request: Request) -> tuple[str, AuthFailure | None]:
         header = request.headers.get("authorization", "")
@@ -143,6 +151,10 @@ class _JwtAuth(AuthProvider):
         return f"jwt:{digest}", None
 
     async def _refresh_jwks(self) -> bool:
+        async with self._jwks_lock:
+            return await self._refresh_jwks_locked()
+
+    async def _refresh_jwks_locked(self) -> bool:
         try:
             import httpx
 

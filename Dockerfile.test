@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+#
+# Test-runner image for the image-based §18 ACC-01 acceptance runs (M8 exit
+# check). Built FROM a platform-specific runtime image; adds only the locked
+# dev tooling (pytest + pytest-asyncio) on top of the exact runtime venv, so
+# the acceptance suite executes against the shipped runtime contents.
+#
+# Usage (from the repo root, per platform):
+#   docker buildx build --platform linux/amd64 \
+#     --build-arg BASE_IMAGE=agentbase:amd64 -t agentbase-test:amd64 -f Dockerfile.test .
+#   docker run --rm --platform linux/amd64 \
+#     -v "$(pwd)":/repo:ro -w /repo agentbase-test:amd64 tests -q -p no:cacheprovider
+#
+# The repo is mounted read-only; pytest writes only to tmpfs (/tmp, group
+# writable per CNT-03). pyproject.toml supplies pytest config (asyncio_mode).
+ARG BASE_IMAGE=agentbase:amd64
+FROM ${BASE_IMAGE}
+
+USER root
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+COPY requirements-dev.lock /build/requirements-dev.lock
+RUN /opt/venv/bin/pip install --require-hashes -r /build/requirements-dev.lock \
+    && /opt/venv/bin/pip check
+
+WORKDIR /repo
+ENTRYPOINT ["python", "-m", "pytest"]

@@ -1,0 +1,10 @@
+{
+  "platform": "linux/amd64",
+  "test_image": "agentbase-test:amd64",
+  "image_id": "sha256:e63fdb9d141f419e26d34130d43118c4a8abcd9868eddc3de5f4d797a2bc571c",
+  "source_commit": "9d0dff700192de3377e5a1a8592cd8bfa70f40c8",
+  "lock_hash": "e6f4ec176f693a1305a5b1d0c5e7bfcb09163adf65ecb13c6ed2579689af4944",
+  "status": "pass",
+  "staleness_check": "pass",
+  "pytest_summary": "327 passed"
+}

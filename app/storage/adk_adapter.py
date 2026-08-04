@@ -47,8 +47,10 @@ class AdkSessionService(BaseSessionService):
 
     def __init__(self, backend: StorageBackend) -> None:
         self._backend = backend
-        self._user_state: dict[tuple[str, str], dict[str, Any]] = {}
-        # (app, user, session) -> last persisted revision (SES-05 CAS anchor)
+        # (app, user, session) -> last persisted revision (SES-05 CAS anchor).
+        # Bounded by live sessions: create_session adds, delete_session pops;
+        # per-session entries are tiny (one int) and TTL-swept sessions age
+        # out at the backend layer.
         self._revisions: dict[tuple[str, str, str], int] = {}
 
     async def create_session(
@@ -129,7 +131,10 @@ class AdkSessionService(BaseSessionService):
         return result
 
     async def get_user_state(self, *, app_name: str, user_id: str) -> dict[str, Any]:
-        return dict(self._user_state.get((app_name, user_id), {}))
+        # ADK's BaseSessionService interface default: no user-scoped state is
+        # persisted by the runtime (set_user_state is not implemented), so
+        # this always returns an empty map.
+        return {}
 
     async def flush(self) -> None:
         # Backends write synchronously/atomically; nothing to buffer.

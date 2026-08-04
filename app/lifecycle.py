@@ -108,6 +108,9 @@ class ShutdownManager:
             await asyncio.sleep(self.grace_seconds)
         except asyncio.CancelledError:
             return
+        # CNT-07: cancel in-flight runs FIRST so the runner persists terminal
+        # states/usage while storage is still open.
+        await self._cancel_inflight_runs()
         self.close_ok = await self.close_components()
         self.closed = True
         if self.server is not None:
@@ -122,6 +125,19 @@ class ShutdownManager:
         if exit_code != 0:
             # A flush/close step failed: surface it before the process exits.
             logger.error("shutdown_complete_with_errors exit 1")
+
+    async def _cancel_inflight_runs(self) -> None:
+        """CNT-07: cancel admitted runs at grace expiry and await their
+        terminal-state commit (the runner's CancelledError path) before
+        storage closes."""
+        registry = self.components.get("run_registry")
+        if not registry:
+            return
+        tasks = [t for t in list(registry) if not t.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def close_components(self) -> bool:
         """CNT-07 close order: watcher (stops reload loop) -> MCP reconcilers

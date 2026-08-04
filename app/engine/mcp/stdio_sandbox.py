@@ -70,3 +70,20 @@ def build_stdio_params(
 
     env, unresolved = interpolate_env_vars(minimal_stdio_env(configured_env, parent), parent)
     return StdioServerParameters(command=command, args=list(args), env=env), unresolved
+
+
+def wrap_stdio_params(params: Any, timeout_seconds: float = 30.0) -> Any:
+    """Return the ADK connection-params object for a stdio server.
+
+    google-adk 2.6.1 wraps a bare ``StdioServerParameters`` in its own
+    ``StdioConnectionParams`` with a hardcoded ``timeout=5`` (seconds) for
+    connect + initialize; on slow platforms (cold start, arm64 under QEMU)
+    that deadline fires mid-handshake and surfaces as an anyio.WouldBlock
+    teardown race. Passing ADK's own class with an explicit timeout is the
+    documented way to set it. Falls back to the bare params if the ADK
+    class is unavailable in a future version."""
+    try:
+        from google.adk.tools.mcp_tool import StdioConnectionParams
+    except ImportError:  # pragma: no cover - future-ADK fallback
+        return params
+    return StdioConnectionParams(server_params=params, timeout=timeout_seconds)

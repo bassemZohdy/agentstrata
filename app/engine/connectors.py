@@ -13,6 +13,7 @@ file-backed re-resolve per request vs env process-start snapshot (LLM-02).
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
@@ -48,7 +49,10 @@ class SecretResolver:
         env: dict[str, str] | None = None,
         read_file: Callable[[str], str | None] | None = None,
     ) -> None:
-        self._env = dict(env) if env is not None else {}
+        # Default to the process environment: a bare SecretResolver() must
+        # resolve real env refs (regression: it used to snapshot an empty
+        # dict, so apiKeyEnv never resolved in the production path).
+        self._env = dict(env) if env is not None else dict(os.environ)
         self._read_file = read_file or _default_read_file
         self._env_snapshot = dict(self._env)
 
@@ -154,11 +158,15 @@ class RetryableLlm(BaseLlm):
     delta or tool call has been observed the call is never replayed.
     """
 
+    model: str = ""
+
     def __init__(self, inner: BaseLlm, health: CredentialHealth | None = None) -> None:
+        # The ADK request builder reads ``agent.model.model`` at request time
+        # (google/adk/flows/llm_flows/basic.py), so the pydantic ``model``
+        # field must carry the wrapped model's name.
+        super().__init__(model=inner.model)
         self._inner = inner
         self._health = health
-
-    model: str = ""
 
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False

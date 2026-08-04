@@ -19,9 +19,37 @@ from fastapi.responses import JSONResponse
 from .. import __version__
 from ..config.capabilities import capability_status
 from .auth import AuthProvider
+from .ratelimit import FixedWindowLimiter
 from .routes import chat, health, sessions
 
 logger = logging.getLogger(__name__)
+
+
+class RunSlotGate:
+    """Replica-local in-flight run cap (NFR-03 / server.maxConcurrentRequests).
+
+    ``try_acquire`` is atomic (lock-protected) and never blocks; the chat
+    route rejects with 503 ``overloaded`` when the cap is reached, before any
+    model work starts. ``release`` is called from the route's teardown paths.
+    """
+
+    def __init__(self, limit: int) -> None:
+        import asyncio
+
+        self._limit = limit
+        self._in_flight = 0
+        self._lock = asyncio.Lock()
+
+    async def try_acquire(self) -> bool:
+
+        async with self._lock:
+            if self._in_flight >= self._limit:
+                return False
+            self._in_flight += 1
+            return True
+
+    def release(self) -> None:
+        self._in_flight = max(0, self._in_flight - 1)
 
 
 def create_app(config: Any, components: dict[str, Any], mode: str = "standalone") -> FastAPI:
@@ -33,6 +61,43 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
         redoc_url=None,
         openapi_url="/openapi.json",
     )
+
+    # NFR-03 / API-15: replica-local in-flight run cap. The chat route
+    # acquires one slot per admitted run (before any model work) and answers
+    # 503 `overloaded` at the cap. A counter+lock (not a Semaphore) so the
+    # cap can be checked atomically without blocking or timeout races.
+    components["run_slots"] = RunSlotGate(config.server.maxConcurrentRequests)
+    # CNT-07: in-flight run tasks, cancelled at grace expiry so the runner
+    # persists terminal states BEFORE storage closes.
+    components["run_registry"] = set()
+
+    # API-20: replica-local fixed UTC-minute rate limiter (disabled by default).
+    limiter = FixedWindowLimiter.build_if_enabled(config.server.rateLimit)
+    if limiter is not None:
+
+        @app.middleware("http")
+        async def rate_limit_middleware(request: Request, call_next):
+            # API-20: health probes are never rate-limited.
+            if request.url.path in ("/healthz", "/readyz"):
+                return await call_next(request)
+            principal = getattr(request.state, "principal", None)
+            allowed, retry_after = limiter.allow(
+                FixedWindowLimiter.key_for_request(request, principal)
+            )
+            if not allowed:
+                from .errors import PublicErrorResponse, error_body
+
+                err = PublicErrorResponse(
+                    "rate_limited", "Rate limit exceeded for this window", 429
+                )
+                request_id = getattr(request.state, "request_id", "")
+                response = JSONResponse(
+                    status_code=429,
+                    content=error_body(err.code, err.message, request_id),
+                )
+                response.headers["Retry-After"] = str(max(retry_after, 1))
+                return response
+            return await call_next(request)
 
     # SEC-11: response hardening + SEC-09 trusted-proxy + SEC-10 audit.
     from ..security.audit import HARDENING_HEADERS, audit, parse_forwarded_for

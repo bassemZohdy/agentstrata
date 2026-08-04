@@ -88,7 +88,7 @@ async def _request_overhead() -> dict:
         if not latencies:
             return {"count": 0, "p50_ms": 0.0, "p95_ms": 0.0}
         p50 = latencies[len(latencies) // 2]
-        p95 = latencies[min(int(len(latencies) * 0.95), len(latencies) - 1)]
+        p95 = latencies[min(len(latencies) * 95 // 100, len(latencies) - 1)]
         return {
             "count": n,
             "p50_ms": round(p50 * 1000, 2),

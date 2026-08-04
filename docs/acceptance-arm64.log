@@ -1,0 +1,38 @@
+........................................................................ [ 22%]
+........................................................................ [ 44%]
+........................................................................ [ 66%]
+........................................................................ [ 88%]
+.......................................                                  [100%]
+=============================== warnings summary ===============================
+<frozen abc>:106
+<frozen abc>:106
+<frozen abc>:106
+<frozen abc>:106
+  <frozen abc>:106: DeprecationWarning: BaseAgentConfig is deprecated and will be removed in future versions. Config is now loaded via reflection so the separate config class is no longer needed.
+
+../opt/venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /opt/venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+../opt/venv/lib/python3.12/site-packages/google/adk/features/_feature_decorator.py:72
+  /opt/venv/lib/python3.12/site-packages/google/adk/features/_feature_decorator.py:72: UserWarning: [EXPERIMENTAL] feature FeatureName.PLUGGABLE_AUTH is enabled.
+    check_feature_enabled()
+
+tests/test_engine/test_limits.py::TestIterationLimit::test_iteration_exhaustion_is_length
+  /opt/venv/lib/python3.12/site-packages/google/adk/models/llm_request.py:273: UserWarning: [EXPERIMENTAL] feature FeatureName.JSON_SCHEMA_FOR_FUNC_DECL is enabled.
+    declaration = tool._get_declaration()
+
+tests/test_mcp/test_integration.py::TestStdioIntegration::test_connect_discover_readiness_close
+  /opt/venv/lib/python3.12/site-packages/google/adk/tools/mcp_tool/mcp_toolset.py:346: UserWarning: [EXPERIMENTAL] feature FeatureName._MCP_GRACEFUL_ERROR_HANDLING is enabled.
+    session = await self._mcp_session_manager.create_session(
+
+tests/test_mcp/test_integration.py::TestStdioIntegration::test_connect_discover_readiness_close
+  /opt/venv/lib/python3.12/site-packages/google/adk/tools/mcp_tool/mcp_toolset.py:388: DeprecationWarning: MCPTool class is deprecated, use `McpTool` instead.
+    mcp_tool = MCPTool(
+
+tests/test_mcp/test_integration.py::TestStdioIntegration::test_connect_discover_readiness_close
+  /opt/venv/lib/python3.12/site-packages/google/adk/features/_feature_decorator.py:72: UserWarning: [EXPERIMENTAL] feature FeatureName.BASE_AUTHENTICATED_TOOL is enabled.
+    check_feature_enabled()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+327 passed, 10 warnings in 170.90s (0:02:50)

@@ -187,6 +187,11 @@ MAPPINGS: dict[str, str] = {
     "TRC-01": "scripts/gen-traceability.py; docs/traceability.md",
     "TRC-02": "docs/release.md (image digest/commit/lock hash/test results)",
     # Milestone 7
+    "MA-01": "P2 — deferred (multi-agent schema)",
+    "MA-02": "P2 — deferred (construction/routing)",
+    "MA-03": "P2 — deferred (tool isolation)",
+    "MA-04": "P2 — deferred (transfer events)",
+    "MA-05": "P2 — deferred (reload/acceptance)",
     "OBS-01": "app/observability/logging.py",
     "OBS-02": "app/observability/logging.py (request id/traceparent)",
     "OBS-03": "app/observability/lifecycle.py",
@@ -198,7 +203,7 @@ MAPPINGS: dict[str, str] = {
 
 def main() -> int:
     text = (ROOT / "REQUIREMENTS.md").read_text(encoding="utf-8")
-    ids = sorted(set(re.findall(r"\b([A-Z]{3,5}-\d{2}[a-z]?)\b", text)))
+    ids = sorted(set(re.findall(r"\b([A-Z]{2,5}-\d{2}[a-z]?)\b", text)))
     missing = [i for i in ids if i not in MAPPINGS]
     if missing:
         print("unmapped requirement IDs:", ", ".join(missing), file=sys.stderr)

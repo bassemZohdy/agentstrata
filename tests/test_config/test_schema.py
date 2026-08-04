@@ -193,9 +193,7 @@ class TestSchemaMeta:
     def test_schema_json_roundtrip(self):
         schema = json.loads(Path("schemas/agent.schema.json").read_text(encoding="utf-8"))
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-        assert schema["$id"] == (
-            f"https://agentbase.dev/schemas/agent.schema.v{SCHEMA_MAJOR}.json"
-        )
+        assert schema["$id"] == (f"https://agentbase.dev/schemas/agent.schema.v{SCHEMA_MAJOR}.json")
         props = set(schema["properties"])
         assert {"name", "engine", "llm", "k8s", "agents", "approval", "rag"} <= props
         assert set(schema["required"]) == {"name", "engine", "llm"}
