@@ -114,6 +114,7 @@ async def test_transfer_routing_streams_sub_agent_text(runner_factory):
     """MA-02: ADK native transfer — the root calls transfer_to_agent and the
     sub-agent's text arrives in the engine's event stream."""
     from google.adk.agents import LlmAgent
+    from google.adk.runners import Runner as AdkRunner
 
     from .conftest import ScriptedLlm
 
@@ -134,7 +135,6 @@ async def test_transfer_routing_streams_sub_agent_text(runner_factory):
         sub_agents=[sub],
     )
     # runner_factory builds from a config; construct the runner by hand here.
-    from google.adk.runners import Runner as AdkRunner
 
     from app.engine.runner import AgentRunner
     from app.storage.adk_adapter import AdkSessionService
@@ -330,6 +330,7 @@ async def test_transfer_recorded_in_run_audit():
     """MA-04: transfers land in the run audit (outcome), never as a
     user-visible session message."""
     from google.adk.agents import LlmAgent
+    from google.adk.runners import Runner as AdkRunner
 
     from .conftest import ScriptedLlm
 
@@ -349,7 +350,6 @@ async def test_transfer_recorded_in_run_audit():
         ),
         sub_agents=[sub],
     )
-    from google.adk.runners import Runner as AdkRunner
 
     from app.engine.agent import AppliedConfig
     from app.engine.runner import AgentRunner
@@ -368,3 +368,122 @@ async def test_transfer_recorded_in_run_audit():
     assert runs, "no run record persisted"
     outcome = runs[-1].outcome or {}
     assert outcome.get("transfers") == [{"from": "agent", "to": "researcher"}]
+
+
+@pytest.mark.asyncio
+async def test_iteration_budget_shared_across_transfer():
+    """MA-02/MA-05: the run's iteration budget is SHARED - the sub-agent's
+    LLM calls consume the same per-run counter, so a maxIterations=1 run that
+    transfers ends with the iteration limit rather than continuing."""
+    from google.adk.agents import LlmAgent
+    from google.adk.runners import Runner as AdkRunner
+
+    from app.engine.agent import AppliedConfig
+    from app.engine.events import Done
+    from app.engine.runner import AgentRunner
+    from app.storage.adk_adapter import AdkSessionService
+    from app.storage.memory import MemoryBackend
+
+    from .conftest import ScriptedLlm
+
+    config = _config(engine={"systemInstruction": "t", "maxIterations": 1})
+    root = LlmAgent(
+        name="agent",
+        instruction="t",
+        model=ScriptedLlm(
+            [
+                [function_call_response("transfer_to_agent", "t1", {"agent_name": "researcher"})],
+                [text_response("done")],
+            ]
+        ),
+        sub_agents=[
+            LlmAgent(
+                name="researcher",
+                instruction="r",
+                model=ScriptedLlm([[text_response("f")]]),
+            )
+        ],
+    )
+    backend = MemoryBackend()
+    runner = AgentRunner(
+        AppliedConfig.from_config(config),
+        AdkRunner(agent=root, app_name="agent", session_service=AdkSessionService(backend)),
+        backend,
+        app_name="agent",
+    )
+    events = [
+        e
+        async for e in runner.execute(
+            RunRequest(principal_id="p1", user_message="go", request_id="r-limits")
+        )
+    ]
+    done = [e for e in events if isinstance(e, Done)]
+    assert done, "no terminal event"
+    # the shared iteration budget cut the run (the transfer call or the
+    # sub-agent's call exhausted it)
+    assert done[0].x_agent_status == "iteration_limit", done[0]
+
+
+@pytest.mark.asyncio
+async def test_session_replay_does_not_replay_transfer_as_user_message():
+    """MA-05: the stored session carries exactly the user + model turns - the
+    transfer is never a user-visible session message; a second run on the
+    same session starts from the NEW user message only."""
+    from google.adk.agents import LlmAgent
+    from google.adk.runners import Runner as AdkRunner
+
+    from app.engine.agent import AppliedConfig
+    from app.engine.events import Done
+    from app.engine.runner import AgentRunner
+    from app.storage.adk_adapter import AdkSessionService
+    from app.storage.memory import MemoryBackend
+
+    from .conftest import ScriptedLlm
+
+    sub = LlmAgent(
+        name="researcher",
+        instruction="r",
+        model=ScriptedLlm([[text_response("findings A")]]),
+    )
+    root = LlmAgent(
+        name="agent",
+        instruction="t",
+        model=ScriptedLlm(
+            [
+                [function_call_response("transfer_to_agent", "t1", {"agent_name": "researcher"})],
+                [text_response("done")],
+            ]
+        ),
+        sub_agents=[sub],
+    )
+    backend = MemoryBackend()
+    runner = AgentRunner(
+        AppliedConfig.from_config(_config()),
+        AdkRunner(agent=root, app_name="agent", session_service=AdkSessionService(backend)),
+        backend,
+        app_name="agent",
+    )
+    req1 = RunRequest(principal_id="p1", user_message="research X", request_id="r-replay-1")
+    first = [e async for e in runner.execute(req1)]
+    assert first  # run completed with a transfer
+    assert req1.session_id, "the run created a session"
+    # the stored session has exactly the user + model turns (MA-04)
+    session = await backend.get_session(
+        agent_name="agent", principal_id="p1", session_id=req1.session_id
+    )
+    roles = [e.get("role") for e in (session.events or [])]
+    # exactly one real user message and one final model turn; the transfer is
+    # stored only as role-less function events, never as a user-visible
+    # message (MA-04)
+    assert roles.count("user") == 1, roles
+    assert roles.count("model") == 1, roles
+    # a second run on the SAME session starts from the new user message only
+    req2 = RunRequest(
+        principal_id="p1",
+        user_message="follow up",
+        request_id="r-replay-2",
+        session_id=req1.session_id,
+    )
+    second = [e async for e in runner.execute(req2)]
+    done2 = [e for e in second if isinstance(e, Done)]
+    assert done2 and done2[0].finish_reason == "stop"

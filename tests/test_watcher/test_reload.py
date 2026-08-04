@@ -16,11 +16,16 @@ from app.watcher.watcher import ConfigMapWatcher, FakeKubeClient, _extract_overl
 REPO_CONFIG = str(Path(__file__).resolve().parents[2] / "config")
 
 
-def _resolved_config():
+def _resolved_config(agents=None):
+    import json as _json
+
     from app.config.resolver import resolve
     from app.config.validate import validate_resolution
 
-    res = resolve(env={}, bundled_dir=REPO_CONFIG, argv=[])
+    env = {}
+    if agents:
+        env["AGENT_APPLICATION_JSON"] = _json.dumps({"agents": agents})
+    res = resolve(env=env, bundled_dir=REPO_CONFIG, argv=[])
     result = validate_resolution(res)
     assert result.ok
     assert result.config is not None
@@ -388,3 +393,92 @@ class TestMultiAgentReloadMA05:
         component = manager.components["agent"]
         assert [a.name for a in component.sub_agents] == ["worker", "helper"]
         assert [a.name for a in component.agent.sub_agents] == ["worker", "helper"]
+
+
+class TestReloadWithInFlightRunsMA05:
+    @pytest.mark.asyncio
+    async def test_rebuild_during_inflight_run_is_safe(self):
+        """MA-05: a component rebuild while a run is in flight is safe — the
+        in-flight run finishes against its original generation and the new
+        runner serves subsequent requests."""
+        import asyncio
+
+        from google.adk.models import BaseLlm
+        from google.adk.models.llm_response import LlmResponse
+        from google.adk.runners import Runner as AdkRunner
+        from google.genai import types
+
+        from app.engine.agent import AppliedConfig, build_agent_component
+        from app.engine.runner import AgentRunner, RunRequest
+        from app.storage.adk_adapter import AdkSessionService
+        from app.storage.memory import MemoryBackend
+
+        class HeldLlm(BaseLlm):
+            model: str = "mock"
+            gate: asyncio.Event | None = None
+            text: str = "old-gen"
+
+            async def generate_content_async(self, llm_request, stream: bool = False):
+                assert self.gate is not None
+                await self.gate.wait()
+                yield LlmResponse(
+                    content=types.Content(role="model", parts=[types.Part(text=self.text)])
+                )
+
+        def builder(cfg, generation):
+            component = build_agent_component(cfg, generation)
+            backend = MemoryBackend()
+            service = AdkSessionService(backend)
+            adk = AdkRunner(agent=component.agent, app_name="agent", session_service=service)
+            runner = AgentRunner(
+                AppliedConfig.from_config(cfg, generation),
+                adk,
+                backend,
+                app_name="agent",
+            )
+            return {
+                "applied": AppliedConfig.from_config(cfg, generation),
+                "agent": component,
+                "runner": runner,
+                "backend": backend,
+                "generation": generation,
+            }
+
+        config = _resolved_config(agents=[])
+        components = builder(config, 1)
+        held_model = HeldLlm(gate=asyncio.Event(), text="old-gen")
+        components["agent"].agent.model = held_model
+        manager = ReloadManager(builder, config, components, bundled_dir=REPO_CONFIG)
+
+        async def _collect(gen):
+            return [e async for e in gen]
+
+        in_flight = asyncio.create_task(
+            _collect(
+                components["runner"].execute(
+                    RunRequest(principal_id="p1", user_message="hi", request_id="r-inflight")
+                )
+            )
+        )
+        await asyncio.sleep(0.3)
+        assert not in_flight.done(), "run should be held in the model call"
+
+        # rebuild (agents change) while the run is in flight
+        result = await manager.apply_tier8(
+            {"agents": [{"name": "worker", "systemInstruction": "w"}]}
+        )
+        assert result.outcome == "applied_rebuild"
+        assert manager.generation == 2
+
+        # release: the in-flight run completes against the OLD generation
+        # (the rebuild swapped components["agent"]; the held model reference
+        # belongs to the retired generation's agent)
+        held_model.gate.set()
+        events = await in_flight
+        from app.engine.events import Done
+
+        done = [e for e in events if isinstance(e, Done)]
+        assert done and done[0].finish_reason == "stop"
+        # the new runner carries the sub-agent tree
+        new_component = manager.components["agent"]
+        assert [a.name for a in new_component.sub_agents] == ["worker"]
