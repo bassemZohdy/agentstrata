@@ -349,9 +349,7 @@ class RagEmbedding(BaseModel):
 
     model_config = BASE_CONFIG
 
-    provider: RagEmbeddingProvider = Field(
-        default=RagEmbeddingProvider.GEMINI, strict=False
-    )
+    provider: RagEmbeddingProvider = Field(default=RagEmbeddingProvider.GEMINI, strict=False)
     model: str = Field(default="text-embedding-004", min_length=1, max_length=200)
     apiKeyEnv: str | None = _SECRET_REF
     apiKeyFile: str | None = _SECRET_REF
@@ -377,9 +375,7 @@ class RagConfig(BaseModel):
         # RAG-01: overlap < chunk size (a degenerate overlap degenerates the
         # chunk identity).
         if self.chunkOverlapChars >= self.chunkChars:
-            raise ValueError(
-                "rag.chunkOverlapChars must be smaller than rag.chunkChars"
-            )
+            raise ValueError("rag.chunkOverlapChars must be smaller than rag.chunkChars")
         return self
 
 

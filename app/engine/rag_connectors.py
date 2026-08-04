@@ -119,10 +119,13 @@ class _ChromaStore:
             )
         return self._collection
 
-    async def upsert_chunks(self, **kwargs: Any) -> int:
+    async def upsert_document(self, **kwargs: Any) -> Any:
         import asyncio
 
         return await asyncio.to_thread(self._upsert, kwargs)
+
+    async def get_document(self, **kwargs: Any) -> Any:
+        return None  # real-instance proof deferred (ACC-01 deviation)
 
     def _upsert(self, kwargs: dict[str, Any]) -> int:
         collection = self._ensure()
@@ -224,8 +227,11 @@ class _PgvectorStore:
         self._cfg = cfg
         self._conn: Any = None
 
-    async def upsert_chunks(self, **kwargs: Any) -> int:
-        return 0  # real-instance proof deferred (ACC-01 deviation)
+    async def upsert_document(self, **kwargs: Any) -> Any:
+        return None  # real-instance proof deferred (ACC-01 deviation)
+
+    async def get_document(self, **kwargs: Any) -> Any:
+        return None
 
     async def search(self, **kwargs: Any) -> list[Any]:
         return []

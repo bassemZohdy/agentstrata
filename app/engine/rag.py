@@ -12,9 +12,10 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..config.models import RagConfig
+from ..storage.model import utcnow
 
 # The delimited context boundary (RAG-02: one delimited context message).
 RAG_CONTEXT_BEGIN = "<|rag-context|>"
@@ -66,6 +67,21 @@ def chunk_key(
 
 
 @dataclass
+class DocumentRecord:
+    """RAG-03: owner-scoped document metadata (never the stored text)."""
+
+    document_id: str
+    agent_name: str
+    principal_id: str
+    chunk_count: int
+    content_hash: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    embedding_model: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
 class ChunkHit:
     """One retrieved chunk with its stable score."""
 
@@ -84,15 +100,21 @@ class ChunkHit:
 class RagStore(Protocol):
     """The vector-store contract (chroma/pgvector; memory substitute)."""
 
-    async def upsert_chunks(
+    async def upsert_document(
         self,
         *,
         agent_name: str,
         principal_id: str,
         document_id: str,
         embedding_model: str,
+        metadata: dict[str, Any],
         chunks: list[tuple[int, str, str, list[float]]],
-    ) -> int: ...
+        content_hash: str,
+    ) -> DocumentRecord: ...
+
+    async def get_document(
+        self, *, agent_name: str, principal_id: str, document_id: str
+    ) -> DocumentRecord | None: ...
 
     async def search(
         self,
@@ -136,16 +158,19 @@ class MemoryRagStore:
 
     def __init__(self) -> None:
         self._chunks: dict[str, _StoredChunk] = {}
+        self._documents: dict[tuple[str, str, str], DocumentRecord] = {}
 
-    async def upsert_chunks(
+    async def upsert_document(
         self,
         *,
         agent_name: str,
         principal_id: str,
         document_id: str,
         embedding_model: str,
+        metadata: dict[str, Any],
         chunks: list[tuple[int, str, str, list[float]]],
-    ) -> int:
+        content_hash: str,
+    ) -> DocumentRecord:
         count = 0
         for chunk_index, text, chunk_hash, embedding in chunks:
             key = chunk_key(
@@ -166,7 +191,26 @@ class MemoryRagStore:
                 embedding=embedding,
             )
             count += 1
-        return count
+        # RAG-03: atomic upsert — chunks and the registry land together.
+        now = utcnow().isoformat()
+        existing = self._documents.get((agent_name, principal_id, document_id))
+        self._documents[(agent_name, principal_id, document_id)] = DocumentRecord(
+            document_id=document_id,
+            agent_name=agent_name,
+            principal_id=principal_id,
+            chunk_count=count,
+            content_hash=content_hash,
+            metadata=metadata,
+            embedding_model=embedding_model,
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+        )
+        return self._documents[(agent_name, principal_id, document_id)]
+
+    async def get_document(
+        self, *, agent_name: str, principal_id: str, document_id: str
+    ) -> DocumentRecord | None:
+        return self._documents.get((agent_name, principal_id, document_id))
 
     async def search(
         self,
@@ -207,6 +251,7 @@ class MemoryRagStore:
         ]
         for k in keys:
             del self._chunks[k]
+        self._documents.pop((agent_name, principal_id, document_id), None)
         return len(keys)
 
     async def delete_principal(self, *, agent_name: str, principal_id: str) -> int:
@@ -217,6 +262,8 @@ class MemoryRagStore:
         ]
         for k in keys:
             del self._chunks[k]
+        for key in [d for d in self._documents if d[0] == agent_name and d[1] == principal_id]:
+            del self._documents[key]
         return len(keys)
 
     async def health(self) -> bool:
@@ -322,23 +369,25 @@ class RagRetriever:
         principal_id: str,
         document_id: str,
         text: str,
-    ) -> tuple[int, str]:
+        metadata: dict[str, Any] | None = None,
+    ) -> DocumentRecord:
         """RAG-03: deterministic chunking + batch embedding + atomic upsert
         (embedding failure leaves the previous version intact)."""
         chunks = chunk_text(text, self.config.chunkChars, self.config.chunkOverlapChars)
         hashes = [content_hash(c) for c in chunks]
         vectors = await self.embedding.embed(chunks)
-        count = await self.store.upsert_chunks(
+        # the document hash is the hash of the chunk hashes (stable under
+        # the same chunk identity) — RAG-03 content hash
+        doc_hash = hashlib.sha256("|".join(hashes).encode("utf-8")).hexdigest()
+        return await self.store.upsert_document(
             agent_name=agent_name,
             principal_id=principal_id,
             document_id=document_id,
             embedding_model=self.embedding.model,
+            metadata=metadata or {},
             chunks=[(i, chunks[i], hashes[i], vectors[i]) for i in range(len(chunks))],
+            content_hash=doc_hash,
         )
-        # the document hash is the hash of the chunk hashes (stable under
-        # the same chunk identity) — RAG-03 content hash
-        doc_hash = hashlib.sha256("|".join(hashes).encode("utf-8")).hexdigest()
-        return count, doc_hash
 
     async def delete_document(self, *, agent_name: str, principal_id: str, document_id: str) -> int:
         return await self.store.delete_document(

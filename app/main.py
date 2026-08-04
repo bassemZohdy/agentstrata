@@ -164,6 +164,7 @@ def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str
         "mcp": mcp,
         "backend": backend,
         "session_service": service,
+        "rag": rag,  # None unless rag.enabled (RAG-03 ingestion surface)
     }
 
 

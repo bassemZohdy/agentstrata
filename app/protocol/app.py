@@ -23,7 +23,7 @@ from .. import __version__
 from ..config.capabilities import capability_status
 from .auth import AuthProvider
 from .ratelimit import FixedWindowLimiter
-from .routes import approvals, chat, health, sessions
+from .routes import approvals, chat, documents, health, sessions
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +61,9 @@ async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> Asyn
     were never started in production). Also writes the CNT-10 bound-port
     marker (uvicorn binds before the lifespan startup, so the file appears
     only after a successful bind)."""
+    import logging
     import os
     from pathlib import Path
-
-    import logging
 
     marker = Path(os.environ.get("AGENT_HEALTH_MARKER", "/tmp/agentbase.ready"))
     with suppress(OSError):
@@ -234,6 +233,7 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
     health.register(app, config, components, mode)
     chat.register(app, config, components)
     approvals.register(app, config, components)
+    documents.register(app, config, components)
     sessions.register(app, config, components)
     sessions.register_models(app, config)
     # API-16: the ACP surface registers only when enabled; otherwise the

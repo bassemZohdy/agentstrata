@@ -58,9 +58,7 @@ class RecordingLlm(BaseLlm):
         parts = contents[-1].parts if contents else []
         RecordingLlm.seen.append((parts[0].text or "") if parts else "")
         RecordingLlm.turn += 1
-        yield LlmResponse(
-            content=types.Content(role="model", parts=[types.Part(text="done")])
-        )
+        yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="done")]))
 
 
 class TestChunking:
@@ -100,12 +98,14 @@ class TestMemoryStore:
         ]
         for doc_id, text in docs:
             vectors = await emb.embed([text])
-            await store.upsert_chunks(
+            await store.upsert_document(
                 agent_name="agent",
                 principal_id="p1",
                 document_id=doc_id,
                 embedding_model=emb.model,
+                metadata={},
                 chunks=[(0, text, content_hash(text), vectors[0])],
+                content_hash=content_hash(text),
             )
         # the deterministic embedding is identity-based: exact-text queries
         # score 1.0; anything else is a near-zero random cosine
@@ -130,24 +130,34 @@ class TestMemoryStore:
         emb = DeterministicEmbedding()
         text = "shared secret content"
         vectors = await emb.embed([text])
-        await store.upsert_chunks(
+        await store.upsert_document(
             agent_name="agent",
             principal_id="p1",
             document_id="d1",
             embedding_model=emb.model,
+            metadata={},
             chunks=[(0, text, content_hash(text), vectors[0])],
+            content_hash=content_hash(text),
         )
         query = (await emb.embed([text]))[0]
         # p2 must not see p1's chunks (RAG-02 principal scoping)
         assert (
             await store.search(
-                agent_name="agent", principal_id="p2", query_embedding=query, top_k=5, min_score=0.99
+                agent_name="agent",
+                principal_id="p2",
+                query_embedding=query,
+                top_k=5,
+                min_score=0.99,
             )
         ) == []
         # the other agent's namespace is separate too
         assert (
             await store.search(
-                agent_name="other", principal_id="p1", query_embedding=query, top_k=5, min_score=0.99
+                agent_name="other",
+                principal_id="p1",
+                query_embedding=query,
+                top_k=5,
+                min_score=0.99,
             )
         ) == []
 
@@ -158,19 +168,28 @@ class TestMemoryStore:
         for i in range(10):
             text = f"unique phrase {i} xyz"
             vectors = await emb.embed([text])
-            await store.upsert_chunks(
+            await store.upsert_document(
                 agent_name="agent",
                 principal_id="p1",
                 document_id=f"d{i}",
                 embedding_model=emb.model,
+                metadata={},
                 chunks=[(0, text, content_hash(text), vectors[0])],
+                content_hash=content_hash(text),
             )
         query = (await emb.embed(["unique phrase 3 xyz"]))[0]
-        assert len(
-            await store.search(
-                agent_name="agent", principal_id="p1", query_embedding=query, top_k=3, min_score=0.0
+        assert (
+            len(
+                await store.search(
+                    agent_name="agent",
+                    principal_id="p1",
+                    query_embedding=query,
+                    top_k=3,
+                    min_score=0.0,
+                )
             )
-        ) == 3
+            == 3
+        )
         # the exact match always wins the ranking
         ranked = await store.search(
             agent_name="agent", principal_id="p1", query_embedding=query, top_k=10, min_score=0.0
@@ -188,26 +207,37 @@ class TestMemoryStore:
         emb = DeterministicEmbedding()
         for doc_id in ("d1", "d2"):
             vectors = await emb.embed([doc_id])
-            await store.upsert_chunks(
+            await store.upsert_document(
                 agent_name="agent",
                 principal_id="p1",
                 document_id=doc_id,
                 embedding_model=emb.model,
+                metadata={},
                 chunks=[(0, doc_id, content_hash(doc_id), vectors[0])],
+                content_hash=content_hash(doc_id),
             )
-        assert await store.delete_document(
-            agent_name="agent", principal_id="p1", document_id="d1"
-        ) == 1
+        assert (
+            await store.delete_document(agent_name="agent", principal_id="p1", document_id="d1")
+            == 1
+        )
         query = (await emb.embed(["d1"]))[0]
         assert (
             await store.search(
-                agent_name="agent", principal_id="p1", query_embedding=query, top_k=5, min_score=0.99
+                agent_name="agent",
+                principal_id="p1",
+                query_embedding=query,
+                top_k=5,
+                min_score=0.99,
             )
         ) == []
         assert await store.delete_principal(agent_name="agent", principal_id="p1") == 1
         assert (
             await store.search(
-                agent_name="agent", principal_id="p1", query_embedding=query, top_k=5, min_score=0.99
+                agent_name="agent",
+                principal_id="p1",
+                query_embedding=query,
+                top_k=5,
+                min_score=0.99,
             )
         ) == []
 
@@ -225,7 +255,9 @@ class TestRetriever:
     @pytest.mark.asyncio
     async def test_context_block_shape(self):
         r = _retriever()
-        await r.ingest(agent_name="agent", principal_id="p1", document_id="doc-1", text="alpha beta gamma")
+        await r.ingest(
+            agent_name="agent", principal_id="p1", document_id="doc-1", text="alpha beta gamma"
+        )
         context = await r.retrieve(agent_name="agent", principal_id="p1", query="alpha beta gamma")
         assert context is not None
         assert context.startswith(RAG_CONTEXT_BEGIN)
@@ -236,21 +268,27 @@ class TestRetriever:
     @pytest.mark.asyncio
     async def test_retrieval_scoped_to_principal(self):
         r = _retriever()
-        await r.ingest(agent_name="agent", principal_id="p1", document_id="doc-1", text="alpha beta gamma")
+        await r.ingest(
+            agent_name="agent", principal_id="p1", document_id="doc-1", text="alpha beta gamma"
+        )
         assert await r.retrieve(agent_name="agent", principal_id="p2", query="alpha beta") is None
 
     @pytest.mark.asyncio
     async def test_ingest_returns_chunk_count_and_hash(self):
         r = _retriever(chunkChars=8, chunkOverlapChars=2)
-        count, doc_hash = await r.ingest(
+        record = await r.ingest(
             agent_name="agent", principal_id="p1", document_id="doc-1", text="0123456789abcdef"
         )
-        assert count == 3  # 8/6/4 (last partial) with the 2-char overlap
-        assert len(doc_hash) == 64
-        count2, doc_hash2 = await r.ingest(
+        assert record.chunk_count == 3  # 8/6/4 (last partial) with the 2-char overlap
+        assert len(record.content_hash) == 64
+        record2 = await r.ingest(
             agent_name="agent", principal_id="p1", document_id="doc-1", text="0123456789abcdef"
         )
-        assert (count2, doc_hash2) == (count, doc_hash)  # deterministic fixtures
+        # deterministic fixtures + idempotent atomic upsert
+        assert (record2.chunk_count, record2.content_hash) == (
+            record.chunk_count,
+            record.content_hash,
+        )
 
 
 class TestRunnerIntegration:
@@ -274,7 +312,9 @@ class TestRunnerIntegration:
             embedding=DeterministicEmbedding(),
         )
         await retriever.ingest(
-            agent_name="agent", principal_id="p1", document_id="doc-1",
+            agent_name="agent",
+            principal_id="p1",
+            document_id="doc-1",
             text="the capital of France is Paris",
         )
         service = AdkSessionService(backend)
