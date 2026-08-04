@@ -111,7 +111,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | NFR-05 | tests/test_config/test_dump.py::TestNfr05 |
 | NFR-06 | tests/test_protocol/test_openai_sdk.py; TODO Decisions made |
 | NFR-07 | Milestone 8 chaos (slow/disconnected client) |
-| NFR-08 | TODO M8 chaos run (pending) |
+| NFR-08 | scripts/image-nfr.py (nfr08_reload: zero-downtime reload, docs/nfr-report.json) |
 | NFR-09 | Milestone 8 chaos (dependency recovery) |
 | NFR-10 | Milestone 8 (cross-platform portability) |
 | OBS-01 | app/observability/logging.py |

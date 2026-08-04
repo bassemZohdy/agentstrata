@@ -266,9 +266,7 @@ class TestCapability:
 
     def test_rag_accepted(self):
         # CAP-02 (P4): rag.enabled is accepted by the capability gate.
-        assert not any(
-            c == "capability_error" for _p, c in issues_for({"rag": {"enabled": True}})
-        )
+        assert not any(c == "capability_error" for _p, c in issues_for({"rag": {"enabled": True}}))
 
     def test_disabled_stubs_accepted(self):
         assert valid({"agents": [], "approval": {"enabled": False}, "rag": {"enabled": False}})
@@ -417,8 +415,7 @@ class TestMultiAgentSchemaMA01:
         )
         # rag is capability-accepted (P4)
         assert not any(
-            code == "capability_error"
-            for _p, code in issues_for(self._base(rag={"enabled": True}))
+            code == "capability_error" for _p, code in issues_for(self._base(rag={"enabled": True}))
         )
 
 
@@ -575,7 +572,6 @@ class TestRagSchemaRAG01:
 
     def test_document_size_bound(self):
         assert any(
-            code != "capability_error"
-            for _p, code in issues_for(self._doc(maxDocumentBytes=0))
+            code != "capability_error" for _p, code in issues_for(self._doc(maxDocumentBytes=0))
         )
         assert issues_for(self._doc(maxDocumentBytes=1024)) == []

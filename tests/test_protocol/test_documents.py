@@ -260,7 +260,9 @@ async def test_readyz_required_and_optional():
     mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
     mcp.configure(config.tools.mcpServers)
     await mcp.start()
-    retriever = RagRetriever(config=config.rag, store=BrokenStore(), embedding=DeterministicEmbedding())
+    retriever = RagRetriever(
+        config=config.rag, store=BrokenStore(), embedding=DeterministicEmbedding()
+    )
     comp = {
         "applied": applied,
         "agent": component,

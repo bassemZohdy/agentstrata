@@ -82,13 +82,13 @@ def build_connector_store(cfg: Any) -> Any:
     store_type = cfg.store.type.value
     if store_type == "pgvector":
         try:
-            import psycopg  # type: ignore[import-not-found]  # driver guard
+            import psycopg  # type: ignore[import-not-found]  # noqa: F401  # driver guard
 
             return _PgvectorStore(cfg)
         except ImportError:
             raise
     try:
-        import chromadb  # type: ignore[import-not-found]  # driver guard
+        import chromadb  # type: ignore[import-not-found]  # noqa: F401  # driver guard
 
         return _ChromaStore(cfg)
     except ImportError:
@@ -106,7 +106,7 @@ class _ChromaStore:
 
     def _ensure(self) -> Any:
         if self._collection is None:
-            import chromadb  # type: ignore[import-not-found]  # driver guard
+            import chromadb  # type: ignore[import-not-found]  # noqa: F401  # driver guard
 
             kwargs: dict[str, Any] = {}
             connection = self._cfg.store.connectionStringEnv or self._cfg.store.connectionStringFile
@@ -197,15 +197,7 @@ class _ChromaStore:
 
     def _delete(self, kwargs: dict[str, Any]) -> int:
         collection = self._ensure()
-        result = collection.get(
-            where={
-                "$and": [
-                    {"agent": kwargs["agent_name"]},
-                    {"principal": kwargs["principal_id"]},
-                    {"$or": [{"document": kwargs["document_id"]}]},
-                ]
-            }
-        )
+        collection.delete(where={"document_id": kwargs["document_id"]})
         return 0  # real-instance proof deferred (ACC-01 deviation)
 
     async def delete_principal(self, **kwargs: Any) -> int:

@@ -151,7 +151,7 @@ MAPPINGS: dict[str, str] = {
     "REL-04": "app/watcher/reload.py (generation/hash); app/protocol/routes/health.py",
     "REL-05": "app/watcher/reload.py + watcher (fallback)",
     "REL-06": "app/watcher/reload.py::_audit",
-    "NFR-08": "TODO M8 chaos run (pending)",
+    "NFR-08": "scripts/image-nfr.py (nfr08_reload: zero-downtime reload, docs/nfr-report.json)",
     "SEC-07": "app/engine + app/engine/mcp (untrusted input bounded/redacted); docs/deployment.md",
     "TRUST-01": "app/config/parse.py (trusted source handling); app/protocol/auth.py; MCP bounds",
     "TRUST-02": "app/storage/* (isolation); tests/test_storage/test_contract.py",

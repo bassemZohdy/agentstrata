@@ -74,8 +74,8 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
         principal = getattr(request.state, "principal", "anonymous")
         try:
             body = await request.json()
-        except Exception:  # noqa: BLE001
-            raise PublicErrorResponse("invalid_request", "invalid JSON body", 400)
+        except Exception as exc:  # noqa: BLE001
+            raise PublicErrorResponse("invalid_request", "invalid JSON body", 400) from exc
         if not isinstance(body, dict):
             raise PublicErrorResponse("invalid_request", "body must be an object", 400)
         idem_key = _canonical_idempotency_key(body.get("idempotency_key"))
@@ -120,12 +120,12 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 text=text,
                 metadata=metadata,
             )
-        except Exception:  # noqa: BLE001 - RAG-04: ingestion never degrades
+        except Exception as exc:  # noqa: BLE001 - RAG-04: ingestion never degrades
             raise PublicErrorResponse(
                 "rag_unavailable",
                 "document ingestion failed (store or embedding unavailable)",
                 503,
-            )
+            ) from exc
         payload = {
             "object": "document",
             "id": record.document_id,
