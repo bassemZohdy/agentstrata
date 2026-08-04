@@ -61,6 +61,7 @@ class RunRequest:
     max_tokens_override: int | None = None
     idempotency_key: str | None = None
     agent_name: str = "agent"
+    streaming: bool = False
 
 
 @dataclass
@@ -274,9 +275,14 @@ class AgentRunner:
         return genai_types.Content(role="user", parts=[genai_types.Part(text=request.user_message)])
 
     def _run_config(self, request: RunRequest) -> Any:
-        from google.adk.agents.run_config import RunConfig
+        from google.adk.agents.run_config import RunConfig, StreamingMode
 
         kwargs: dict[str, Any] = {}
+        if request.streaming:
+            # API-13/ENG: real model deltas for streaming requests. Without
+            # this, ADK calls the model non-streaming and the SSE surface
+            # emits one big delta at the end (no first-token streaming).
+            kwargs["streaming_mode"] = StreamingMode.SSE
         if request.temperature_override is not None and self._applied.overrides_allow_temperature:
             kwargs["temperature"] = min(
                 request.temperature_override, self._applied.overrides_temperature_max

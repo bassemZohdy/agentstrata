@@ -210,12 +210,19 @@ class ReloadManager:
 
         # Atomic pointer swap (REL-03): replace in place so the running app
         # (which holds a reference to this dict) sees the new generation;
-        # retired components close after.
+        # retired components close after. Manager-owned singletons that
+        # build_components does not produce (reload_manager, watcher,
+        # shutdown, run_slots, run_registry, observability) MUST survive the
+        # swap — wiping them would drop the reload loop, the shutdown drain
+        # gate, the run cap, and the OTel handle after the first rebuild.
         old_components = dict(self._components)
         self._generation += 1
         self._config = new_config
         replacements["generation"] = self._generation
         replacements["config_hash"] = _config_hash(new_config)
+        for key, value in old_components.items():
+            if key not in replacements:
+                replacements[key] = value
         self._components.clear()
         self._components.update(replacements)
         await _close_components(old_components)

@@ -52,10 +52,10 @@ mkdir -p "$(dirname "${LOG}")"
 SENTINEL="app/protocol/app.py"
 LOCAL_HASH="$(sha256sum "${ROOT}/${SENTINEL}" | cut -d' ' -f1)"
 IMAGE_HASH="$(MSYS_NO_PATHCONV=1 docker run --rm --platform "linux/${PLATFORM}" \
-  --entrypoint sha256sum "${TEST_TAG}" "/app/${SENTINEL}" 2>/dev/null | cut -d' ' -f1)"
+	--entrypoint sha256sum "${TEST_TAG}" "/app/${SENTINEL}" 2>/dev/null | cut -d' ' -f1)"
 if [[ "${LOCAL_HASH}" != "${IMAGE_HASH}" ]]; then
-  echo "==> ERROR: ${TEST_TAG} is stale (${SENTINEL} differs from the working tree); rebuild without --no-build" >&2
-  exit 3
+	echo "==> ERROR: ${TEST_TAG} is stale (${SENTINEL} differs from the working tree); rebuild without --no-build" >&2
+	exit 3
 fi
 STALENESS="pass"
 # MSYS_NO_PATHCONV: git-bash on Windows would otherwise rewrite -w/-v/-e values

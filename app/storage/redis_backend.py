@@ -93,7 +93,20 @@ class RedisBackend(StorageBackend):
         self._ready = False
 
     async def health(self) -> bool:
-        return self._ready
+        """SES-04/NFR-09: re-probe on each call (bounded) so readiness
+        converges after the dependency dies or recovers. Every call probes:
+        a one-off failure must not stick (recovery semantics)."""
+        import asyncio
+
+        try:
+            await asyncio.wait_for(self._client.get("agentbase:health"), timeout=2)
+            self._ready = True
+            return True
+        except Exception as exc:  # noqa: BLE001 - dependency outage
+            if self._ready:
+                logger.warning("redis health probe failed: %s", type(exc).__name__)
+            self._ready = False
+            return False
 
     # -- keys --------------------------------------------------------------------------
 
@@ -450,7 +463,7 @@ class RedisBackend(StorageBackend):
             [],
             [str(_to_int(now.timestamp())), str(self._settings.run_ttl_seconds)],
         )
-        return {"sessions": 0, "runs": int(deleted or 0), "idempotency": 0}
+        return {"sessions": 0, "runs": _to_int(deleted), "idempotency": 0}
 
     # -- fencing (SES-05 lease) ----------------------------------------------------------------
 

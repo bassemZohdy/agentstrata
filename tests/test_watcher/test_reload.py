@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -118,6 +119,24 @@ class TestReloadManager:
         assert manager.components["generation"] == 2
 
     @pytest.mark.asyncio
+    async def test_component_rebuild_preserves_manager_owned_singletons(self):
+        """M8 gate regression: the rebuild swap wiped keys that
+        build_components does not produce (reload_manager, watcher, shutdown,
+        run_slots, run_registry), breaking /health generation reporting, the
+        drain gate, and the run cap after the first rebuild."""
+        config = _resolved_config()
+        components = _build_components(config, 1)
+        sentinel = object()
+        for key in ("reload_manager", "watcher", "shutdown", "run_slots", "run_registry"):
+            components[key] = sentinel
+        manager = ReloadManager(_build_components, config, components, bundled_dir=REPO_CONFIG)
+        result = await manager.apply_tier8({"llm": {"model": "gpt-5"}})
+        assert result.outcome == "applied_rebuild"
+        for key in ("reload_manager", "watcher", "shutdown", "run_slots", "run_registry"):
+            assert manager.components[key] is sentinel, key
+        assert manager.components["generation"] == 2
+
+    @pytest.mark.asyncio
     async def test_config_hash_tracks_generation(self):
         config = _resolved_config()
         manager = ReloadManager(
@@ -186,3 +205,87 @@ class TestWatcher:
         await asyncio.gather(task, return_exceptions=True)
         assert applied and applied[0] == {"engine": {"maxIterations": 42}}
         assert watcher.health["connected"]
+
+
+def test_production_wiring_starts_the_watcher_on_app_startup():
+    """M8 gate regression: main.py constructs the ConfigMapWatcher but never
+    called run(); the app startup hook must start the watch loop (the tier-8
+    reload path was dead in production)."""
+    from fastapi.testclient import TestClient
+
+    from app.protocol.app import create_app
+
+    started = asyncio.Event()
+
+    class RecordingWatcher:
+        async def run(self) -> None:
+            started.set()
+            # Stay alive until stopped (like the real watch loop).
+            while True:
+                await asyncio.sleep(1)
+
+        async def stop(self) -> None:
+            return None
+
+    config = AgentConfig.model_validate(
+        {
+            "name": "agent",
+            "engine": {"systemInstruction": "t"},
+            "llm": {"provider": "gemini", "model": "mock"},
+        }
+    )
+    from app.storage.memory import MemoryBackend
+
+    components = {
+        "applied": AppliedConfig.from_config(config),
+        "backend": MemoryBackend(),
+        "mcp": SimpleNamespace(readiness=lambda: True, health=lambda: []),
+        "watcher": RecordingWatcher(),
+    }
+    app = create_app(config, components, mode="watcher")
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+        # The startup hook must have launched the watch loop.
+        assert started.is_set(), "watcher.run() was never started"
+    # The task reference is retained (no GC collection of a pending task).
+    assert "watcher_task" in components
+
+
+def test_production_wiring_starts_mcp_reconcilers_on_app_startup():
+    """M8 gate regression: main.py configures the ServerManager but never
+    calls start(), so the per-server reconcilers (MCP-01 connect/reconnect)
+    never ran in production and every MCP server stayed disconnected."""
+    from fastapi.testclient import TestClient
+
+    from app.protocol.app import create_app
+
+    started = asyncio.Event()
+
+    class RecordingMcp:
+        async def start(self) -> None:
+            started.set()
+
+        def readiness(self) -> bool:
+            return True
+
+        def health(self) -> list:
+            return []
+
+    config = AgentConfig.model_validate(
+        {
+            "name": "agent",
+            "engine": {"systemInstruction": "t"},
+            "llm": {"provider": "gemini", "model": "mock"},
+        }
+    )
+    from app.storage.memory import MemoryBackend
+
+    components = {
+        "applied": AppliedConfig.from_config(config),
+        "backend": MemoryBackend(),
+        "mcp": RecordingMcp(),
+    }
+    app = create_app(config, components, mode="standalone")
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+        assert started.is_set(), "mcp.start() was never called"

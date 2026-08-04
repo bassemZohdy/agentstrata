@@ -92,6 +92,7 @@ SQL = {
         "INSERT INTO agent_schema (version) VALUES (%s) ON CONFLICT (version) DO NOTHING"
     ),
     "schema_version": "SELECT version FROM agent_schema ORDER BY version DESC LIMIT 1",
+    "health_probe": "SELECT 1",
     "insert_session": (
         "INSERT INTO agent_sessions "
         "(agent_name, principal_id, session_id, revision, data, created_at, updated_at) "
@@ -255,7 +256,19 @@ class PostgresBackend(StorageBackend):
         self._ready = False
 
     async def health(self) -> bool:
-        return self._ready
+        """SES-04/NFR-09: re-probe (bounded) so readiness converges after
+        the dependency dies or recovers, instead of freezing the boot flag."""
+        if not self._ready:
+            return False
+        import asyncio
+
+        try:
+            await asyncio.wait_for(self._db.query(SQL["health_probe"]), timeout=2)
+            self._ready = True
+            return True
+        except Exception:  # noqa: BLE001 - dependency outage
+            self._ready = False
+            return False
 
     # -- helpers -------------------------------------------------------------------
 

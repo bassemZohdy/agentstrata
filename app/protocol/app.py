@@ -9,8 +9,11 @@ API-00.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -34,7 +37,6 @@ class RunSlotGate:
     """
 
     def __init__(self, limit: int) -> None:
-        import asyncio
 
         self._limit = limit
         self._in_flight = 0
@@ -52,6 +54,20 @@ class RunSlotGate:
         self._in_flight = max(0, self._in_flight - 1)
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI, components: dict[str, Any]) -> AsyncIterator[None]:
+    """Startup: the tier-8 watch loop and the MCP reconcilers need a live
+    event loop; main.py only constructs them (M8 gate regressions: both
+    were never started in production)."""
+    watcher = components.get("watcher")
+    if watcher is not None and hasattr(watcher, "run"):
+        components["watcher_task"] = asyncio.create_task(watcher.run())
+    mcp = components.get("mcp")
+    if mcp is not None and hasattr(mcp, "start") and not getattr(mcp, "_started", False):
+        await mcp.start()
+    yield
+
+
 def create_app(config: Any, components: dict[str, Any], mode: str = "standalone") -> FastAPI:
     """Build the FastAPI app (API-00 surface-wide contract)."""
     app = FastAPI(
@@ -60,6 +76,7 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
         docs_url=None,  # API-18: documented OpenAPI, no interactive docs by default
         redoc_url=None,
         openapi_url="/openapi.json",
+        lifespan=lambda _app: _lifespan(_app, components),
     )
 
     # NFR-03 / API-15: replica-local in-flight run cap. The chat route

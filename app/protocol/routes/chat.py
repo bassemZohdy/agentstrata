@@ -135,6 +135,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             max_tokens_override=max_tokens_override,
             idempotency_key=idem_key,
             agent_name=agent_name,
+            streaming=streaming,
         )
 
         if idem_key:

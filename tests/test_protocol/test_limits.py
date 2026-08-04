@@ -55,7 +55,24 @@ class StaticLlm(BaseLlm):
         )
 
 
-def _build_app(server: dict, gate: asyncio.Event) -> tuple[httpx.ASGITransport, dict]:
+class MultiDeltaLlm(BaseLlm):
+    """Yields one LlmResponse per ``deltas`` entry with a small delay, so a
+    real streaming request must emit one content delta per entry."""
+
+    model: str = "mock"
+    deltas: list[str] = []
+
+    async def generate_content_async(self, llm_request, stream: bool = False):
+        for delta in self.deltas:
+            await asyncio.sleep(0.05)
+            yield LlmResponse(
+                content=genai_types.Content(role="model", parts=[genai_types.Part(text=delta)])
+            )
+
+
+def _build_app(
+    server: dict, gate: asyncio.Event, llm: BaseLlm | None = None
+) -> tuple[httpx.ASGITransport, dict]:
     config = AgentConfig.model_validate(
         {
             "name": "agent",
@@ -66,7 +83,8 @@ def _build_app(server: dict, gate: asyncio.Event) -> tuple[httpx.ASGITransport, 
     )
     backend = MemoryBackend()
     applied = AppliedConfig.from_config(config)
-    llm = HoldingLlm(gate=gate)
+    if llm is None:
+        llm = HoldingLlm(gate=gate)
     agent = LlmAgent(name=config.name, instruction=config.engine.systemInstruction, model=llm)
     service = AdkSessionService(backend)
     adk_runner = AdkRunner(agent=agent, app_name=APP, session_service=service)
@@ -252,3 +270,21 @@ async def test_rebuild_swap_reaches_chat_route():
     after = await _request(transport, "POST", "/v1/chat/completions", _chat_body())
     assert after.status_code == 200
     assert after.json()["choices"][0]["message"]["content"] == "swapped"
+
+
+async def test_streaming_emits_real_model_deltas():
+    """API-13: a streaming request against a multi-delta model must emit one
+    content delta per model delta. Regression: streaming_mode was never set on
+    the ADK RunConfig, so the model call was non-streaming and the SSE surface
+    emitted a single big delta at the end."""
+    import re
+
+    transport, _ = _build_app(
+        {"maxConcurrentRequests": 100},
+        asyncio.Event(),
+        llm=MultiDeltaLlm(deltas=["a", "b", "c"]),
+    )
+    r = await _request(transport, "POST", "/v1/chat/completions", {**_chat_body(), "stream": True})
+    assert r.status_code == 200
+    content_deltas = re.findall(r'"content": "([^"]*)"', r.text)
+    assert content_deltas == ["a", "b", "c"], content_deltas

@@ -1,22 +1,149 @@
 {
-  "startup_latency_seconds": 3.459,
-  "request_overhead": {
-    "healthz": {
-      "count": 200,
-      "p50_ms": 281.57,
-      "p95_ms": 487.81
+  "environment": {
+    "host": "Windows-11-10.0.26200-SP0",
+    "kernel": "11",
+    "python": "3.12.11",
+    "docker": "29.6.2",
+    "platform": "linux/amd64",
+    "image": "agentbase:amd64",
+    "image_id": "sha256:93c704d3d7f2dda1f3bf80d6b7d168ca09ee42de11e20eff1cc9289e731839b2",
+    "lock_hash": "e6f4ec176f693a1305a5b1d0c5e7bfcb09163adf65ecb13c6ed2579689af4944",
+    "commit": "cd5c9ffa7dea10e74c065b0d15582a42176e47ae",
+    "environment_notes": "1.0 CPU quota, 512 MiB limit, memory storage, no MCP (except NFR-09a), auth none, OTel disabled, local mock OpenAI model (host.docker.internal)."
+  },
+  "nfr01_startup": {
+    "samples": 20,
+    "p50_seconds": 2.761,
+    "p95_seconds": 2.995,
+    "max_seconds": 2.995,
+    "threshold_seconds": 5.0,
+    "status": "pass"
+  },
+  "nfr02_overhead": {
+    "warmup": 100,
+    "samples": 1000,
+    "p50_ms": 85.52,
+    "p95_ms": 147.51,
+    "failures": 0,
+    "server_overhead_ms": {
+      "/healthz": 2.15,
+      "/v1/models": 2.03
     },
-    "health": {
-      "count": 200,
-      "p50_ms": 432.77,
-      "p95_ms": 681.37
+    "threshold_p95_ms": 50.0,
+    "note": "Measured end-to-end (server + engine + localhost mock model through the real LiteLLM bridge); the spec's gate assumes an in-process deterministic mock result. Raw server overhead (healthz/models) is ~2 ms; the engine+model round trip adds ~13 ms single-request and ~90-150 ms under concurrency 10 (ADK per-run scheduling tail). The strict 50 ms p95 gate is therefore not met as measured.",
+    "status": "fail"
+  },
+  "nfr03_concurrency": {
+    "runs": 100,
+    "events_per_run_min": 145,
+    "events_per_run_p50": 145,
+    "observation_seconds": 30,
+    "peak_rss_kb": 303820,
+    "cap_101st_overloaded": true,
+    "threshold_events_per_second": 1,
+    "threshold_peak_rss_mib": 512,
+    "status": "pass"
+  },
+  "nfr04_footprint": {
+    "samples_kb": [
+      115302,
+      115404,
+      115302,
+      115404,
+      115302
+    ],
+    "max_rss_kb": 115404,
+    "threshold_rss_kb": 307200,
+    "status": "pass"
+  },
+  "nfr07_bounded": {
+    "baseline_rss_kb": 115302,
+    "rounds_rss_kb": [
+      269619,
+      271052,
+      270233,
+      270540
+    ],
+    "round_growths_kb": [
+      154317,
+      1433,
+      -819,
+      307
+    ],
+    "peak_rss_kb": 271052,
+    "plateaued": true,
+    "serving_after": true,
+    "limit_rss_kb": 524288,
+    "note": "Boundedness = repeated identical slow/disconnect rounds plateau (last-round growth <= 20% of first-round growth or <= 8 MiB) and peak stays under the 512 MiB container limit.",
+    "status": "pass"
+  },
+  "nfr08_reload": {
+    "initial_generation": 1,
+    "updates": [
+      {
+        "label": "live_snapshot",
+        "generation": 2,
+        "baseline": 1
+      },
+      {
+        "label": "component_rebuild",
+        "generation": 3,
+        "baseline": 2
+      }
+    ],
+    "generations_seen": [
+      2,
+      3
+    ],
+    "failed_requests": 0,
+    "readyz_503s": 0,
+    "pid_stable": true,
+    "restart_count": "0",
+    "status": "pass"
+  },
+  "nfr09_recovery": {
+    "mcp_required": {
+      "saw_503_while_down": true,
+      "recovered_without_restart": true,
+      "note": "Readiness convergence follows the spec: a required server down at connect time holds readyz 503 until the reconciler's next bounded retry succeeds. Mid-session death of a stdio subprocess is not probed by the manager (detected at call time) \u2014 recorded as a residual risk.",
+      "status": "pass"
+    },
+    "redis": {
+      "saw_503": true,
+      "recovered_without_restart": true,
+      "status": "pass"
+    },
+    "secret_rotation": {
+      "ok_after_rotation": true,
+      "status": "pass"
     }
   },
-  "idle_footprint": {
-    "max_rss_kb": "n/a (non-POSIX)"
+  "nfr10_arm64_smoke": {
+    "startup_reference": {
+      "samples": 5,
+      "p50_seconds": 34.591,
+      "p95_seconds": 34.935,
+      "max_seconds": 34.935,
+      "threshold_seconds": 5.0,
+      "status": "fail"
+    },
+    "non_streaming_chat": true,
+    "streaming_chat": true,
+    "idle_rss_kb": 363315,
+    "note": "arm64 runs under QEMU emulation here (cold boot ~35 s vs ~2.7 s native); the NFR-01 5 s gate applies to the amd64 image per NFR-00. The full acceptance suite also passes in-image on arm64 (docs/acceptance-arm64.log).",
+    "status": "pass"
   },
-  "container_probe": {
-    "container_start_seconds": "n/a (Command '['docker', 'run', '--rm', 'agentbase:m0', 'python', '-c', \"import app.main; print('up')\"]' timed out after 120 seconds)"
-  },
-  "note": "Feasibility probes measured on the host; the full NFR-00 suite against the built image is the Milestone 8 acceptance run."
+  "summary": {
+    "passed": [
+      "nfr01_startup",
+      "nfr03_concurrency",
+      "nfr04_footprint",
+      "nfr07_bounded",
+      "nfr08_reload",
+      "nfr10_arm64_smoke"
+    ],
+    "failed": [
+      "nfr02_overhead"
+    ]
+  }
 }
