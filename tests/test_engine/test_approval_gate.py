@@ -375,6 +375,7 @@ async def test_timeout_deny_finishes_run():
         record = await backend.get_approval(
             agent_name="agent", principal_id="p1", approval_id=approval_id
         )
+        assert record is not None
         # push the approval past its expiry (the sweep decides)
         counters = await runner.reconcile_pending(now=utcnow() + timedelta(seconds=60))
         assert counters["timed_out"] >= 1

@@ -137,12 +137,24 @@ def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str
     adk_runner = AdkRunner(agent=component.agent, app_name=config.name, session_service=service)
     # MA-03: agents receive only their toolServers' tools (root: all servers).
     mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+    # RAG-02: the retriever exists only when rag is enabled; the memory
+    # substitute is the ACC-01 deviation for acceptance proofs.
+    rag = None
+    if config.rag.enabled:
+        from .engine.rag import RagRetriever, build_embedding, build_store
+
+        rag = RagRetriever(
+            config=config.rag,
+            store=build_store(config.rag),
+            embedding=build_embedding(config.rag),
+        )
     runner = AgentRunner(
         applied,
         adk_runner,
         backend,
         app_name=config.name,
         mcp=mcp,  # HITL-02: the approval gate resolves raw tool names via the manager
+        rag=rag,  # RAG-02: principal-scoped retrieval before the root call
     )
     mcp.configure(config.tools.mcpServers)
     return {

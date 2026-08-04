@@ -64,6 +64,8 @@ async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> Asyn
     import os
     from pathlib import Path
 
+    import logging
+
     marker = Path(os.environ.get("AGENT_HEALTH_MARKER", "/tmp/agentbase.ready"))
     with suppress(OSError):
         marker.write_text(str(port), encoding="utf-8")
@@ -81,8 +83,6 @@ async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> Asyn
         try:
             await runner.reconcile_pending()
         except Exception:  # noqa: BLE001 - reconciliation must not block boot
-            import logging
-
             logging.getLogger("app.lifecycle").exception("approval reconcile (startup)")
         interval = max(float(getattr(runner, "_reconcile_interval", 5.0)), 1.0)
 

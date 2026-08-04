@@ -24,6 +24,7 @@ from ...engine.events import (
     ApprovalRequired,
     Done,
     Iteration,
+    RagDegraded,
     RunError,
     TextDelta,
     ToolCall,
@@ -486,6 +487,21 @@ async def _stream(
                 yield "data: [DONE]\n\n"
 
                 return
+            elif isinstance(event, RagDegraded):
+                # RAG-04: rag_degraded appears only in events/debug mode;
+                # text mode and non-streaming stay silent.
+                if stream_mode == "text":
+                    continue
+                yield _sse_data(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": _now(),
+                        "model": config.llm.model,
+                        "choices": [],
+                        "rag_degraded": True,
+                    }
+                )
             elif isinstance(event, AgentTransfer):
                 # MA-04: event/debug streams only; text mode stays text-only.
                 if stream_mode == "text":

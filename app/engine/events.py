@@ -48,6 +48,12 @@ class AgentTransfer:
 
 
 @dataclass(frozen=True)
+class RagDegraded:
+    """RAG-04: the store/embedding was unavailable; the run answers without
+    context. Rendered only in events/debug stream modes."""
+
+
+@dataclass(frozen=True)
 class ApprovalRequired:
     """HITL-02: the run paused before a matched tool executed; the approval
     record is durable and the checkpoint holds the exact resume arguments."""
@@ -84,6 +90,7 @@ AgentEvent = (
     | AgentTransfer
     | Iteration
     | ApprovalRequired
+    | RagDegraded
     | Done
     | RunError
 )

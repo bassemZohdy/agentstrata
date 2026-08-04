@@ -38,6 +38,7 @@ from .events import (
     Done,
     Iteration,
     PublicError,
+    RagDegraded,
     RunError,
     RunState,
     RunStateMachine,
@@ -93,10 +94,12 @@ class AgentRunner:
         app_name: str | None = None,
         token_budget_per_session_remaining: int | None = None,
         mcp: Any | None = None,
+        rag: Any | None = None,
     ) -> None:
         self._applied = applied
         self._adk_runner = adk_runner
         self._mcp = mcp
+        self._rag = rag
         self._backend = backend
         # The storage namespace must match the ADK Runner's app_name so
         # sessions resolve identically on both sides (SES-09).
@@ -130,10 +133,13 @@ class AgentRunner:
             errored = False
             run_deadline = limiter.deadline_remaining()
             async with asyncio.timeout(max(run_deadline, 0.001)):
+                rag_context = await self._rag_context(request)
+                if rag_context == "degraded":
+                    yield RagDegraded()
                 async for adk_event in self._adk_runner.run_async(
                     user_id=request.principal_id,
                     session_id=sid,
-                    new_message=self._new_message(request),
+                    new_message=self._new_message(request, rag_context),
                     run_config=self._run_config(request),
                 ):
                     if state.terminal:
@@ -298,8 +304,32 @@ class AgentRunner:
             )
         return budget
 
-    def _new_message(self, request: RunRequest) -> genai_types.Content:
-        return genai_types.Content(role="user", parts=[genai_types.Part(text=request.user_message)])
+    async def _rag_context(self, request: RunRequest) -> str | None:
+        """RAG-02: principal-scoped retrieval for the latest user message.
+        Returns the delimited context block, "degraded" when the store was
+        unavailable (RAG-04), or None when rag is disabled/no hits."""
+        if self._rag is None or not self._applied.config.rag.enabled:
+            return None
+        if not request.session_id:
+            return None
+        self._rag.degraded = False
+        return await self._rag.retrieve(
+            agent_name=self._app_name,
+            principal_id=request.principal_id,
+            query=request.user_message,
+        ) or ("degraded" if self._rag.degraded else None)
+
+    def _new_message(
+        self, request: RunRequest, rag_context: str | None = None
+    ) -> genai_types.Content:
+        if rag_context and rag_context != "degraded":
+            # RAG-02: one delimited context message, explicitly labeled
+            # untrusted, placed directly before the user message (after the
+            # system instruction and history in the assembled request).
+            text = f"{rag_context}\n\n{request.user_message}"
+        else:
+            text = request.user_message
+        return genai_types.Content(role="user", parts=[genai_types.Part(text=text)])
 
     def _run_config(self, request: RunRequest) -> Any:
         from google.adk.agents.run_config import RunConfig, StreamingMode
