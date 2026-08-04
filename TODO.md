@@ -1,90 +1,16 @@
 # Backlog — remaining work
 
-Phase 1 (core runtime) milestones 0–8 are implemented; all code work is done.
-The completed work is recorded milestone-by-milestone in
-[CHANGELOG.md](CHANGELOG.md). This file now tracks only what is **not yet
-done**: the image-based NFR-00 exit check, deferred improvements found by the
-code review, the unstarted later phases (P2–P4), resolved decisions (for the
-record), the one open human-call decision, and explicitly deferred scope.
+All four phases (P1 core runtime, P2 multi-agent/ACP, P3 approvals, P4 RAG)
+are implemented and accepted; the completed work is recorded
+milestone-by-milestone in [CHANGELOG.md](CHANGELOG.md). This file tracks only
+what is **not yet done**: the deferred improvements found by the code review,
+resolved decisions (for the record), the one open human-call decision, and
+explicitly deferred scope.
 
 Requirement IDs in parentheses trace each task back to
 [REQUIREMENTS.md](REQUIREMENTS.md); the build order is
-[PLAN.md](PLAN.md). "Later phases," "Deferred scope," and "Open decisions" at
-the bottom are not part of the P1 critical path.
-
----
-
-## P1 — remaining items
-
-### Milestone 8 — Container hardening and release packaging (image-based exit checks)
-
-- [x] **NFR-00 — full §6 benchmark/chaos suite.** `docs/nfr-report.json`
-      records the complete image-based run (harness `scripts/image-nfr.py`, 1
-      CPU / 512 MiB, mock model via the real LiteLLM bridge). **6 gates pass:**
-      NFR-01 startup (p95 2.99 s ≤ 5 s, 20 fresh starts), NFR-03 concurrency
-      (100 held streaming runs, 145 events/run ≥ 1/s, 101st → 503 `overloaded`,
-      peak 304 MB < 512 MiB), NFR-04 footprint (115 MB ≤ 300 MB, 5 samples),
-      NFR-07 boundedness (repeated slow/disconnect rounds plateau — last-round
-      growth ≤ 8 MiB after a 154 MB first-round warm-up; peak 271 MB),
-      NFR-09 dependency recovery (required MCP server down-at-start holds
-      readyz 503 and recovers within the reconciler's bounded retry; Redis
-      kill → 503 → recovery; file-backed secret rotation recovers on the next
-      request), NFR-10 arm64 portability (boots + both chat modes; QEMU
-      emulation makes cold boots ~35 s — the 5 s startup gate is amd64-scoped
-      per NFR-00). **NFR-02 FAILS as measured** (p95 147 ms vs < 50 ms): the
-      spec's gate assumes an in-process deterministic mock result, while the
-      harness measures end-to-end through the real LiteLLM bridge + a
-      localhost mock; the recorded breakdown shows raw server overhead
-      (healthz/models) is ~2 ms and a single chat round trip ~13 ms, with an
-      ADK per-run scheduling tail under concurrency 10. Recorded honestly in
-      the report with the environment notes; closing options are (a) an
-      in-process mock connector in the image for this one gate, (b) a
-      server-only measurement, or (c) a threshold revision — all spec/
-      harness decisions for the release gate, not code bugs.
-
-> ACC-01 (§18 acceptance, 339/339 on both architectures, current code) and
-> NFR-08 (zero-downtime reload: live 1→2, rebuild 2→3, 0 failed requests, no
-> restart) are **done** — see [CHANGELOG.md](CHANGELOG.md) and
-> `docs/acceptance-{amd64,arm64}.{log,json}` / `docs/nfr-report.json`.
-
-- [x] **NFR-08 — zero-downtime reload verification.** PASS against the
-      running image: a live-snapshot update (observability.logLevel) and a
-      component-rebuild update (engine.systemInstruction) both advanced the
-      config generation (1→2, 2→3) with **0 failed admitted requests, 0
-      readyz 503s, and no listener restart** (PID and StartedAt stable),
-      exercised through the real tier-8 path (a controlled K8s ConfigMap API
-      + the runtime's real watcher/kubeconfig client). Recorded in
-      `docs/nfr-report.json` (nfr08_reload). Enabled by five production
-      fixes the probe surfaced: engine streaming_mode, the watcher never
-      being started, the MCP reconcilers never being started, the rebuild
-      swap wiping manager-owned singletons, and the reload-builder backend
-      binding.
-
-### Milestone 8 — Supply chain (CNT-12/13) evidence
-
-- [x] **SBOM** — CycloneDX (`docs/supplychain/sbom-agentbase-amd64.cdx.json`,
-      3 097 components) + SPDX (`sbom-agentbase-amd64.spdx.json`, 184
-      packages).
-- [x] **Vulnerability scan** — trivy CRITICAL/HIGH: **23 OS-level findings in
-      the pinned base image with NO available fix yet** (debian trixie;
-      `python:3.12-slim` @ the current latest digest). Per the recorded CNT-12
-      policy this is **release-blocking until Debian ships fixes** — re-run
-      the scan and bump the base digest when they land. The scan's 2 fixable
-      python findings (pip's vendored msgpack/setuptools) were eliminated by
-      removing pip from the runtime image (CNT-01/12) — re-scan shows 0
-      fixable python findings. Details in `docs/supplychain/README.md`.
-- [x] **Build provenance** — buildx `--provenance=true` OCI layout with an
-      in-toto SLSA v1 attestation (blob `sha256:961fbf3d…`; buildkit
-      slsa-definitions buildType, subject digest, resolved dependencies).
-- [x] **Keyless signing** — `.github/workflows/release.yml` (cosign keyless
-      via GitHub OIDC on `v*` tag push, signing the image digest + SBOM/
-      provenance attestations). Keyless signing cannot run from a local
-      machine (no OIDC identity) — the CI workflow is the signing step of
-      record; local evidence is the SBOM/provenance/canary artifacts.
-- [x] **Canary-secret scan (CNT-13)** — `scripts/canary-scan.py` passed:
-      no forbidden paths or canary content in layers, no secret patterns in
-      history, and a `.dockerignore`-excluded canary file never reaches a
-      built image.
+[PLAN.md](PLAN.md). "Deferred scope" and "Open decisions" at the bottom are
+not part of any phase's critical path.
 
 ---
 
@@ -99,9 +25,13 @@ deferred (low priority or needs a concrete scale/deployment trigger).
 - [ ] **Redis `KEYS` in Lua** — deferred (storage design change; the hashed
       keyspace is bounded by the configured session/run/idempotency caps;
       revisit with a concrete scale requirement). (`app/storage/redis_backend.py`)
-- [ ] **Postgres `mutate_session` read-then-CAS TOCTOU** — deferred (move the
-      merge into SQL or a serializable txn; the CAS still bounds the window;
-      revisit with the real-instance matrix). (`app/storage/postgres_backend.py`)
+- [x] **Postgres `mutate_session` read-then-CAS TOCTOU** — DONE: the
+      read-merge-CAS is now a bounded retry (up to 3 attempts) that
+      re-reads the fresh revision and re-applies the delta only when the
+      CAS itself lost the race (a genuinely stale caller baseline still
+      raises immediately); the race is exercised by
+      `TestPostgresCasRetry::test_cas_race_retries_and_commits` against
+      the substitute AND the real matrix. (`app/storage/postgres_backend.py`)
 - [ ] **Pre-admission cancellation loses the run record** — deferred: a cancel
       before `_admit` returns has no run record yet; `_commit_failure` already
       suppresses `SessionNotFound`, and the storage sweep reconciles
@@ -111,141 +41,52 @@ deferred (low priority or needs a concrete scale/deployment trigger).
       creation are two steps; a `create_run` failure orphans the session until
       TTL. Wrapping as one transaction across backends is a storage-contract
       change; revisit with the real-backend matrix. (`app/engine/runner.py::_admit`)
-- [ ] **Live-reload no-op on `server.maxConcurrentRequests` /
-      `server.rateLimit`** — these fields are classified `live_snapshot`, but
-      the `RunSlotGate` / `FixedWindowLimiter` are built once at boot and the
-      live-snapshot apply branch only bumps generation/hash. A live change to
-      the cap or limiter takes effect on the next component-rebuild or restart.
-      Matches the pre-existing live-snapshot behavior for every route-level
-      setting (routes hold the boot config object). A systemic fix (routes
-      re-resolving the live config per request) is deferred; the NFR-08 proof
-      uses rebuild-category changes, which DO reach the live surface.
-      (`app/protocol/app.py`, `app/watcher/reload.py`)
+- [x] **Live-reload no-op on `server.maxConcurrentRequests` /
+      `server.rateLimit`** — DONE: the live-snapshot apply branch now
+      re-applies both to the shared objects — `RunSlotGate.set_limit` and
+      `FixedWindowLimiter.set_requests_per_minute` (the limiter is stored in
+      `components["rate_limiter"]` so the reload can reach it) — so a live
+      change takes effect immediately, no rebuild or restart needed.
+      (`app/protocol/app.py`, `app/watcher/reload.py`,
+      `tests/test_engine/test_rag.py::TestAuditAndReloadCleanup`)
 
 ### Test coverage gaps
 
-- [ ] **Real-backend CI matrix (ACC-01 deviation)** — run the shared contract
-      suite against real Redis 7 + Postgres 16 containers (Lua scripts,
-      advisory locks, CAS) instead of `FakeRedis`/`SqliteDb` substitutes.
+- [x] **Real-backend CI matrix (ACC-01 deviation)** — DONE: the
+      `storage-contract-real` CI job runs the shared contract suite against
+      real Redis 7 + Postgres 16 services; the fixtures switch on
+      `AGENT_TEST_REAL_REDIS_URL` / `AGENT_TEST_REAL_POSTGRES_DSN` (with
+      per-test isolation + connection cleanup). Verified locally:
+      **137/137 pass against fresh real services**. The matrix surfaced and
+      fixed real production bugs: the redis `eval` call shape (list-numkeys
+      is a DataError on redis-py), bytes Lua returns (prefix checks missed),
+      the broken `idem:`/`run:` KEYS patterns, wall-clock vs `updated_at`-
+      anchored `PEXPIREAT` expiry semantics, fence expiry persistence +
+      session-reentrant advisory locks, psycopg JSONB dict rows vs
+      `json.loads`, and the uncommitted-implicit-transaction poisoning.
+      (`tests/test_storage/conftest.py`, `.github/workflows/ci.yml`)
 
 ### Improvements (non-bug)
 
-- [ ] **Structured shutdown audit** — the `shutdown_draining`/`shutdown_complete`
-      audit events exist (exit code + close_ok); a single summary log line with
-      duration + per-component failure detail is still open.
-      (`app/lifecycle.py`)
-- [ ] **Warn on unknown audit events** instead of silently remapping to
-      `audit_unknown`. (`app/security/audit.py:29`)
+- [x] **Structured shutdown audit** — DONE: `close_components` returns
+      `(ok, failed_component_labels)` and `_drain_after_grace` logs ONE
+      `shutdown_summary` line with exit code, duration_ms, and the failed
+      components. (`app/lifecycle.py`,
+      `tests/test_protocol/test_shutdown.py::TestShutdownSummaryAudit`)
+- [x] **Warn on unknown audit events** — DONE: `audit()` logs a
+      `audit_unknown_event` warning with the offending name + fields and
+      still emits the remapped `audit_unknown` record (nothing is lost).
+      (`app/security/audit.py`, `tests/test_engine/test_rag.py::TestAuditAndReloadCleanup`)
 
 ---
 
-## Later phases (not started)
+## Completed phases
 
-Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria
-(§18) pass.
-
-- [x] **P2 — Multi-agent** (§13 + API-16): **DONE** — milestone
-      breakdown in PLAN.md (§13.1 ACP annex frozen in REQUIREMENTS.md);
-      task breakdown below.
-- [x] **P3 — Human-in-the-loop** (§14): **DONE** — milestone breakdown in
-      PLAN.md; task breakdown below.
-- [x] **P4 — RAG / long-term memory** (§15): **DONE** — milestone breakdown
-      in PLAN.md; task breakdown below.
-
-### P3 — Human-in-the-loop (HITL-01..05, §14)
-
-- [x] **P3-1 Schema + gating (HITL-01):** `approval` field contract
-      (enabled/tools/timeoutSeconds/onTimeout deny|allow); fail-closed
-      cross-field rules (approval requires auth + redis/postgres storage);
-      boot audit for explicit `onTimeout: allow`.
-- [x] **P3-2 Durable checkpoints (HITL-02):** `ApprovalRecord` on all four
-      backends (memory/file/redis Lua CAS + global index/postgres table);
-      public surface = args hash + redacted preview; protected checkpoint
-      holds the exact resume arguments; 24+ shared contract tests.
-- [x] **P3-3 Decision races (HITL-04):** CAS decide first-wins; approve
-      executes the tool from the checkpoint reusing the ORIGINAL tool-call
-      ID, injects the function response, and continues the conversation;
-      deny/timeout return structured outcomes; the gate skips calls with a
-      resolved approval (no double gating, no duplicated side effects).
-- [x] **P3-4 Client surface (HITL-03):** stateful-only chat while enabled
-      (400 `approval_session_required`); non-streaming pause -> 202
-      `run.pending_approval` (the sole API-08a exception); SSE emits
-      `approval_required` then `[DONE]`; `POST /v1/approvals/{id}` (repeat
-      -> stored outcome, conflict -> 409, expired -> 410); `GET
-      /v1/approvals?session_id=` pending-only public metadata; `GET/DELETE
-      /v1/runs/{id}` owner-scoped state + idempotent cancellation.
-- [x] **P3-5 Restart reconciler (HITL-05):** startup + periodic reconcile;
-      stale approvals (config generation changed) terminate `stale_approval`
-      and never execute the tool; timeout follows onTimeout policy with the
-      same stale/cancellation checks; decided-while-down approvals resume
-      exactly once (deterministic resume run guard).
-
-### P4 — RAG / long-term memory (RAG-01..06, §15)
-
-- [x] **P4-1 Schema + gating (RAG-01):** `rag` field contract (required,
-      store chroma|pgvector with SEC-04 connectionString Env/File +
-      DNS-1123 collection + options passthrough, embedding gemini|openai
-      with apiKey Env/File, topK 1..100, minScore 0..1, chunkChars,
-      chunkOverlapChars < chunkChars, maxDocumentBytes 10 MiB); CAP
-      fail-closed until acceptance.
-- [x] **P4-2 Retrieval (RAG-02):** chunk keys by agent/principal/doc/
-      chunk/embedding model/content hash; principal-scoped retrieval;
-      ≤topK chunks before the root LLM call sorted by descending score +
-      stable chunk id with minScore filter; one delimited context message
-      after the system instruction, labeled untrusted knowledge.
-- [x] **P4-3 Ingestion (RAG-03):** POST/GET/DELETE /v1/documents
-      (owner-scoped, Idempotency-Key, 201/204, metadata ≤ 64 KiB
-      scalar-only, line-ending normalization, code-point chunking with
-      overlap, atomic upsert — embedding failure leaves the previous
-      version intact).
-- [x] **P4-4 Availability (RAG-04):** optional → one redacted log +
-      `rag_degraded` events-only + answer without context, readiness
-      stays 200; required → readyz 503 + run fails `rag_unavailable`;
-      ingestion never degrades silently.
-- [x] **P4-5 Lifecycle/security (RAG-05):** rag identity changes are
-      component rebuilds without silent re-embed; delete removes scoped
-      chunks; SEC-04 secrets; no document content in logs/traces;
-      backups/retention are deployment responsibilities.
-- [x] **P4-6 Acceptance (RAG-06):** deterministic chunk/hash fixtures,
-      principal isolation, metadata/size limits, idempotent atomic
-      upsert, delete, stable ranking/tie-breaks, model-change behavior,
-      prompt-boundary tests, required/optional dependency failure
-      recovery; `rag` true in `/health` (phase P4); docs updated.
-
-### P2 — Multi-agent and ACP (MA-01..05 + API-16, annex §13.1)
-
-- [x] **P2-1 Schema + gating (MA-01):** `agents[]` field contract (DNS-label
-      unique `name` distinct from root, required non-empty `systemInstruction`,
-      `description` ≤ 2 000 code points, optional `llm` deep-merged over
-      root, `toolServers` defaulting to every MCP server); flat one level,
-      nested/cyclic rejected, every tool-server reference exists; schema
-      artifacts regenerated with CI zero-diff.
-- [x] **P2-2 Construction + routing (MA-02):** root becomes an ADK coordinator
-      with `sub_agents` in configured order; ADK native transfer routing by
-      name/description; empty list retains P1 behavior and public fixtures;
-      shared principal/session/cancellation/deadline/iteration/budget/
-      generation.
-- [x] **P2-3 Tool isolation (MA-03):** sub-agents get only
-      `toolServers`-named toolsets AFTER MCP filter/collision mapping (final
-      names); no coordinator hidden tools; no direct cross-agent calls except
-      transfer; transfer grants no new principal/budget.
-- [x] **P2-4 Transfer events + audit (MA-04):** `agent_transfer` events in
-      event/debug streams only; transfers in the run audit, never user-visible
-      session messages; unknown/unavailable target fails the run with
-      `provider_error`, no silent fallback.
-- [x] **P2-5 ACP surface (API-16, annex §13.1):** `GET /acp/agents` +
-      `POST /acp/runs` per the frozen annex (auth, session, idempotency,
-      error schemas); ACP-disabled = ordinary 404; no 501 stubs.
-- [x] **P2-6 Reload (MA-05):** `agents` component-rebuild with transactional
-      apply/rollback + in-flight run safety.
-- [x] **P2-7 Acceptance + capability flip (MA-05, CAP-02):** deterministic
-      construction, routing fixtures, tool isolation, shared
-      limits/cancellation, transfer events, session replay, reload with
-      in-flight runs, single-agent regression suite; `multiAgent`/`acp` true
-      in `/health` only after the suite passes; P1 fail-closed tests
-      re-baselined; docs updated.
-
----
+P2 (multi-agent + ACP), P3 (approvals), and P4 (RAG) are implemented,
+accepted in-image on both architectures, and recorded in
+[CHANGELOG.md](CHANGELOG.md) — including the capability flips
+(`multiAgent`/`acp`/`approval`/`rag` true in `/health`, phase P4) and the
+ACC-01 storage-deviation proofs.
 
 ## Decisions made (resolved, for the record)
 

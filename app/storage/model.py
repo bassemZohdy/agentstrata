@@ -40,8 +40,11 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt is not None else None
 
 
-def _parse_iso(value: str | None, default: datetime | None = None) -> datetime:
-    """Parse a stored ISO timestamp, falling back to ``default`` (or now)."""
+def _parse_iso(value: str | datetime | None, default: datetime | None = None) -> datetime:
+    """Parse a stored ISO timestamp, falling back to ``default`` (or now).
+    Real psycopg returns TIMESTAMPTZ columns as datetime objects already."""
+    if isinstance(value, datetime):
+        return value
     if not value:
         return default or utcnow()
     try:
@@ -91,11 +94,16 @@ class SessionRecord:
         )
 
     @classmethod
-    def from_json(cls, raw: str) -> SessionRecord:
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError("corrupt SessionRecord record") from exc
+    def from_json(cls, raw: str | dict[str, Any]) -> SessionRecord:
+        # psycopg auto-parses JSONB columns into dicts; the file/substitute
+        # backends hand over strings — accept both.
+        if isinstance(raw, str):
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError("corrupt SessionRecord record") from exc
+        else:
+            data = raw
         if data.get("schema_version") != SCHEMA_VERSION:
             raise ValueError(f"unsupported storage schema_version {data.get('schema_version')}")
         return cls(
@@ -157,11 +165,14 @@ class RunRecord:
         )
 
     @classmethod
-    def from_json(cls, raw: str) -> RunRecord:
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError("corrupt RunRecord record") from exc
+    def from_json(cls, raw: str | dict[str, Any]) -> RunRecord:
+        if isinstance(raw, str):
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError("corrupt RunRecord record") from exc
+        else:
+            data = raw
         if data.get("schema_version") != SCHEMA_VERSION:
             raise ValueError(f"unsupported storage schema_version {data.get('schema_version')}")
         return cls(
@@ -215,11 +226,14 @@ class IdempotencyRecord:
         )
 
     @classmethod
-    def from_json(cls, raw: str) -> IdempotencyRecord:
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError("corrupt IdempotencyRecord record") from exc
+    def from_json(cls, raw: str | dict[str, Any]) -> IdempotencyRecord:
+        if isinstance(raw, str):
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError("corrupt IdempotencyRecord record") from exc
+        else:
+            data = raw
         if data.get("schema_version") != SCHEMA_VERSION:
             raise ValueError(f"unsupported storage schema_version {data.get('schema_version')}")
         return cls(

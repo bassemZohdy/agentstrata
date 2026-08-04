@@ -655,3 +655,67 @@ class TestMockModelHook:
             assert isinstance(components2["runner"], AgentRunner)
         finally:
             components2["mcp"].close()
+
+
+class TestAuditAndReloadCleanup:
+    def test_unknown_audit_event_warns_and_remaps(self, caplog):
+        """Unknown audit event names warn loudly and still emit the
+        remapped audit_unknown record (no silent loss)."""
+        import logging
+
+        from app.security.audit import audit
+
+        with caplog.at_level(logging.INFO, logger="agentbase.audit"):
+            audit("not_a_real_event", key="v")
+        warns = [r for r in caplog.records if "audit_unknown_event" in r.message]
+        assert warns, "expected the warning"
+        assert "not_a_real_event" in warns[0].message
+        infos = [r for r in caplog.records if "audit_event=audit_unknown" in r.message]
+        assert infos, "the remapped record must still fire"
+
+    @pytest.mark.asyncio
+    async def test_live_snapshot_reapplies_cap_and_limiter(self):
+        """REL-02: a live change to server.maxConcurrentRequests and the
+        rate-limit ceiling takes effect immediately (no rebuild needed)."""
+        import json
+
+        from app.config.resolver import resolve
+        from app.config.validate import validate_resolution
+        from app.protocol.app import RunSlotGate
+        from app.protocol.ratelimit import FixedWindowLimiter
+        from app.watcher.reload import ReloadManager
+
+        repo_config = str(Path(__file__).resolve().parents[2] / "config")
+        env = {
+            "AGENT_APPLICATION_JSON": json.dumps(
+                {
+                    "server": {
+                        "maxConcurrentRequests": 8,
+                        "rateLimit": {"enabled": True, "requestsPerMinute": 60},
+                    }
+                }
+            )
+        }
+        res = resolve(env=env, bundled_dir=repo_config, argv=[])
+        validated = validate_resolution(res)
+        assert validated.ok and validated.config is not None
+        config = validated.config
+        slots = RunSlotGate(8)
+        limiter = FixedWindowLimiter(60)
+        components = {
+            "run_slots": slots,
+            "rate_limiter": limiter,
+            "generation": 1,
+            "config_hash": "",
+        }
+        mgr = ReloadManager(lambda _cfg, _gen: {}, config, components, bundled_dir=repo_config)
+        overlay = {
+            "server": {
+                "maxConcurrentRequests": 4,
+                "rateLimit": {"requestsPerMinute": 30},
+            }
+        }
+        result = await mgr.apply_tier8(overlay)
+        assert result.outcome == "applied_live"
+        assert slots._limit == 4
+        assert limiter._limit == 30

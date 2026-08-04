@@ -22,6 +22,7 @@ import asyncio
 import logging
 import os
 import signal
+import time
 from contextlib import suppress
 from typing import Any
 
@@ -110,8 +111,9 @@ class ShutdownManager:
             return
         # CNT-07: cancel in-flight runs FIRST so the runner persists terminal
         # states/usage while storage is still open.
+        started = time.monotonic()
         await self._cancel_inflight_runs()
-        self.close_ok = await self.close_components()
+        self.close_ok, failures = await self.close_components()
         self.closed = True
         if self.server is not None:
             self.server.should_exit = True  # type: ignore[attr-defined]
@@ -122,9 +124,18 @@ class ShutdownManager:
             audit("shutdown_complete", exit_code=exit_code, close_ok=self.close_ok)
         except Exception:  # noqa: BLE001
             pass
+        # Structured summary: duration + per-component failure detail in ONE
+        # line (the audit event carries the machine-readable record).
+        duration_ms = round((time.monotonic() - started) * 1000, 1)
+        summary = (
+            f"shutdown_summary exit_code={exit_code} duration_ms={duration_ms} "
+            f"failed_components={failures or 'none'}"
+        )
         if exit_code != 0:
             # A flush/close step failed: surface it before the process exits.
-            logger.error("shutdown_complete_with_errors exit 1")
+            logger.error("shutdown_complete_with_errors %s", summary)
+        else:
+            logger.info("%s", summary)
 
     async def _cancel_inflight_runs(self) -> None:
         """CNT-07: cancel admitted runs at grace expiry and await their
@@ -139,11 +150,13 @@ class ShutdownManager:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def close_components(self) -> bool:
+    async def close_components(self) -> tuple[bool, list[str]]:
         """CNT-07 close order: watcher (stops reload loop) -> MCP reconcilers
         -> storage flush -> OTel flush. Best-effort per component; returns
-        False if any required step raised."""
+        (ok, failed_component_labels) — the caller logs the structured
+        summary."""
         ok = True
+        failures: list[str] = []
 
         async def _safe(coro: Any, label: str) -> None:
             nonlocal ok
@@ -153,6 +166,7 @@ class ShutdownManager:
                     await result
             except Exception as exc:  # noqa: BLE001
                 ok = False
+                failures.append(label)
                 logger.warning("shutdown_close_failed component=%s err=%s", label, exc)
 
         # 1. Stop the watcher so no more tier-8 reloads race the teardown.
@@ -175,7 +189,8 @@ class ShutdownManager:
             except Exception as exc:  # noqa: BLE001
                 ok = False
                 logger.warning("shutdown_close_failed component=otel err=%s", exc)
-        return ok
+                failures.append("otel")
+        return ok, failures
 
     def _hard_exit(self, code: int) -> None:
         """Immediately terminate the process (second signal). Overridable in tests."""

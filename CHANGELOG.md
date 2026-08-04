@@ -4,6 +4,69 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### Review-item cleanup (TODO.md -> CHANGELOG.md)
+
+- **Real-backend CI matrix (ACC-01 deviation, DONE):** the
+  `storage-contract-real` CI job runs the shared storage contract suite
+  against real Redis 7 + Postgres 16 services; the fixtures switch on
+  `AGENT_TEST_REAL_REDIS_URL` / `AGENT_TEST_REAL_POSTGRES_DSN` (per-test
+  isolation, connection cleanup, Windows selector-loop shim). Verified
+  locally against fresh real services: **137/137 pass**. The matrix
+  surfaced and fixed real production bugs:
+  - redis `eval` call shape: the backend used the FakeRedis two-list
+    signature, which is a `DataError` on redis-py (list `numkeys`);
+    `_eval` now dispatches both shapes.
+  - redis Lua returns are BYTES on real redis-py: the `rev:`/`capacity:`/
+    `missing:`/`busy:` prefix checks and the SMEMBERS/KEYS entry parses
+    now decode first.
+  - broken Lua patterns: `idem:[^:]*$` / `run:[^:]*$` can't cross colons
+    (the intended last-segment replace never matched), so capacity counts
+    were always 0/1; replaced with `:[^:]*$`.
+  - expiry semantics: the Lua used wall-clock `PEXPIRE` while the
+    substitutes anchor at `updated_at`/`expires_at` + ttl; both
+    CREATE_SESSION/MUTATE_SESSION and CREATE_IDEM now use `PEXPIREAT`
+    anchored the same way (the shared suite backdates timestamps to
+    simulate expiry).
+  - fence persistence: `pg_try_advisory_lock` is session-reentrant, so
+    the held-check now consults a persisted `fence_expires_at` column
+    (idempotent `ADD COLUMN IF NOT EXISTS` migration; SQLite substitute
+    translates it to a no-op via `PRAGMA table_info`); acquire/renew
+    write the expiry, release clears it, and the expired-session purge
+    skips live fences.
+  - psycopg auto-parses JSONB columns into dicts: the record parsers
+    (`SessionRecord`/`RunRecord`/`IdempotencyRecord`/`ApprovalRecord`) and
+    the backend's row reads accept both strings and dicts;
+    `_parse_iso` accepts datetime objects (TIMESTAMPTZ).
+  - implicit-transaction poisoning: `_PsycopgDb` never committed simple
+    operations, so one failed statement aborted the dangling transaction
+    and every later statement failed; simple ops now autocommit and the
+    explicit `transaction()` wrapper toggles autocommit around
+    BEGIN/COMMIT.
+- **Postgres `mutate_session` TOCTOU (DONE):** the read-merge-CAS is a
+  bounded retry (up to 3 attempts) that re-reads the fresh revision and
+  re-applies the delta only when the CAS itself lost the race; a stale
+  caller baseline still raises immediately. Race test:
+  `TestPostgresCasRetry`.
+- **Live-reload cap/limiter re-application (DONE):** the live-snapshot
+  branch now re-applies `server.maxConcurrentRequests` and
+  `server.rateLimit.requestsPerMinute` to the shared
+  `RunSlotGate`/`FixedWindowLimiter` objects (new `set_limit` /
+  `set_requests_per_minute`), so those live changes take effect
+  immediately.
+- **Structured shutdown audit (DONE):** `close_components` returns
+  `(ok, failed_labels)` and the drain path logs one `shutdown_summary`
+  line with exit code, duration_ms, and the failed components.
+- **Unknown audit events warn (DONE):** `audit()` logs an
+  `audit_unknown_event` warning with the offending name + fields and
+  still emits the remapped `audit_unknown` record.
+- **TODO.md cleanup:** completed task records moved here; TODO.md now
+  tracks only the genuinely-deferred review items (Redis `KEYS` in Lua,
+  pre-admission cancellation residual, non-atomic admission), the product-
+  name human decision, and the explicitly-deferred scope (WebSocket/CRD/
+  metrics).
+
+
+
 ### P4 — RAG / long-term memory (RAG-01..06, §15, complete)
 
 - **RAG-01/02 (complete):** `rag` field contract with all constraints;

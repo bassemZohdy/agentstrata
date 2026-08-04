@@ -665,3 +665,77 @@ class TestApprovals:
             agent_name="agent", principal_id="p1", session_id="sess-1"
         )
         assert [r.approval_id for r in listed] == ["appr-1"]
+
+
+class TestPostgresCasRetry:
+    """The mutate_session read-then-CAS window is closed by a bounded
+    retry: a lost CAS re-reads the fresh revision and re-applies the
+    delta (no spurious RevisionConflict, no lost/doubled delta)."""
+
+    async def test_cas_race_retries_and_commits(self, postgres_backend):
+
+        await _open(postgres_backend)
+        record = await postgres_backend.create_session(
+            agent_name="agent", principal_id="p1", session_id="race-1"
+        )
+        original_db = postgres_backend._db
+
+        class _RaceOnceDb:
+            """Fails the FIRST cas_session UPDATE (simulating a concurrent
+            writer committing between the read and the CAS), then delegates."""
+
+            def __init__(self, inner, backend):
+                self._inner = inner
+                self._backend = backend
+                self._failed = False
+
+            async def execute(self, sql, params=()):
+                return await self._inner.execute(sql, params)
+
+            async def query(self, sql, params=()):
+                # the cas_session UPDATE is identified by its SQL text (the
+                # SQL map key is not part of the statement). On the first
+                # call a CONCURRENT writer commits first (revision + 1 with
+                # its own delta), then the CAS legitimately matches nothing.
+                if "UPDATE agent_sessions SET revision" in sql and not self._failed:
+                    self._failed = True
+                    # the concurrent writer commits through the REAL backend
+                    # (its own nested calls delegate past the one-shot race)
+                    concurrent = await self._backend.get_session(
+                        agent_name="agent", principal_id="p1", session_id="race-1"
+                    )
+                    await self._backend.mutate_session(
+                        agent_name="agent",
+                        principal_id="p1",
+                        session_id="race-1",
+                        expected_revision=concurrent.revision,
+                        events=[{"role": "assistant", "content": "other"}],
+                    )
+                    return []
+                return await self._inner.query(sql, params)
+
+            def transaction(self):
+                return self._inner.transaction()
+
+            async def try_advisory_lock(self, key):
+                return await self._inner.try_advisory_lock(key)
+
+            async def release_advisory_lock(self, key):
+                await self._inner.release_advisory_lock(key)
+
+        postgres_backend._db = _RaceOnceDb(original_db, postgres_backend)
+        try:
+            mutated = await postgres_backend.mutate_session(
+                agent_name="agent",
+                principal_id="p1",
+                session_id="race-1",
+                expected_revision=record.revision,
+                events=[{"role": "user", "content": "hi"}],
+            )
+            # the delta applied exactly once ON TOP of the concurrent
+            # commit (revision moved twice: the other writer, then ours)
+            assert mutated.revision == record.revision + 2
+            assert len(mutated.events) == 2  # both deltas, no loss, no dup
+            assert postgres_backend._db._failed  # the race actually happened
+        finally:
+            postgres_backend._db = original_db

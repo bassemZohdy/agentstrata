@@ -206,3 +206,35 @@ class TestDrainingRouteWiring:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-q"])
+
+
+class TestShutdownSummaryAudit:
+    async def test_summary_line_reports_duration_and_failures(self, caplog):
+        """The structured shutdown summary logs duration + per-component
+        failure detail in one line."""
+        import logging
+
+        from app.lifecycle import ShutdownManager
+
+        class _FailingBackend:
+            async def close(self):
+                raise RuntimeError("flush failed")
+
+        components = {"backend": _FailingBackend()}
+        mgr = ShutdownManager(components, 0)
+        with caplog.at_level(logging.ERROR, logger="app.lifecycle"):
+            mgr.close_ok, failures = await mgr.close_components()
+        assert mgr.close_ok is False
+        assert failures == ["storage"]
+        assert any("shutdown_summary" in r.message for r in caplog.records) is False
+        # the summary itself is emitted by _drain_after_grace; verify the
+        # failure detail surfaces there
+        await mgr.request_shutdown()
+        with caplog.at_level(logging.ERROR, logger="app.lifecycle"):
+            await mgr._drain_task
+        assert any(
+            "shutdown_complete_with_errors" in r.message
+            and "failed_components=['storage']" in r.message
+            and "duration_ms=" in r.message
+            for r in caplog.records
+        )

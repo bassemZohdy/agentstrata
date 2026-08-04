@@ -41,6 +41,13 @@ class FixedWindowLimiter:
         self._buckets[key] = (bucket, entry[1] + 1)
         return True, 0
 
+    def set_requests_per_minute(self, rpm: int) -> None:
+        """Live-snapshot re-application (REL-02): a live change to
+        ``server.rateLimit.requestsPerMinute`` takes effect immediately
+        (buckets are kept; the new ceiling applies from the next window
+        boundary check onward)."""
+        self._limit = max(rpm, 1)
+
     def prune(self, now: float | None = None) -> None:
         """Drop buckets older than the current minute (bounded memory)."""
         current = math.floor(time.time() if now is None else now) // 60

@@ -86,7 +86,20 @@ class _PsycopgDb:
     async def _ensure(self):
         if self._conn is None:
             self._conn = await self._factory
+            # Simple ops autocommit (matching the SqliteDb substitute); the
+            # explicit transaction() wrapper toggles autocommit off around
+            # BEGIN/COMMIT. Without this, implicit transactions dangle on
+            # the connection and a single failed statement aborts them,
+            # poisoning every later statement (InFailedSqlTransaction).
+            await self._conn.set_autocommit(True)
         return self._conn
+
+    async def close(self) -> None:
+        """Release the connection (the real-backend matrix opens one per
+        test; without this, postgres max_connections is exhausted)."""
+        if self._conn is not None:
+            await self._conn.close()
+            self._conn = None
 
     async def execute(self, sql, params=()):
         conn = await self._ensure()
@@ -116,15 +129,19 @@ class _PsycopgTxn:
 
     async def __aenter__(self):
         conn = await self._db._ensure()
+        await conn.set_autocommit(False)
         await conn.execute("BEGIN")
         return None
 
     async def __aexit__(self, exc_type, exc, tb):
         conn = await self._db._ensure()
-        if exc_type is None:
-            await conn.execute("COMMIT")
-        else:
-            await conn.execute("ROLLBACK")
+        try:
+            if exc_type is None:
+                await conn.execute("COMMIT")
+            else:
+                await conn.execute("ROLLBACK")
+        finally:
+            await conn.set_autocommit(True)
 
 
 def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str, Any]:

@@ -194,6 +194,16 @@ class ReloadManager:
             self._config = new_config
             self._components["generation"] = self._generation
             self._components["config_hash"] = _config_hash(new_config)
+            # REL-02 live-snapshot re-application: replica-local run cap and
+            # the rate-limit ceiling apply immediately (the gate/limiter
+            # objects are shared with the route/middleware, so mutating
+            # them is enough — no middleware rebuild).
+            slots = self._components.get("run_slots")
+            if slots is not None and hasattr(slots, "set_limit"):
+                slots.set_limit(new_config.server.maxConcurrentRequests)
+            limiter = self._components.get("rate_limiter")
+            if limiter is not None and hasattr(limiter, "set_requests_per_minute"):
+                limiter.set_requests_per_minute(new_config.server.rateLimit.requestsPerMinute)
             self._audit("applied_live", started, paths)
             return ReloadResult(outcome="applied_live", generation=self._generation, changed=paths)
 

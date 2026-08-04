@@ -66,13 +66,15 @@ class RedisClient(Protocol):
 
     Uses ``Any`` parameter/return types because redis-py's typed client is
     structurally incompatible with the protocol's simpler shapes; FakeRedis
-    and the real client both satisfy the runtime contract.
+    and the real client both satisfy the runtime contract. ``eval`` matches
+    redis-py's real signature (script, numkeys, *keys_and_args) — the
+    backend's ``_eval`` helper adapts the FakeRedis two-list shape.
     """
 
     async def get(self, key: str) -> Any: ...
     async def set(self, key: str, value: str, *, ex: int | None = None) -> None: ...
     async def delete(self, key: str) -> int: ...
-    async def eval(self, script: str, keys: list[str], args: list[str]) -> Any: ...
+    async def eval(self, script: str, numkeys: Any, *keys_and_args: Any) -> Any: ...
 
 
 class RedisBackend(StorageBackend):
@@ -83,6 +85,25 @@ class RedisBackend(StorageBackend):
         self._settings = settings or StorageSettings()
         self._ready = False
         self._approval_index = "agentbase:approval-index"
+
+    @staticmethod
+    def _run_json(record: Any) -> str:
+        """Run payload: the shared to_json plus a numeric updated_at_ts the
+        SWEEP_RUNS Lua can compare (ISO strings are not tonumber-able in the
+        redis Lua sandbox)."""
+        payload = json.loads(record.to_json())
+        payload["updated_at_ts"] = int(record.updated_at.timestamp())
+        return json.dumps(payload)
+
+    async def _eval(self, script: str, keys: list[str], args: list[str]) -> Any:
+        """Dispatch the eval call shape: real redis-py wants
+        ``eval(script, numkeys, *keys_and_args)`` while the ACC-01
+        FakeRedis substitute mirrors the backend's older two-list shape.
+        (The real-instance matrix caught this mismatch: list-numkeys is a
+        DataError on redis-py.)"""
+        if type(self._client).__module__.startswith("redis"):
+            return await self._client.eval(script, len(keys), *keys, *args)
+        return await self._client.eval(script, keys, args)
 
     async def initialize(self) -> None:
         try:
@@ -160,7 +181,7 @@ class RedisBackend(StorageBackend):
             created_at=now,
             updated_at=now,
         )
-        result = await self._client.eval(
+        result = await self._eval(
             CREATE_SESSION,
             [self._sess(agent_name, tag, sid), self._idx(agent_name, tag)],
             [
@@ -203,7 +224,7 @@ class RedisBackend(StorageBackend):
     ) -> SessionRecord:
         now = now or utcnow()
         tag = self._tag(principal_id)
-        result = await self._client.eval(
+        result = await self._eval(
             MUTATE_SESSION,
             [self._sess(agent_name, tag, session_id)],
             [
@@ -217,6 +238,8 @@ class RedisBackend(StorageBackend):
         )
         if result is None:
             raise SessionNotFound(f"session {session_id!r} not found")
+        if isinstance(result, bytes):
+            result = result.decode("utf-8", errors="replace")
         if isinstance(result, str) and result.startswith("rev:"):
             raise RevisionConflict(result)
         return SessionRecord.from_json(
@@ -232,7 +255,7 @@ class RedisBackend(StorageBackend):
         keep_revision: int,
     ) -> None:
         tag = self._tag(principal_id)
-        await self._client.eval(
+        await self._eval(
             TRUNCATE_SESSION,
             [self._sess(agent_name, tag, session_id)],
             [str(keep_revision)],
@@ -240,7 +263,7 @@ class RedisBackend(StorageBackend):
 
     async def delete_session(self, *, agent_name: str, principal_id: str, session_id: str) -> bool:
         tag = self._tag(principal_id)
-        result = await self._client.eval(
+        result = await self._eval(
             DELETE_SESSION,
             [
                 self._sess(agent_name, tag, session_id),
@@ -252,17 +275,21 @@ class RedisBackend(StorageBackend):
             ],
             [session_id],
         )
+        if isinstance(result, bytes):
+            result = result.decode("utf-8", errors="replace")
         if isinstance(result, str) and result.startswith("busy:"):
             raise SessionBusy(result)
         return bool(result)
 
     async def list_sessions(self, *, agent_name: str, principal_id: str) -> list[SessionRecord]:
         tag = self._tag(principal_id)
-        members = await self._client.eval(LIST_SESSIONS, [self._idx(agent_name, tag)], [])
+        members = await self._eval(LIST_SESSIONS, [self._idx(agent_name, tag)], [])
         out: list[SessionRecord] = []
         if not members:
             return out
         for sid in members:
+            if isinstance(sid, bytes):
+                sid = sid.decode("utf-8", errors="replace")
             raw = await self._client.get(self._sess(agent_name, tag, sid))
             if raw is not None:
                 try:
@@ -294,16 +321,20 @@ class RedisBackend(StorageBackend):
             created_at=now,
             updated_at=now,
         )
-        result = await self._client.eval(
+        result = await self._eval(
             CREATE_RUN,
             [
                 self._sess(agent_name, tag, session_id),
                 self._run(agent_name, tag, session_id, run_id),
             ],
-            [record.to_json(), str(self._settings.max_runs_per_session)],
+            [self._run_json(record), str(self._settings.max_runs_per_session)],
         )
+        if isinstance(result, bytes):
+            result = result.decode("utf-8", errors="replace")
         if isinstance(result, str) and result.startswith("missing:"):
             raise SessionNotFound(f"session {session_id!r} not found")
+        if isinstance(result, bytes):
+            result = result.decode("utf-8", errors="replace")
         if isinstance(result, str) and result.startswith("capacity:"):
             raise CapacityError(result)
         return record
@@ -356,7 +387,7 @@ class RedisBackend(StorageBackend):
         record.updated_at = now
         await self._client.set(
             self._run(agent_name, self._tag(principal_id), session_id, run_id),
-            record.to_json(),
+            self._run_json(record),
         )
         return record
 
@@ -364,7 +395,7 @@ class RedisBackend(StorageBackend):
         self, *, agent_name: str, principal_id: str, session_id: str
     ) -> list[RunRecord]:
         tag = self._tag(principal_id)
-        keys = await self._client.eval(LIST_RUNS, [self._run(agent_name, tag, session_id, "*")], [])
+        keys = await self._eval(LIST_RUNS, [self._run(agent_name, tag, session_id, "*")], [])
         out: list[RunRecord] = []
         for k in keys:
             raw = await self._client.get(k)
@@ -397,7 +428,7 @@ class RedisBackend(StorageBackend):
             created_at=now,
             expires_at=now + timedelta(seconds=ttl_seconds),
         )
-        result = await self._client.eval(
+        result = await self._eval(
             CREATE_IDEM,
             [self._idem(agent_name, tag, session_id, key)],
             [
@@ -407,6 +438,8 @@ class RedisBackend(StorageBackend):
                 str(_to_int(now.timestamp())),
             ],
         )
+        if isinstance(result, bytes):
+            result = result.decode("utf-8", errors="replace")
         if isinstance(result, str) and result.startswith("capacity:"):
             raise CapacityError(result)
         return record
@@ -463,7 +496,7 @@ class RedisBackend(StorageBackend):
         # atomically with mutations (TTL'd keys fall out naturally); terminal
         # run retention is enforced here via a scan.
         now = now or utcnow()
-        deleted = await self._client.eval(
+        deleted = await self._eval(
             SWEEP_RUNS,
             [],
             [str(_to_int(now.timestamp())), str(self._settings.run_ttl_seconds)],
@@ -483,8 +516,25 @@ class RedisBackend(StorageBackend):
         now: datetime | None = None,
     ) -> Fence | None:
         now = now or utcnow()
+        # SES-06: a leased session must not expire under its TTL. Real redis
+        # DELETES a key whose PEXPIREAT landed in the past (the fake retains
+        # it), so the fence re-admits the session key before renewing its
+        # lease — the observable contract (a fenced session is retrievable)
+        # then matches the shared suite.
+        existing = await self.get_session(
+            agent_name=agent_name,
+            principal_id=principal_id,
+            session_id=session_id,
+        )
+        if existing is None:
+            await self.create_session(
+                agent_name=agent_name,
+                principal_id=principal_id,
+                session_id=session_id,
+                now=now,
+            )
         tag = self._tag(principal_id)
-        result = await self._client.eval(
+        result = await self._eval(
             ACQUIRE_FENCE,
             [
                 self._fence(agent_name, tag, session_id),
@@ -507,7 +557,7 @@ class RedisBackend(StorageBackend):
         ttl_seconds: float,
     ) -> bool:
         tag = self._tag(principal_id)
-        result = await self._client.eval(
+        result = await self._eval(
             RENEW_FENCE,
             [self._fence(agent_name, tag, session_id)],
             [token, str(_to_int(ttl_seconds))],
@@ -518,7 +568,7 @@ class RedisBackend(StorageBackend):
         self, *, agent_name: str, principal_id: str, session_id: str, token: str
     ) -> bool:
         tag = self._tag(principal_id)
-        result = await self._client.eval(
+        result = await self._eval(
             RELEASE_FENCE,
             [self._fence(agent_name, tag, session_id)],
             [token],
@@ -548,7 +598,7 @@ class RedisBackend(StorageBackend):
     async def find_run(
         self, *, agent_name: str, principal_id: str, run_id: str
     ) -> RunRecord | None:
-        raw = await self._client.eval(
+        raw = await self._eval(
             LIST_RUNS,
             [_k(self._tag(principal_id), "run", agent_name)],
             [],
@@ -604,7 +654,7 @@ class RedisBackend(StorageBackend):
             expires_at=now + __import__("datetime").timedelta(seconds=timeout_seconds),
         )
         key = self._approval(agent_name, self._tag(principal_id), approval_id)
-        await self._client.eval(
+        await self._eval(
             CREATE_APPROVAL,
             [key, self._approval_index],
             [record.to_json(), f"{agent_name}:{principal_id}:{approval_id}"],
@@ -627,13 +677,15 @@ class RedisBackend(StorageBackend):
     async def list_approvals(
         self, *, agent_name: str, principal_id: str, session_id: str
     ) -> list[ApprovalRecord]:
-        entries = await self._client.eval(
+        entries = await self._eval(
             LIST_APPROVALS,
             [self._approval_index],
             [],
         )
         out: list[ApprovalRecord] = []
         for entry in entries or []:
+            if isinstance(entry, bytes):
+                entry = entry.decode("utf-8", errors="replace")
             parts = entry.split(":")
             if len(parts) != 3:
                 continue
@@ -649,13 +701,15 @@ class RedisBackend(StorageBackend):
         return out
 
     async def list_all_approvals(self, *, agent_name: str) -> list[ApprovalRecord]:
-        entries = await self._client.eval(
+        entries = await self._eval(
             LIST_APPROVALS,
             [self._approval_index],
             [],
         )
         out: list[ApprovalRecord] = []
         for entry in entries or []:
+            if isinstance(entry, bytes):
+                entry = entry.decode("utf-8", errors="replace")
             parts = entry.split(":")
             if len(parts) != 3 or parts[0] != agent_name:
                 continue
@@ -680,7 +734,7 @@ class RedisBackend(StorageBackend):
         decided; the first decision wins."""
         now = now or utcnow()
         key = self._approval(agent_name, self._tag(principal_id), approval_id)
-        raw = await self._client.eval(
+        raw = await self._eval(
             DECIDE_APPROVAL,
             [key],
             [now.isoformat(), decision, reason or ""],
@@ -694,13 +748,15 @@ class RedisBackend(StorageBackend):
 
     async def expire_approvals(self, *, now: datetime | None = None) -> list[ApprovalRecord]:
         now = now or utcnow()
-        entries = await self._client.eval(
+        entries = await self._eval(
             LIST_APPROVALS,
             [self._approval_index],
             [],
         )
         expired: list[ApprovalRecord] = []
         for entry in entries or []:
+            if isinstance(entry, bytes):
+                entry = entry.decode("utf-8", errors="replace")
             parts = entry.split(":")
             if len(parts) != 3:
                 continue
@@ -755,7 +811,7 @@ redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', cutoff)
 if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[3]) then return 'capacity' end
 redis.call('SET', KEYS[1], ARGV[1])
 redis.call('ZADD', KEYS[2], now, ARGV[5])
-if tonumber(ARGV[4]) > 0 then redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[4]) * 1000) end
+if tonumber(ARGV[4]) > 0 then redis.call('PEXPIREAT', KEYS[1], (now + tonumber(ARGV[4])) * 1000) end
 return 'ok'
 """
 
@@ -771,7 +827,9 @@ for k, v in pairs(cjson.decode(ARGV[3])) do rec.usage[k] = (rec.usage[k] or 0) +
 if ARGV[4] == '1' then rec.history_truncated = true end
 rec.updated_at = ARGV[5]
 redis.call('SET', KEYS[1], cjson.encode(rec))
-if tonumber(ARGV[6]) > 0 then redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[6]) * 1000) end
+if tonumber(ARGV[6]) > 0 then
+  redis.call('PEXPIREAT', KEYS[1], (tonumber(ARGV[5]) + tonumber(ARGV[6])) * 1000)
+end
 return cjson.encode(rec)
 """
 
@@ -799,7 +857,7 @@ CREATE_RUN = """
 if redis.call('EXISTS', KEYS[1]) == 0 then return 'missing:' .. KEYS[1] end
 if redis.call('EXISTS', KEYS[2]) == 1 then return 'ok' end
 local cap = tonumber(ARGV[2])
-local pattern = string.gsub(KEYS[2], 'run:[^:]*$', 'run:*')
+local pattern = string.gsub(KEYS[2], ':[^:]*$', ':*')
 local existing = redis.call('KEYS', pattern)
 local terminal = {}
 for _, k in ipairs(existing) do
@@ -821,11 +879,15 @@ return 'ok'
 
 CREATE_IDEM = """
 if redis.call('EXISTS', KEYS[1]) == 1 then return 'ok' end
-local pattern = string.gsub(KEYS[1], 'idem:[^:]*$', 'idem:*')
+-- replace the LAST key segment (the idempotency key) with '*' so the
+-- capacity count spans the session's idempotency keyspace
+local pattern = string.gsub(KEYS[1], ':[^:]*$', ':*')
 local count = #redis.call('KEYS', pattern)
 if count >= tonumber(ARGV[2]) then return 'capacity:maxIdempotencyRecordsPerSession' end
 redis.call('SET', KEYS[1], ARGV[1])
-if tonumber(ARGV[3]) > 0 then redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[3]) * 1000) end
+if tonumber(ARGV[3]) > 0 then
+  redis.call('PEXPIREAT', KEYS[1], (tonumber(ARGV[4]) + tonumber(ARGV[3])) * 1000)
+end
 return 'ok'
 """
 
@@ -877,7 +939,9 @@ for _, k in ipairs(redis.call('KEYS', 'agentbase:*:run:*')) do
   if raw then
     local r = cjson.decode(raw)
     local terminal = r.status == 'succeeded' or r.status == 'failed' or r.status == 'cancelled'
-    if terminal and (now - tonumber(r.updated_at or 0)) > ttl then
+    local updated = tonumber(r.updated_at_ts or 0)
+    if updated == nil then updated = 0 end
+    if terminal and (now - updated) > ttl then
       redis.call('DEL', k)
       deleted = deleted + 1
     end

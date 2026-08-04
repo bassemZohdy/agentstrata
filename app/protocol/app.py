@@ -53,6 +53,12 @@ class RunSlotGate:
     def release(self) -> None:
         self._in_flight = max(0, self._in_flight - 1)
 
+    def set_limit(self, limit: int) -> None:
+        """Live-snapshot re-application (REL-02): a live change to
+        ``server.maxConcurrentRequests`` takes effect immediately. The
+        counter keeps its current value; only the ceiling moves."""
+        self._limit = max(limit, 1)
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> AsyncIterator[None]:
@@ -119,6 +125,7 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
 
     # API-20: replica-local fixed UTC-minute rate limiter (disabled by default).
     limiter = FixedWindowLimiter.build_if_enabled(config.server.rateLimit)
+    components["rate_limiter"] = limiter
     if limiter is not None:
 
         @app.middleware("http")

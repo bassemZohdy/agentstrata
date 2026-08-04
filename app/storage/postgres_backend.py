@@ -35,6 +35,7 @@ from .model import (
     IdempotencyRecord,
     RunRecord,
     SessionRecord,
+    _parse_iso,
     new_session_id,
     utcnow,
     validate_session_id,
@@ -57,6 +58,7 @@ DDL = [
         session_id      TEXT NOT NULL,
         revision        INTEGER NOT NULL,
         fencing_number  INTEGER NOT NULL DEFAULT 0,
+        fence_expires_at TIMESTAMPTZ NULL,
         data            JSONB NOT NULL,
         created_at      TIMESTAMPTZ NOT NULL,
         updated_at      TIMESTAMPTZ NOT NULL,
@@ -86,6 +88,9 @@ DDL = [
         expires_at   TIMESTAMPTZ,
         PRIMARY KEY (agent_name, principal_id, session_id, key)
     )
+    """,
+    """
+    ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS fence_expires_at TIMESTAMPTZ NULL
     """,
     """
     CREATE TABLE IF NOT EXISTS agent_approvals (
@@ -220,7 +225,8 @@ SQL = {
         "WHERE agent_name = %s AND principal_id = %s AND session_id = %s AND key = %s"
     ),
     "expired_sessions": (
-        "SELECT agent_name, principal_id, session_id, updated_at FROM agent_sessions "
+        "SELECT agent_name, principal_id, session_id, updated_at, fence_expires_at"
+        " FROM agent_sessions "
         "WHERE updated_at < %s"
     ),
     "delete_run_older_than": (
@@ -248,9 +254,22 @@ SQL = {
         "WHERE agent_name = %s AND principal_id = %s AND session_id = %s"
     ),
     "bump_fence_number": (
-        "UPDATE agent_sessions SET fencing_number = fencing_number + 1 "
+        "UPDATE agent_sessions SET fencing_number = fencing_number + 1, "
+        "fence_expires_at = %s "
         "WHERE agent_name = %s AND principal_id = %s AND session_id = %s "
         "RETURNING fencing_number"
+    ),
+    "bump_fence_expiry": (
+        "UPDATE agent_sessions SET fence_expires_at = %s "
+        "WHERE agent_name = %s AND principal_id = %s AND session_id = %s"
+    ),
+    "get_fence_expiry": (
+        "SELECT fence_expires_at FROM agent_sessions "
+        "WHERE agent_name = %s AND principal_id = %s AND session_id = %s"
+    ),
+    "clear_fence_expiry": (
+        "UPDATE agent_sessions SET fence_expires_at = NULL "
+        "WHERE agent_name = %s AND principal_id = %s AND session_id = %s"
     ),
 }
 
@@ -296,6 +315,12 @@ class PostgresBackend(StorageBackend):
 
     async def close(self) -> None:
         self._ready = False
+        close = getattr(self._db, "close", None)
+        if close is not None:
+            from contextlib import suppress
+
+            with suppress(Exception):  # noqa: BLE001 - best-effort release
+                await close()
 
     async def health(self) -> bool:
         """SES-04/NFR-09: re-probe (bounded) so readiness converges after
@@ -316,6 +341,15 @@ class PostgresBackend(StorageBackend):
 
     def _json(self, record: Any) -> str:
         return record.to_json()
+
+    @staticmethod
+    @staticmethod
+    def _parse_data(raw: Any) -> Any:
+        """The shared JSONB column arrives as a str (SqliteDb/file) or an
+        already-parsed dict (psycopg auto-parses JSONB)."""
+        if isinstance(raw, str):
+            return json.loads(raw)
+        return raw
 
     @staticmethod
     def _parse(parser: Any, raw: Any) -> Any | None:
@@ -394,36 +428,54 @@ class PostgresBackend(StorageBackend):
         now: datetime | None = None,
     ) -> SessionRecord:
         now = now or utcnow()
-        current = await self.get_session(
-            agent_name=agent_name, principal_id=principal_id, session_id=session_id
-        )
-        if current is None:
-            raise SessionNotFound(f"session {session_id!r} not found")
-        if current.revision != expected_revision:
-            raise RevisionConflict(f"revision {expected_revision} != current {current.revision}")
-        current.events = list(current.events) + list(events or [])
-        if usage:
-            for k, v in usage.items():
-                current.usage[k] = current.usage.get(k, 0) + v
-        if history_truncated is not None:
-            current.history_truncated = history_truncated
-        current.revision += 1
-        current.updated_at = now
-        rows = await self._db.query(
-            SQL["cas_session"],
-            (
-                current.to_json(),
-                now,
-                agent_name,
-                principal_id,
-                session_id,
-                expected_revision,
-            ),
-        )
-        if not rows:
-            raise RevisionConflict(f"revision {expected_revision} != current (cas failed)")
-        updated = self._parse(SessionRecord.from_json, rows[0]["data"])
-        return updated or current
+        # The read-then-CAS TOCTOU window is closed by a bounded retry: a
+        # CAS failure (a concurrent writer committed between the read and
+        # the UPDATE) re-reads the FRESH revision and re-applies the delta
+        # from there — appends commute, so no delta is lost or doubled. A
+        # caller-visible stale baseline (the first read already differs)
+        # still raises immediately: that is a caller contract, not a race.
+        for _attempt in range(1, 4):
+            current = await self.get_session(
+                agent_name=agent_name,
+                principal_id=principal_id,
+                session_id=session_id,
+            )
+            if current is None:
+                raise SessionNotFound(f"session {session_id!r} not found")
+            if current.revision != expected_revision:
+                raise RevisionConflict(
+                    f"revision {expected_revision} != current {current.revision}"
+                )
+            import copy
+
+            merged = copy.copy(current)
+            merged.events = list(current.events) + list(events or [])
+            if usage:
+                for k, v in usage.items():
+                    merged.usage[k] = merged.usage.get(k, 0) + v
+            if history_truncated is not None:
+                merged.history_truncated = history_truncated
+            merged.revision += 1
+            merged.updated_at = now
+            rows = await self._db.query(
+                SQL["cas_session"],
+                (
+                    merged.to_json(),
+                    now,
+                    agent_name,
+                    principal_id,
+                    session_id,
+                    expected_revision,
+                ),
+            )
+            if rows:
+                updated = self._parse(SessionRecord.from_json, rows[0]["data"])
+                return updated or merged
+            # CAS lost the race: re-read from the fresh revision. The next
+            # attempt's expected_revision is the revision we just tried to
+            # write; if another writer slipped in again, try once more.
+            expected_revision = merged.revision
+        raise RevisionConflict(f"revision conflict after 3 attempts (session {session_id!r})")
 
     async def truncate_session_events(
         self,
@@ -676,6 +728,12 @@ class PostgresBackend(StorageBackend):
         rows = await self._db.query(SQL["expired_sessions"], (cutoff,))
         deleted = 0
         for row in rows:
+            # SES-06: the persisted fence expiry is the held-check (the
+            # advisory lock is session-reentrant on the same connection, so
+            # a live fence must skip the purge even though the lock "succeeds")
+            fence_at = row.get("fence_expires_at")
+            if fence_at is not None and _parse_iso(fence_at) > now:
+                continue
             lock_key = _lock_key(row["agent_name"], row["principal_id"], row["session_id"])
             acquired = await self._db.try_advisory_lock(lock_key)
             if acquired:
@@ -723,13 +781,26 @@ class PostgresBackend(StorageBackend):
         ttl_seconds: float,
         now: datetime | None = None,
     ) -> Fence | None:
+        now = now or utcnow()
+        # SES-05: the fence record is the held-check. pg_try_advisory_lock is
+        # SESSION-reentrant (the same connection re-acquiring the same lock
+        # returns true), so a live fence_expires_at row must block the
+        # second acquirer even on the same connection.
+        held = await self._db.query(SQL["get_fence_expiry"], (agent_name, principal_id, session_id))
+        if held and held[0].get("fence_expires_at") is not None:
+            try:
+                expires_at = _parse_iso(held[0]["fence_expires_at"])
+            except (KeyError, TypeError, ValueError):
+                expires_at = None
+            if expires_at is not None and expires_at > now:
+                return None
         key = _lock_key(agent_name, principal_id, session_id)
         acquired = await self._db.try_advisory_lock(key)
         if not acquired:
             return None
-        now = now or utcnow()
         rows = await self._db.query(
-            SQL["bump_fence_number"], (agent_name, principal_id, session_id)
+            SQL["bump_fence_number"],
+            (now + timedelta(seconds=ttl_seconds), agent_name, principal_id, session_id),
         )
         try:
             number = int(rows[0]["fencing_number"]) if rows else 1
@@ -751,8 +822,20 @@ class PostgresBackend(StorageBackend):
     ) -> bool:
         key = _lock_key(agent_name, principal_id, session_id)
         # advisory locks persist for the connection lifetime; the token check
-        # is the SES-05 identity gate.
-        return self._tokens.get(key) == token
+        # is the SES-05 identity gate. A live renewal also extends the
+        # persisted fence expiry.
+        if self._tokens.get(key) != token:
+            return False
+        await self._db.execute(
+            SQL["bump_fence_expiry"],
+            (
+                utcnow() + timedelta(seconds=ttl_seconds),
+                agent_name,
+                principal_id,
+                session_id,
+            ),
+        )
+        return True
 
     async def release_fence(
         self, *, agent_name: str, principal_id: str, session_id: str, token: str
@@ -761,6 +844,7 @@ class PostgresBackend(StorageBackend):
         if self._tokens.get(key) != token:
             return False
         await self._db.release_advisory_lock(key)
+        await self._db.execute(SQL["clear_fence_expiry"], (agent_name, principal_id, session_id))
         self._tokens.pop(key, None)
         return True
 
@@ -779,7 +863,7 @@ class PostgresBackend(StorageBackend):
         if not rows:
             return None
         try:
-            return RunRecord.from_json(json.loads(rows[0]["data"]))
+            return RunRecord.from_json(self._parse_data(rows[0]["data"]))
         except (ValueError, TypeError, json.JSONDecodeError):
             return None
 
@@ -834,7 +918,7 @@ class PostgresBackend(StorageBackend):
         if not rows:
             return None
         try:
-            return ApprovalRecord.from_json(json.loads(rows[0]["data"]))
+            return ApprovalRecord.from_json(self._parse_data(rows[0]["data"]))
         except (ValueError, TypeError, json.JSONDecodeError):
             return None
 
@@ -845,7 +929,7 @@ class PostgresBackend(StorageBackend):
         out: list[ApprovalRecord] = []
         for row in rows:
             try:
-                out.append(ApprovalRecord.from_json(json.loads(row["data"])))
+                out.append(ApprovalRecord.from_json(self._parse_data(row["data"])))
             except (ValueError, TypeError, json.JSONDecodeError):
                 continue
         out.sort(key=lambda r: r.created_at)
@@ -856,7 +940,7 @@ class PostgresBackend(StorageBackend):
         out: list[ApprovalRecord] = []
         for row in rows:
             try:
-                record = ApprovalRecord.from_json(json.loads(row["data"]))
+                record = ApprovalRecord.from_json(self._parse_data(row["data"]))
             except (ValueError, TypeError, json.JSONDecodeError):
                 continue
             if record.agent_name == agent_name:
@@ -903,7 +987,7 @@ class PostgresBackend(StorageBackend):
         if not rows:
             return None
         try:
-            return ApprovalRecord.from_json(json.loads(rows[0]["data"]))
+            return ApprovalRecord.from_json(self._parse_data(rows[0]["data"]))
         except (ValueError, TypeError, json.JSONDecodeError):
             return None
 
@@ -913,7 +997,7 @@ class PostgresBackend(StorageBackend):
         expired: list[ApprovalRecord] = []
         for row in rows:
             try:
-                record = ApprovalRecord.from_json(json.loads(row["data"]))
+                record = ApprovalRecord.from_json(self._parse_data(row["data"]))
             except (ValueError, TypeError, json.JSONDecodeError):
                 continue
             if not record.pending:

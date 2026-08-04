@@ -25,8 +25,13 @@ AUDIT_EVENTS = {
 
 
 def audit(event: str, **fields: Any) -> None:
-    """SEC-10: one structured audit line per security-relevant event."""
+    """SEC-10: one structured audit line per security-relevant event.
+
+    An event name outside AUDIT_EVENTS is a caller bug: warn loudly instead
+    of silently remapping (the remapped line still fires so the record is
+    not lost)."""
     if event not in AUDIT_EVENTS:
+        audit_logger.warning("audit_unknown_event event=%s fields=%s", event, _kv(fields))
         event = "audit_unknown"
     audit_logger.info("audit_event=%s %s", event, _kv(fields))
 

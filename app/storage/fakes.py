@@ -335,7 +335,7 @@ def _t_sweep_runs(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
     for k in fake._keys("agentbase:*:run:*"):
         r = fake._get_decoded(k)
         if r and r.get("status") in ("succeeded", "failed", "cancelled"):
-            updated = _i(r.get("updated_at", 0))
+            updated = _i(r.get("updated_at_ts") or r.get("updated_at") or 0)
             if now_ts - updated > ttl:
                 fake._put(k, None)
                 deleted += 1
@@ -461,9 +461,31 @@ class SqliteDb:
         sql = sql.replace("ctid", "rowid")  # sqlite rowid analogue of postgres ctid
         return sql.replace("%s", "?")
 
+    @staticmethod
+    def _column_migration(sql: str, conn: Any) -> str | None:
+        """SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``; the
+        backend's idempotent column migration becomes a no-op when the
+        column already exists (the CREATE TABLE already carries it)."""
+        import re
+
+        marker = "ADD COLUMN IF NOT EXISTS"
+        if marker not in sql:
+            return sql
+        match = re.match(r"\s*ALTER TABLE\s+(\S+)\s+" + re.escape(marker) + r"\s+(\S+)", sql)
+        if match is None:
+            return sql
+        table, column = match.group(1), match.group(2)
+        columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+        if column in columns:
+            return None  # no-op
+        return sql.replace(marker, "ADD COLUMN")
+
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         async with self._lock:
-            self._conn.execute(self._translate(sql), list(params))
+            translated = self._column_migration(self._translate(sql), self._conn)
+            if translated is None:
+                return
+            self._conn.execute(translated, list(params))
 
     async def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         async with self._lock:
