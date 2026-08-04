@@ -68,7 +68,64 @@ growth; TTLs (`sessionTtlSeconds`, `runTtlSeconds`, `idempotencyTtlSeconds`)
 are swept every 10 minutes. Multi-replica deployments MUST use Redis or
 Postgres (session fencing, SES-05).
 
-## Docker
+## Approvals (P3, §14)
+
+Human-in-the-loop tool approval gates matched tools before any side effect.
+While `approval.enabled` is true:
+
+- chat requests MUST be stateful (`session_id`); stateless requests get
+  400 `approval_session_required`;
+- non-streaming runs pause with 202 `run.pending_approval`; SSE streams
+  emit `approval_required` then `[DONE]` (the run DETACHES — it is not
+  cancelled);
+- decide with `POST /v1/approvals/{id}` (`{"decision": "approve"|"deny"}`;
+  repeat → stored outcome, conflict → 409, expired → 410); pending items
+  via `GET /v1/approvals?session_id=`; run state/cancellation via
+  `GET/DELETE /v1/runs/{id}`.
+
+Configuration (`approval`): `tools` are `server/rawTool` or `server/*`
+patterns matched BEFORE public renaming; `timeoutSeconds` bounds the
+decision window; `onTimeout: deny` (default) finishes the run denied,
+`onTimeout: allow` is accepted only with an explicit boot audit and still
+runs the same stale/cancellation checks. Approval requires `auth.mode`
+other than `none` and a `redis` or `postgres` storage type (fail-closed).
+A config reload terminates pending approvals `stale_approval` and the tool
+never executes; the startup reconciler resumes/finishes records left by a
+previous process (HITL-05).
+
+## RAG / long-term memory (P4, §15)
+
+`rag.enabled` turns on principal-scoped retrieval: before each root-agent
+call the runtime retrieves ≤ `topK` chunks for the latest user message and
+inserts ONE delimited context message (explicitly labeled untrusted
+knowledge) after the system instruction.
+
+- **Store** (`rag.store`): `chroma` or `pgvector` with
+  `connectionStringEnv/File` (SEC-04) and a DNS-1123 `collection`. The
+  ACC-01 deviation applies: the acceptance proofs and offline runs use the
+  in-memory substitute; the real driver shells degrade to the substitute
+  when the driver is not installed. Changing any store/embedding/chunk
+  identity field is a component rebuild — old documents are NEVER silently
+  re-embedded; migrate explicitly (RAG-05).
+- **Embedding** (`rag.embedding`): `gemini` or `openai` with
+  `apiKeyEnv/File`; `model` selects the embedding model.
+- **Tuning**: `topK` (1..100), `minScore` (0..1), `chunkChars`,
+  `chunkOverlapChars` (must be < chunkChars), `maxDocumentBytes` (default
+  10 MiB).
+- **Documents API** (owner-scoped): `POST /v1/documents` (201 with id /
+  chunk count / content hash; `Idempotency-Key` supported), `GET
+  /v1/documents/{id}` (metadata/count/hash only — never the stored text),
+  `DELETE /v1/documents/{id}` (204, idempotent).
+- **Availability** (`rag.required`): optional — an unavailable store logs
+  ONE redacted error, emits `rag_degraded` in events/debug streams only,
+  and answers without context (readiness stays 200); required — `/readyz`
+  is 503 and chat runs fail `rag_unavailable`. Ingestion NEVER degrades
+  silently.
+- Document content is excluded from logs and traces (RAG-05); backups and
+  retention are the deployment's responsibility (the runtime stores
+  documents until deleted).
+
+
 
 ```bash
 docker build -t agentbase:latest .
