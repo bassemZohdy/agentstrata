@@ -342,6 +342,17 @@ class AgentRunner:
         record when the call needs approval, else None."""
         if not self._needs_approval(call.name or ""):
             return None
+        # HITL-04: a call that already has a resolved approval (the resumed
+        # run replays the original function_call from the session history)
+        # must not be gated again — the earlier decision stands.
+        existing = await self._backend.list_approvals(
+            agent_name=self._app_name,
+            principal_id=request.principal_id,
+            session_id=sid,
+        )
+        for prior in existing:
+            if prior.checkpoint.get("tool_call_id") == (call.id or "") and not prior.pending:
+                return None
         assert self._mcp is not None
         server_name, raw_tool = self._mcp.lookup_tool(call.name or "")
         assert server_name is not None and raw_tool is not None
@@ -389,6 +400,99 @@ class AgentRunner:
                 outcome={"awaiting_approval": True},
                 now=utcnow(),
             )
+
+    async def resume_approval(
+        self,
+        *,
+        approval_id: str,
+        principal_id: str,
+        decision: str,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        """HITL-04: CAS decide (first wins) + resume exactly once from the
+        protected checkpoint, reusing the original tool-call ID. Returns the
+        outcome: {status, approval_id, run_id} for deny/timeout/cancel paths
+        and {status: "approved", events: [...], run_id} for the resumed run
+        (or None when the race was lost)."""
+        record = await self._backend.decide_approval(
+            agent_name=self._app_name,
+            principal_id=principal_id,
+            approval_id=approval_id,
+            decision=decision,
+            reason=reason,
+        )
+        if record is None:
+            return None  # unknown or the race was lost (HITL-04)
+        if record.status != "approved":
+            return {"status": record.status, "approval_id": approval_id, "run_id": record.run_id}
+
+        # Execute the approved tool from the checkpoint (reusing the original
+        # tool-call ID), then continue the conversation with the result.
+        checkpoint = record.checkpoint
+        tool = None
+        if self._mcp is not None:
+            handle = self._mcp.handle(record.server_name)
+            if handle is not None:
+                tool = next((t for t in handle.tools if t.name == record.final_tool_name), None)
+        if tool is None:
+            return {
+                "status": "tool_unavailable",
+                "approval_id": approval_id,
+                "run_id": record.run_id,
+            }
+        from google.adk.agents.invocation_context import InvocationContext
+        from google.adk.tools import ToolContext
+
+        session = await self._adk_runner.session_service.get_session(
+            app_name=self._app_name,
+            user_id=principal_id,
+            session_id=record.session_id,
+        )
+        if session is None:
+            return {"status": "session_missing", "approval_id": approval_id}
+        ctx = InvocationContext(
+            session_service=self._adk_runner.session_service,
+            invocation_id=f"resume-{approval_id}",
+            session=session,
+        )
+        tool_context = ToolContext(ctx, function_call_id=checkpoint.get("tool_call_id") or "")
+        result = await tool.run_async(args=checkpoint.get("args", {}), tool_context=tool_context)
+
+        # Inject the function response for the ORIGINAL call id into the
+        # session so the flow can continue (HITL-04: original tool-call ID).
+        response_event = Event(
+            author=record.final_tool_name,
+            content=genai_types.Content(
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            id=checkpoint.get("tool_call_id") or "",
+                            response=result,
+                        )
+                    )
+                ]
+            ),
+        )
+        await self._adk_runner.session_service.append_event(session, response_event)
+
+        # Continue the run on the same session (the tool result is now in the
+        # history); the resumed execution is a fresh run record that reuses
+        # the original tool-call ID via the injected response.
+        run_request = RunRequest(
+            principal_id=principal_id,
+            user_message="",  # continuation: the history carries the context
+            session_id=record.session_id,
+            request_id=f"resume-{approval_id}",
+            agent_name=self._app_name,
+        )
+        events = [e async for e in self.execute(run_request)]
+        return {
+            "status": "approved",
+            "approval_id": approval_id,
+            "run_id": record.run_id,
+            "events": events,
+            "session_id": record.session_id,
+        }
 
     # -- event conversion + controls -------------------------------------------------
 

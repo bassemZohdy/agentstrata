@@ -197,3 +197,97 @@ async def test_approval_disabled_never_gates():
     ]
     assert not any(isinstance(e, ApprovalRequired) for e in events)
     await mcp.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_approves_and_continues():
+    """HITL-04: after approval, the run resumes exactly once from the
+    checkpoint, the original tool-call ID is reused, and the conversation
+    continues to a terminal event."""
+    config = _config(approval={"enabled": True, "tools": ["echo/*"], "timeoutSeconds": 300})
+    applied = AppliedConfig.from_config(config)
+    component = build_agent_component(config)
+    backend = MemoryBackend()
+    mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+    mcp.configure(config.tools.mcpServers)
+    await mcp.start()
+    service = AdkSessionService(backend)
+    runner = AgentRunner(
+        applied,
+        AdkRunner(agent=component.agent, app_name="agent", session_service=service),
+        backend,
+        app_name="agent",
+        mcp=mcp,
+    )
+    component.agent.model = CallerLlm()
+    window = float(__import__("os").environ.get("AGENT_TEST_MCP_CONNECT_SECONDS", "30"))
+    deadline = __import__("time").monotonic() + window
+    while __import__("time").monotonic() < deadline:
+        if mcp.readiness() and component.agent.tools:
+            break
+        await asyncio.sleep(0.1)
+
+    req = RunRequest(principal_id="p1", user_message="go", request_id="r-appr-4")
+    events = [e async for e in runner.execute(req)]
+    paused = [e for e in events if isinstance(e, ApprovalRequired)]
+    assert paused, "run must pause for approval"
+
+    outcome = await runner.resume_approval(
+        approval_id=paused[0].approval_id, principal_id="p1", decision="approved", reason="ok"
+    )
+    assert outcome is not None and outcome["status"] == "approved"
+    resumed = outcome["events"]
+    # the conversation continued to a terminal event
+    done = [e for e in resumed if isinstance(e, Done)]
+    assert done and done[0].finish_reason == "stop"
+    text = "".join(e.text for e in resumed if isinstance(e, TextDelta))
+    assert "done" in text
+
+    # a second resume loses the race (first decision won, HITL-04)
+    again = await runner.resume_approval(
+        approval_id=paused[0].approval_id, principal_id="p1", decision="denied"
+    )
+    assert again is None
+    await mcp.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_deny_returns_denied():
+    config = _config(approval={"enabled": True, "tools": ["echo/*"], "timeoutSeconds": 300})
+    applied = AppliedConfig.from_config(config)
+    component = build_agent_component(config)
+    backend = MemoryBackend()
+    mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+    mcp.configure(config.tools.mcpServers)
+    await mcp.start()
+    service = AdkSessionService(backend)
+    runner = AgentRunner(
+        applied,
+        AdkRunner(agent=component.agent, app_name="agent", session_service=service),
+        backend,
+        app_name="agent",
+        mcp=mcp,
+    )
+    component.agent.model = CallerLlm()
+    window = float(__import__("os").environ.get("AGENT_TEST_MCP_CONNECT_SECONDS", "30"))
+    deadline = __import__("time").monotonic() + window
+    while __import__("time").monotonic() < deadline:
+        if mcp.readiness() and component.agent.tools:
+            break
+        await asyncio.sleep(0.1)
+
+    req = RunRequest(principal_id="p1", user_message="go", request_id="r-appr-5")
+    events = [e async for e in runner.execute(req)]
+    paused = [e for e in events if isinstance(e, ApprovalRequired)]
+    assert paused
+
+    outcome = await runner.resume_approval(
+        approval_id=paused[0].approval_id, principal_id="p1", decision="denied", reason="no"
+    )
+    assert outcome is not None and outcome["status"] == "denied"
+    # the tool never executed
+    approval = await backend.get_approval(
+        agent_name="agent", principal_id="p1", approval_id=paused[0].approval_id
+    )
+    assert approval is not None and approval.status == "denied"
+    await mcp.close()
