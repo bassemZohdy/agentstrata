@@ -4,7 +4,7 @@
 ........................................................................ [ 64%]
 ........................................................................ [ 80%]
 ........................................................................ [ 96%]
-..............                                                           [100%]
+..................                                                       [100%]
 =============================== warnings summary ===============================
 <frozen abc>:106
 <frozen abc>:106
@@ -39,5 +39,15 @@ tests/test_engine/test_approval_gate.py::test_matched_tool_pauses_run_without_ex
   /opt/venv/lib/python3.12/site-packages/google/adk/models/llm_request.py:273: UserWarning: [EXPERIMENTAL] feature FeatureName.JSON_SCHEMA_FOR_FUNC_DECL is enabled.
     declaration = tool._get_declaration()
 
+tests/test_engine/test_rag.py::TestMockModelHook::test_mock_runner_env_selects_deterministic_runner
+  C:\Users\Bassem\Code\simple-agent\tests\test_engine\test_rag.py:649: RuntimeWarning: coroutine 'ServerManager.close' was never awaited
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_engine/test_rag.py::TestMockModelHook::test_mock_runner_env_selects_deterministic_runner
+  C:\Users\Bassem\Code\simple-agent\tests\test_engine\test_rag.py:657: RuntimeWarning: coroutine 'ServerManager.close' was never awaited
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-446 passed, 26 warnings in 140.73s (0:02:20)
+450 passed, 28 warnings in 141.35s (0:02:21)

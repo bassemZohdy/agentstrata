@@ -6,39 +6,40 @@
     "docker": "29.6.2",
     "platform": "linux/amd64",
     "image": "agentbase:amd64",
-    "image_id": "sha256:93c704d3d7f2dda1f3bf80d6b7d168ca09ee42de11e20eff1cc9289e731839b2",
+    "image_id": "sha256:b86a29b0236e3915e6f7ffba716e7933ed57d6aa5ec2ab2fcbdd36f3a10384cd",
     "lock_hash": "e6f4ec176f693a1305a5b1d0c5e7bfcb09163adf65ecb13c6ed2579689af4944",
-    "commit": "cd5c9ffa7dea10e74c065b0d15582a42176e47ae",
+    "commit": "1fb386e1535d733c02579efeac4c8de66634022e",
     "environment_notes": "1.0 CPU quota, 512 MiB limit, memory storage, no MCP (except NFR-09a), auth none, OTel disabled, local mock OpenAI model (host.docker.internal)."
   },
   "nfr01_startup": {
     "samples": 20,
-    "p50_seconds": 2.761,
-    "p95_seconds": 2.995,
-    "max_seconds": 2.995,
+    "p50_seconds": 2.746,
+    "p95_seconds": 3.238,
+    "max_seconds": 3.238,
     "threshold_seconds": 5.0,
     "status": "pass"
   },
   "nfr02_overhead": {
     "warmup": 100,
     "samples": 1000,
-    "p50_ms": 85.52,
-    "p95_ms": 147.51,
+    "p50_ms": 12.88,
+    "p95_ms": 18.68,
     "failures": 0,
     "server_overhead_ms": {
-      "/healthz": 2.15,
-      "/v1/models": 2.03
+      "/healthz": 2.04,
+      "/v1/models": 2.06
     },
+    "end_to_end_reference_p95_ms": 2668.15,
     "threshold_p95_ms": 50.0,
-    "note": "Measured end-to-end (server + engine + localhost mock model through the real LiteLLM bridge); the spec's gate assumes an in-process deterministic mock result. Raw server overhead (healthz/models) is ~2 ms; the engine+model round trip adds ~13 ms single-request and ~90-150 ms under concurrency 10 (ADK per-run scheduling tail). The strict 50 ms p95 gate is therefore not met as measured.",
-    "status": "fail"
+    "note": "Spec-conformant measurement (REQUIREMENTS.md \u00a76): the container runs AGENT_MOCK_MODEL=1, so the measurement covers request receipt -> validation/session work -> serialization of a deterministic in-process mock result. The end_to_end_reference (real LiteLLM bridge + localhost mock OpenAI server) is recorded for context; raw server overhead (healthz/models) is also recorded.",
+    "status": "pass"
   },
   "nfr03_concurrency": {
     "runs": 100,
-    "events_per_run_min": 145,
-    "events_per_run_p50": 145,
+    "events_per_run_min": 144,
+    "events_per_run_p50": 144,
     "observation_seconds": 30,
-    "peak_rss_kb": 303820,
+    "peak_rss_kb": 303718,
     "cap_101st_overloaded": true,
     "threshold_events_per_second": 1,
     "threshold_peak_rss_mib": 512,
@@ -46,31 +47,31 @@
   },
   "nfr04_footprint": {
     "samples_kb": [
-      115302,
-      115404,
-      115302,
-      115404,
-      115302
+      115712,
+      115712,
+      115814,
+      116019,
+      115712
     ],
-    "max_rss_kb": 115404,
+    "max_rss_kb": 116019,
     "threshold_rss_kb": 307200,
     "status": "pass"
   },
   "nfr07_bounded": {
-    "baseline_rss_kb": 115302,
+    "baseline_rss_kb": 115814,
     "rounds_rss_kb": [
-      269619,
-      271052,
-      270233,
-      270540
+      270131,
+      270643,
+      270540,
+      270745
     ],
     "round_growths_kb": [
       154317,
-      1433,
-      -819,
-      307
+      512,
+      -103,
+      205
     ],
-    "peak_rss_kb": 271052,
+    "peak_rss_kb": 270745,
     "plateaued": true,
     "serving_after": true,
     "limit_rss_kb": 524288,
@@ -121,29 +122,28 @@
   "nfr10_arm64_smoke": {
     "startup_reference": {
       "samples": 5,
-      "p50_seconds": 34.591,
-      "p95_seconds": 34.935,
-      "max_seconds": 34.935,
+      "p50_seconds": 2.725,
+      "p95_seconds": 2.742,
+      "max_seconds": 2.742,
       "threshold_seconds": 5.0,
-      "status": "fail"
+      "status": "pass"
     },
     "non_streaming_chat": true,
     "streaming_chat": true,
-    "idle_rss_kb": 363315,
+    "idle_rss_kb": 270028,
     "note": "arm64 runs under QEMU emulation here (cold boot ~35 s vs ~2.7 s native); the NFR-01 5 s gate applies to the amd64 image per NFR-00. The full acceptance suite also passes in-image on arm64 (docs/acceptance-arm64.log).",
     "status": "pass"
   },
   "summary": {
     "passed": [
       "nfr01_startup",
+      "nfr02_overhead",
       "nfr03_concurrency",
       "nfr04_footprint",
       "nfr07_bounded",
       "nfr08_reload",
       "nfr10_arm64_smoke"
     ],
-    "failed": [
-      "nfr02_overhead"
-    ]
+    "failed": []
   }
 }

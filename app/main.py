@@ -131,14 +131,26 @@ def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str
     """ENG-01: one immutable agent component per generation + the runner."""
     applied = AppliedConfig.from_config(config, generation)
     component = build_agent_component(config, generation)
+    service = AdkSessionService(backend)
     # NFR-00/NFR-02: the release performance gates run with the
     # deterministic in-process mock AgentRunner (REQUIREMENTS.md §6); the
-    # hook is inert unless AGENT_MOCK_MODEL is set.
+    # hook is inert unless AGENT_MOCK_MODEL is set — normal deployments
+    # always use the real ADK runner below.
     if os.environ.get("AGENT_MOCK_MODEL"):
-        from .engine.mock_model import MockLlm
+        from .engine.mock_runner import MockAgentRunner
 
-        component.agent.model = MockLlm()
-    service = AdkSessionService(backend)
+        runner: Any = MockAgentRunner(backend, app_name=config.name)
+        mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+        mcp.configure(config.tools.mcpServers)
+        return {
+            "applied": applied,
+            "agent": component,
+            "runner": runner,
+            "mcp": mcp,
+            "backend": backend,
+            "session_service": service,
+            "rag": None,
+        }
     from google.adk.runners import Runner as AdkRunner
 
     adk_runner = AdkRunner(agent=component.agent, app_name=config.name, session_service=service)

@@ -610,21 +610,48 @@ class TestConnectorsFailClosedRAG05:
 
 
 class TestMockModelHook:
-    def test_mock_model_env_selects_deterministic_model(self, monkeypatch):
-        """NFR-02: AGENT_MOCK_MODEL=1 swaps in the in-process deterministic
-        model at component build time (the spec's deterministic mock
-        AgentRunner); the hook is inert without the env."""
+    @pytest.mark.asyncio
+    async def test_mock_runner_env_selects_deterministic_runner(self, monkeypatch):
+        """NFR-02: AGENT_MOCK_MODEL=1 swaps in the deterministic in-process
+        mock AgentRunner at component build time (the spec's gate
+        environment, REQUIREMENTS.md §6); the hook is inert without the
+        env and the mock runner still exercises the session work + emits
+        the real event stream."""
         import app.main as main_mod
-        from app.engine.mock_model import MockLlm
+        from app.engine.events import Done, Iteration, TextDelta
+        from app.engine.mock_runner import MockAgentRunner
+        from app.engine.runner import AgentRunner, RunRequest
 
         monkeypatch.setenv("AGENT_MOCK_MODEL", "1")
         config = _rag_config(enabled=False)
         components = main_mod.build_components(config, MemoryBackend())
-        assert isinstance(components["agent"].agent.model, MockLlm)
-        components["mcp"].close()
+        try:
+            assert isinstance(components["runner"], MockAgentRunner)
+            events = [
+                e
+                async for e in components["runner"].execute(
+                    RunRequest(
+                        principal_id="p1",
+                        user_message="hi",
+                        request_id="mock-1",
+                        session_id="s-mock",
+                    )
+                )
+            ]
+            kinds = [type(e) for e in events]
+            assert Iteration in kinds and TextDelta in kinds and Done in kinds
+            # the session work is real: a run record was committed
+            run = await components["backend"].find_run(
+                agent_name="agent", principal_id="p1", run_id="mock-mock-1"
+            )
+            assert run is not None and run.terminal
+        finally:
+            components["mcp"].close()
 
         monkeypatch.delenv("AGENT_MOCK_MODEL")
         config2 = _rag_config(enabled=False)
         components2 = main_mod.build_components(config2, MemoryBackend())
-        assert not isinstance(components2["agent"].agent.model, MockLlm)
-        components2["mcp"].close()
+        try:
+            assert isinstance(components2["runner"], AgentRunner)
+        finally:
+            components2["mcp"].close()
