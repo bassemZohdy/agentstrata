@@ -347,9 +347,7 @@ async def test_transfer_recorded_in_run_audit():
 
     backend = MemoryBackend()
     adk = AdkRunner(agent=root, app_name="agent", session_service=AdkSessionService(backend))
-    runner = AgentRunner(
-        AppliedConfig.from_config(_config()), adk, backend, app_name="agent"
-    )
+    runner = AgentRunner(AppliedConfig.from_config(_config()), adk, backend, app_name="agent")
     req = RunRequest(principal_id="p1", user_message="research X", request_id="r3")
     events = [e async for e in runner.execute(req)]
     assert events  # run completed
