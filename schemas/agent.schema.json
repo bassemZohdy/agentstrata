@@ -56,15 +56,42 @@
     },
     "ApprovalConfig": {
       "additionalProperties": false,
+      "description": "HITL-01: human-in-the-loop tool approval (P3).",
       "properties": {
         "enabled": {
           "default": false,
           "title": "Enabled",
           "type": "boolean"
+        },
+        "onTimeout": {
+          "$ref": "#/$defs/ApprovalTimeout",
+          "default": "deny"
+        },
+        "timeoutSeconds": {
+          "default": 300,
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Timeoutseconds",
+          "type": "integer"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
         }
       },
       "title": "ApprovalConfig",
       "type": "object"
+    },
+    "ApprovalTimeout": {
+      "enum": [
+        "deny",
+        "allow"
+      ],
+      "title": "ApprovalTimeout",
+      "type": "string"
     },
     "Auth": {
       "additionalProperties": false,

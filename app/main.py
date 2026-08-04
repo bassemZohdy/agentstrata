@@ -203,6 +203,16 @@ def run(argv: list[str] | None = None) -> int:
                 note="auth disabled on a non-loopback bind",
             )
 
+    # HITL-01: onTimeout "allow" is accepted only when explicitly configured
+    # and emits a high-severity startup audit warning (default is deny).
+    if config.approval.enabled and config.approval.onTimeout.value == "allow":
+        audit(
+            "approval_timeout_allow",
+            severity="high",
+            timeout_seconds=config.approval.timeoutSeconds,
+            note="approval onTimeout=allow: timed-out requests are auto-approved",
+        )
+
     # SEC-03: fail-closed auth state before bind.
     if config.server.auth.mode.value == "apiKey":
         key = _resolve_api_key(config, env)

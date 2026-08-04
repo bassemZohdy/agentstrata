@@ -347,6 +347,17 @@ def _cross_field(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
     if doc.get("k8s.required") and not doc.get("k8s.enabled"):
         issue("k8s.enabled", "k8s.required: true requires k8s.enabled: true")
 
+    # HITL-01 cross-field rules (P3).
+    if doc.get("approval.enabled"):
+        if not doc.get("server.auth.mode") or doc.get("server.auth.mode") == "none":
+            issue("approval.enabled", "approval requires auth not 'none' (HITL-01)")
+        storage_type = doc.get("storage.type")
+        if storage_type in (None, "memory", "file"):
+            issue(
+                "approval.enabled",
+                "approval requires redis or postgres storage (HITL-01)",
+            )
+
 
 # ---------------------------------------------------------------------------
 # CAP-01 capability gating (P1 build)
@@ -367,6 +378,7 @@ def _capability(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
         )
     if doc.get("rag.enabled"):
         issue("rag.enabled", "this P2 build does not implement the RAG capability (CAP-01)")
+
 
 
 # ---------------------------------------------------------------------------

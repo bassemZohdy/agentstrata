@@ -320,9 +320,10 @@ class TestBootOrder:
         # both, with capability checks not masking schema checks (P2: acp is
         # accepted; approval still gates).
         issues = issues_for({"approval": {"enabled": True}, "engine": {"bogus": 1}})
-        codes = dict(issues)
-        assert codes["approval.enabled"] == "capability_error"
-        assert codes["engine.bogus"] == "unknown_field"
+        approval_codes = {code for path, code in issues if path == "approval.enabled"}
+        assert "capability_error" in approval_codes
+        assert "cross_field" in approval_codes
+        assert ("engine.bogus", "unknown_field") in issues
 
 
 class TestMultiAgentSchemaMA01:
@@ -413,3 +414,73 @@ class TestMultiAgentSchemaMA01:
             self._base(approval={"enabled": True})
         )
         assert ("rag.enabled", "capability_error") in issues_for(self._base(rag={"enabled": True}))
+
+
+class TestApprovalSchemaHITL01:
+    """HITL-01: approval field contract + fail-closed rules (P3)."""
+
+    def _approval_doc(self, **approval) -> dict:
+        doc = {
+            "name": "agent",
+            "engine": {"systemInstruction": "t"},
+            "llm": {"provider": "gemini", "model": "m"},
+            "server": {"auth": {"mode": "apiKey", "apiKeyEnv": "K"}},
+            "storage": {
+                "type": "redis",
+                "connectionStringEnv": "R",
+            },
+            "approval": {"enabled": True, **approval},
+        }
+        return doc
+
+    def test_valid_approval_configuration(self):
+        # with auth + redis storage the config is valid per HITL-01; the only
+        # issue is the P3 capability gate (flips when P3 acceptance passes)
+        issues = issues_for(self._approval_doc())
+        assert ("approval.enabled", "capability_error") in issues
+        assert not any(code == "cross_field" for _p, code in issues)
+
+    def test_enabled_requires_auth_not_none(self):
+        doc = self._approval_doc()
+        doc["server"]["auth"] = {"mode": "none"}
+        assert ("approval.enabled", "cross_field") in issues_for(doc)
+
+    def test_enabled_requires_redis_or_postgres(self):
+        for storage_type in ("memory", "file"):
+            doc = self._approval_doc()
+            doc["storage"] = {"type": storage_type}
+            assert ("approval.enabled", "cross_field") in issues_for(doc)
+
+    def test_defaults(self):
+        from app.config.models import AgentConfig
+
+        cfg = AgentConfig.model_validate(
+            {
+                "name": "agent",
+                "engine": {"systemInstruction": "t"},
+                "llm": {"provider": "gemini", "model": "m"},
+            }
+        )
+        assert cfg.approval.enabled is False
+        assert cfg.approval.tools == []
+        assert cfg.approval.timeoutSeconds == 300
+        assert cfg.approval.onTimeout.value == "deny"
+
+    def test_on_timeout_allow_explicit_and_constrained(self):
+        # explicit allow is accepted by the schema (the boot audit warns);
+        # the only issue is the P3 capability gate
+        assert issues_for(self._approval_doc(onTimeout="allow")) == [
+            ("approval.enabled", "capability_error")
+        ]
+        # invalid values rejected by the schema itself
+        assert ("approval.onTimeout", "enum") in [
+            (p, c) for p, c in issues_for(self._approval_doc(onTimeout="maybe"))
+        ]
+        assert not valid(self._approval_doc(timeoutSeconds=0))
+        assert not valid(self._approval_doc(timeoutSeconds=999999))
+
+    def test_tool_patterns_shape(self):
+        assert issues_for(self._approval_doc(tools=["server/*", "echo_ping"])) == [
+            ("approval.enabled", "capability_error")
+        ]
+        assert not valid(self._approval_doc(tools=["server/*", 5]))

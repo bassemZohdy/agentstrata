@@ -299,10 +299,24 @@ class Observability(BaseModel):
 # --- SCH-09 phase-gated stubs (fail closed in a P1 build, CAP-01) -----------
 
 
+class ApprovalTimeout(StrEnum):
+    DENY = "deny"
+    ALLOW = "allow"
+
+
 class ApprovalConfig(BaseModel):
+    """HITL-01: human-in-the-loop tool approval (P3)."""
+
     model_config = BASE_CONFIG
 
     enabled: bool = False
+    # Exact server/rawTool or server/* patterns, matched BEFORE public tool
+    # renaming (HITL-01).
+    tools: list[str] = Field(default_factory=list)
+    timeoutSeconds: int = Field(default=300, ge=1, le=86400)
+    # "allow" is accepted only when explicitly configured (a startup audit
+    # warning is emitted); the default is deny.
+    onTimeout: ApprovalTimeout = Field(default=ApprovalTimeout.DENY, strict=False)
 
 
 class RagStore(BaseModel):
