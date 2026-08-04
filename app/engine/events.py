@@ -48,6 +48,17 @@ class AgentTransfer:
 
 
 @dataclass(frozen=True)
+class ApprovalRequired:
+    """HITL-02: the run paused before a matched tool executed; the approval
+    record is durable and the checkpoint holds the exact resume arguments."""
+
+    approval_id: str
+    tool_name: str
+    preview: str
+    expires_at: str
+
+
+@dataclass(frozen=True)
 class Iteration:
     index: int
 
@@ -65,7 +76,16 @@ class RunError:
     message: str
 
 
-AgentEvent = TextDelta | ToolCall | ToolResult | AgentTransfer | Iteration | Done | RunError
+AgentEvent = (
+    TextDelta
+    | ToolCall
+    | ToolResult
+    | AgentTransfer
+    | Iteration
+    | ApprovalRequired
+    | Done
+    | RunError
+)
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +97,7 @@ class RunState(StrEnum):
     CREATED = "created"
     RUNNING = "running"
     CANCELLING = "cancelling"
+    AWAITING_APPROVAL = "awaiting_approval"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -106,6 +127,13 @@ class RunStateMachine:
             return False
         self._state = RunState.RUNNING
         return True
+
+    def pause_for_approval(self) -> bool:
+        """HITL-02: running -> awaiting_approval (non-terminal pause)."""
+        if self._state == RunState.RUNNING:
+            self._state = RunState.AWAITING_APPROVAL
+            return True
+        return False
 
     def begin_cancel(self) -> bool:
         if self._state not in (RunState.RUNNING, RunState.CREATED):

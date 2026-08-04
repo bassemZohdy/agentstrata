@@ -33,6 +33,7 @@ from .agent import AppliedConfig
 from .events import (
     AgentEvent,
     AgentTransfer,
+    ApprovalRequired,
     Done,
     Iteration,
     PublicError,
@@ -90,9 +91,11 @@ class AgentRunner:
         *,
         app_name: str | None = None,
         token_budget_per_session_remaining: int | None = None,
+        mcp: Any | None = None,
     ) -> None:
         self._applied = applied
         self._adk_runner = adk_runner
+        self._mcp = mcp
         self._backend = backend
         # The storage namespace must match the ADK Runner's app_name so
         # sessions resolve identically on both sides (SES-09).
@@ -136,8 +139,23 @@ class AgentRunner:
                         break
                     limiter.check_deadline()
                     async for agent_event in self._convert(
-                        adk_event, limiter, ledger, text_parts, transfers
+                        adk_event,
+                        limiter,
+                        ledger,
+                        text_parts,
+                        transfers,
+                        request=request,
+                        run_id=run_id,
+                        sid=sid,
                     ):
+                        if isinstance(agent_event, ApprovalRequired):
+                            # HITL-02: pause the run BEFORE any tool side
+                            # effect; the ADK generator is abandoned at this
+                            # yield, so the tool never executes.
+                            state.pause_for_approval()
+                            await self._commit_awaiting_approval(request, sid, run_id)
+                            yield agent_event
+                            return
                         if isinstance(agent_event, RunError):
                             errored = True
                         yield agent_event
@@ -301,6 +319,77 @@ class AgentRunner:
             )
         return RunConfig(**kwargs) if kwargs else None
 
+    # -- approvals (HITL-02) ------------------------------------------------------
+
+    def _needs_approval(self, final_tool_name: str) -> bool:
+        approval = self._applied.config.approval
+        if not approval.enabled or self._mcp is None:
+            return False
+        lookup = self._mcp.lookup_tool(final_tool_name)
+        if lookup is None:
+            return False
+        server_name, raw_tool = lookup
+        for pattern in approval.tools:
+            if pattern == f"{server_name}/{raw_tool}" or pattern == f"{server_name}/*":
+                return True
+        return False
+
+    async def _gate_tool_approval(
+        self, request: RunRequest, run_id: str, call: Any, sid: str
+    ) -> Any | None:
+        """HITL-02: BEFORE the tool executes, atomically persist the durable
+        approval record + protected checkpoint and pause the run. Returns the
+        record when the call needs approval, else None."""
+        if not self._needs_approval(call.name or ""):
+            return None
+        assert self._mcp is not None
+        server_name, raw_tool = self._mcp.lookup_tool(call.name or "")
+        assert server_name is not None and raw_tool is not None
+        import hashlib
+        import json as _json
+
+        args = call.args or {}
+        args_hash = hashlib.sha256(_json.dumps(args, sort_keys=True).encode()).hexdigest()
+        preview = _json.dumps(args, ensure_ascii=False)[:200]
+        record = await self._backend.create_approval(
+            agent_name=self._app_name,
+            principal_id=request.principal_id,
+            session_id=sid,
+            run_id=run_id,
+            approval_id=f"appr-{uuid.uuid4().hex[:12]}",
+            config_generation=self._applied.generation,
+            server_name=server_name,
+            raw_tool_name=raw_tool,
+            final_tool_name=call.name or "",
+            args_hash=args_hash,
+            args_preview=preview,
+            checkpoint={
+                "tool_call_id": call.id or "",
+                "final_name": call.name or "",
+                "args": args,
+                "session_id": sid,
+                "run_id": run_id,
+                "principal_id": request.principal_id,
+            },
+            timeout_seconds=self._applied.config.approval.timeoutSeconds,
+        )
+        return record
+
+    async def _commit_awaiting_approval(
+        self, request: RunRequest, session_id: str, run_id: str
+    ) -> None:
+        """Mark the run record awaiting_approval (non-terminal, durable)."""
+        with suppress(Exception):  # noqa: BLE001 - best effort persistence
+            await self._backend.update_run(
+                agent_name=self._app_name,
+                principal_id=request.principal_id,
+                session_id=session_id,
+                run_id=run_id,
+                status="awaiting_approval",
+                outcome={"awaiting_approval": True},
+                now=utcnow(),
+            )
+
     # -- event conversion + controls -------------------------------------------------
 
     async def _convert(
@@ -310,6 +399,9 @@ class AgentRunner:
         ledger: ToolLedger,
         text_parts: list[str],
         transfers: list[dict[str, str]],
+        request: RunRequest | None = None,
+        run_id: str = "",
+        sid: str = "",
     ) -> AsyncGenerator[AgentEvent, None]:
         if adk_event.usage_metadata:
             limiter.observe_usage(_usage_dict(adk_event.usage_metadata))
@@ -340,6 +432,16 @@ class AgentRunner:
                         return
                 if part.function_call:
                     call = part.function_call
+                    if request is not None:
+                        gate = await self._gate_tool_approval(request, run_id, call, sid)
+                        if gate is not None:
+                            yield ApprovalRequired(
+                                approval_id=gate.approval_id,
+                                tool_name=call.name or "",
+                                preview=gate.args_preview,
+                                expires_at=gate.expires_at.isoformat(),
+                            )
+                            return
                     record = await ledger.begin(call.id or "", call.name or "")
                     if record.state == "completed":
                         yield ToolResult(call_id=call.id or "", result=record.result)

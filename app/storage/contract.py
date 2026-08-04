@@ -312,11 +312,6 @@ class StorageBackend(ABC):
     def max_idempotency_records(self, config: Any) -> int:
         return getattr(config.storage, "maxIdempotencyRecordsPerSession", 1000)
 
-
-class AsyncLock(Protocol):
-    async def __aenter__(self) -> Any: ...
-    async def __aexit__(self, *exc: Any) -> None: ...
-
     # -- approvals (HITL-02/04, P3) ------------------------------------------
 
     @abstractmethod
@@ -368,3 +363,8 @@ class AsyncLock(Protocol):
     async def expire_approvals(self, *, now: datetime | None = None) -> list[ApprovalRecord]:
         """Sweep pending approvals past their expiry: mark timed_out and
         return them (the engine resumes the runs with the deny/allow policy)."""
+
+
+class AsyncLock(Protocol):
+    async def __aenter__(self) -> Any: ...
+    async def __aexit__(self, *exc: Any) -> None: ...

@@ -204,6 +204,17 @@ class ServerManager:
     def handle(self, name: str) -> ServerHandle | None:
         return self._handles.get(name)
 
+    def lookup_tool(self, final_name: str) -> tuple[str, str] | None:
+        """HITL-02: map a FINAL (renamed) tool name back to its
+        (server_name, raw_tool_name) pair, so approval patterns can match
+        server/rawTool BEFORE renaming."""
+        for name, handle in self._handles.items():
+            for raw, final in zip(handle.raw_names, handle.final_names, strict=False):
+                if final == final_name:
+                    return (name, raw)
+        return None
+        return self._handles.get(name)
+
     # -- lifecycle ---------------------------------------------------------------
 
     async def start(self) -> None:

@@ -135,9 +135,15 @@ def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str
     from google.adk.runners import Runner as AdkRunner
 
     adk_runner = AdkRunner(agent=component.agent, app_name=config.name, session_service=service)
-    runner = AgentRunner(applied, adk_runner, backend, app_name=config.name)
     # MA-03: agents receive only their toolServers' tools (root: all servers).
     mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+    runner = AgentRunner(
+        applied,
+        adk_runner,
+        backend,
+        app_name=config.name,
+        mcp=mcp,  # HITL-02: the approval gate resolves raw tool names via the manager
+    )
     mcp.configure(config.tools.mcpServers)
     return {
         "applied": applied,
