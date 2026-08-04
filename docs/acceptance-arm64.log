@@ -40,4 +40,4 @@ tests/test_engine/test_approval_gate.py::test_matched_tool_pauses_run_without_ex
     declaration = tool._get_declaration()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-446 passed, 26 warnings in 278.73s (0:04:38)
+446 passed, 26 warnings in 276.98s (0:04:36)
