@@ -492,6 +492,12 @@ class MemoryBackend(StorageBackend):
             and r.session_id == session_id
         ]
 
+    async def list_all_approvals(self, *, agent_name: str) -> list[ApprovalRecord]:
+        return sorted(
+            (r for (a, _p, _i), r in self._approvals.items() if a == agent_name),
+            key=lambda r: r.created_at,
+        )
+
     async def decide_approval(
         self,
         *,

@@ -73,6 +73,28 @@ async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> Asyn
     mcp = components.get("mcp")
     if mcp is not None and hasattr(mcp, "start") and not getattr(mcp, "_started", False):
         await mcp.start()
+    # HITL-05: the approval reconciler runs at startup (finishes pending
+    # records left by a previous process) and then on a fixed interval to
+    # enforce approval timeouts against the onTimeout policy.
+    runner = components.get("runner")
+    if runner is not None and hasattr(runner, "reconcile_pending"):
+        try:
+            await runner.reconcile_pending()
+        except Exception:  # noqa: BLE001 - reconciliation must not block boot
+            import logging
+
+            logging.getLogger("app.lifecycle").exception("approval reconcile (startup)")
+        interval = max(float(getattr(runner, "_reconcile_interval", 5.0)), 1.0)
+
+        async def _reconcile_loop() -> None:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    await runner.reconcile_pending()
+                except Exception:  # noqa: BLE001
+                    logging.getLogger("app.lifecycle").exception("approval reconcile (loop)")
+
+        components["reconcile_task"] = asyncio.create_task(_reconcile_loop())
     yield
 
 

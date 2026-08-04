@@ -720,6 +720,18 @@ class FileBackend(StorageBackend):
         records.sort(key=lambda r: r.created_at)
         return records
 
+    async def list_all_approvals(self, *, agent_name: str) -> list[ApprovalRecord]:
+        root = self._base / agent_name
+        if not root.is_dir():
+            return []
+        out: list[ApprovalRecord] = []
+        for directory in root.glob("*/approval-*.json"):
+            record = await asyncio.to_thread(self._read_record, directory, ApprovalRecord.from_json)
+            if record is not None:
+                out.append(record)
+        out.sort(key=lambda r: r.created_at)
+        return out
+
     async def decide_approval(
         self,
         *,

@@ -558,6 +558,20 @@ class TestApprovals:
         record = await backend.create_approval(**await self._create(backend))
         assert record.pending
         assert record.checkpoint["args"] == {"text": "hi"}  # protected checkpoint
+
+    async def test_list_all_approvals_agent_scoped(self, backend):
+        """HITL-05: the reconciler's global scan is agent-scoped."""
+        await self._open(backend)
+        await backend.create_approval(**await self._create(backend))
+        await backend.create_approval(
+            **await self._create(backend, approval_id="appr-2", principal_id="p2")
+        )
+        await backend.create_approval(
+            **await self._create(backend, agent_name="other", approval_id="appr-3")
+        )
+        all_records = await backend.list_all_approvals(agent_name="agent")
+        ids = {r.approval_id for r in all_records}
+        assert ids == {"appr-1", "appr-2"}  # p2 included, other agent excluded
         fetched = await backend.get_approval(
             agent_name="agent", principal_id="p1", approval_id="appr-1"
         )

@@ -291,3 +291,164 @@ async def test_resume_deny_returns_denied():
     )
     assert approval is not None and approval.status == "denied"
     await mcp.close()
+
+
+async def _build_paused_runner(
+    approval: dict, generation: int = 1
+) -> tuple[AgentRunner, MemoryBackend, ServerManager, str]:
+    """Build a runner whose first run pauses at the approval gate."""
+    config = _config(approval=approval)
+    applied = AppliedConfig.from_config(config, generation=generation)
+    component = build_agent_component(config)
+    backend = MemoryBackend()
+    mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+    mcp.configure(config.tools.mcpServers)
+    await mcp.start()
+    import os
+    import time
+
+    window = float(os.environ.get("AGENT_TEST_MCP_CONNECT_SECONDS", "30"))
+    deadline = time.monotonic() + window
+    while time.monotonic() < deadline:
+        if mcp.readiness() and component.agent.tools:
+            break
+        await asyncio.sleep(0.1)
+    component.agent.model = CallerLlm()
+    service = AdkSessionService(backend)
+    runner = AgentRunner(
+        applied,
+        AdkRunner(agent=component.agent, app_name="agent", session_service=service),
+        backend,
+        app_name="agent",
+        mcp=mcp,
+    )
+    request = RunRequest(
+        principal_id="p1",
+        user_message="go",
+        request_id="r1",
+        session_id="s1",
+        agent_name="agent",
+    )
+    events = [e async for e in runner.execute(request)]
+    paused = next(e for e in events if isinstance(e, ApprovalRequired))
+    return runner, backend, mcp, paused.approval_id
+
+
+async def test_stale_approval_never_executes_tool():
+    """HITL-05: after a config change, the pending approval terminates
+    stale_approval and the tool MUST NOT execute."""
+    runner, backend, mcp, approval_id = await _build_paused_runner(
+        {"enabled": True, "tools": ["echo/*"], "timeoutSeconds": 300}
+    )
+    try:
+        # simulate a reload: the runner now runs a NEW generation
+        runner._applied = AppliedConfig.from_config(
+            _config({"enabled": True, "tools": ["echo/*"], "timeoutSeconds": 300}),
+            generation=2,
+        )
+        outcome = await runner.resume_approval(
+            approval_id=approval_id, principal_id="p1", decision="approved"
+        )
+        assert outcome is not None and outcome["status"] == "stale_approval"
+        record = await backend.get_approval(
+            agent_name="agent", principal_id="p1", approval_id=approval_id
+        )
+        assert record is not None and record.status == "stale_approval"
+        # the resumed run never happened and the tool never ran
+        existing = await backend.list_runs(agent_name="agent", principal_id="p1", session_id="s1")
+        assert not any(r.input.get("request_id") == f"resume-{approval_id}" for r in existing)
+    finally:
+        await mcp.close()
+
+
+async def test_timeout_deny_finishes_run():
+    """HITL-05: onTimeout deny — the reconciler sweep finishes the run
+    denied; the tool never executes."""
+    from datetime import timedelta
+
+    from app.storage.model import utcnow
+
+    runner, backend, mcp, approval_id = await _build_paused_runner(
+        {"enabled": True, "tools": ["echo/*"], "timeoutSeconds": 5}
+    )
+    try:
+        record = await backend.get_approval(
+            agent_name="agent", principal_id="p1", approval_id=approval_id
+        )
+        # push the approval past its expiry (the sweep decides)
+        counters = await runner.reconcile_pending(now=utcnow() + timedelta(seconds=60))
+        assert counters["timed_out"] >= 1
+        assert counters["deny"] >= 1
+        final = await backend.get_approval(
+            agent_name="agent", principal_id="p1", approval_id=approval_id
+        )
+        assert final is not None and final.status == "timed_out"
+        run = await backend.find_run(agent_name="agent", principal_id="p1", run_id=record.run_id)
+        assert run is not None and run.terminal
+        assert run.outcome.get("approval") == "denied"
+    finally:
+        await mcp.close()
+
+
+async def test_timeout_allow_executes_and_continues():
+    """HITL-05: onTimeout allow — the reconciler resumes the paused run
+    (the tool executes; the stale/cancellation checks still apply)."""
+    from datetime import timedelta
+
+    from app.storage.model import utcnow
+
+    runner, backend, mcp, approval_id = await _build_paused_runner(
+        {"enabled": True, "tools": ["echo/*"], "timeoutSeconds": 5, "onTimeout": "allow"}
+    )
+    try:
+        counters = await runner.reconcile_pending(now=utcnow() + timedelta(seconds=60))
+        assert counters["timed_out"] >= 1
+        assert counters["allow"] >= 1
+        # the resume run exists (exactly-once guard, matched by request_id)
+        existing = await backend.list_runs(agent_name="agent", principal_id="p1", session_id="s1")
+        resume = next(
+            (r for r in existing if r.input.get("request_id") == f"resume-{approval_id}"),
+            None,
+        )
+        assert resume is not None and resume.terminal
+        # the approval is terminal (timed_out -> the resume was the allow)
+        record = await backend.get_approval(
+            agent_name="agent", principal_id="p1", approval_id=approval_id
+        )
+        assert record is not None and record.status == "timed_out"
+        # a second reconcile does not re-execute (idempotent)
+        counters2 = await runner.reconcile_pending(now=utcnow() + timedelta(seconds=120))
+        assert counters2["allow"] == 0
+    finally:
+        await mcp.close()
+
+
+async def test_decided_while_down_resumes_once():
+    """HITL-05: an approval decided while the process was down (no resume
+    record) is resumed exactly once by the reconciler."""
+    runner, backend, mcp, approval_id = await _build_paused_runner(
+        {"enabled": True, "tools": ["echo/*"], "timeoutSeconds": 300}
+    )
+    try:
+        # decide WITHOUT resuming (as if a previous process died after the
+        # decision was durable but before the resume ran)
+        await backend.decide_approval(
+            agent_name="agent",
+            principal_id="p1",
+            approval_id=approval_id,
+            decision="approved",
+            reason="decided while down",
+        )
+        counters = await runner.reconcile_pending()
+        assert counters["resumed"] >= 1
+        existing = await backend.list_runs(agent_name="agent", principal_id="p1", session_id="s1")
+        resume = next(
+            (r for r in existing if r.input.get("request_id") == f"resume-{approval_id}"),
+            None,
+        )
+        assert resume is not None and resume.terminal
+        # a second reconcile does not resume again
+        counters2 = await runner.reconcile_pending()
+        assert counters2["resumed"] == 0
+    finally:
+        await mcp.close()

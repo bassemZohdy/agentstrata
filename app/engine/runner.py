@@ -18,6 +18,7 @@ from asyncio import CancelledError
 from collections.abc import AsyncGenerator
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from google.adk.events import Event
@@ -28,7 +29,7 @@ from ..storage.contract import (
     SessionNotFound,
     StorageBackend,
 )
-from ..storage.model import utcnow
+from ..storage.model import ApprovalRecord, utcnow
 from .agent import AppliedConfig
 from .events import (
     AgentEvent,
@@ -414,6 +415,25 @@ class AgentRunner:
         outcome: {status, approval_id, run_id} for deny/timeout/cancel paths
         and {status: "approved", events: [...], run_id} for the resumed run
         (or None when the race was lost)."""
+        # HITL-05: a stale approval (config generation changed between the
+        # pause and the decision) terminates and the tool MUST NOT execute —
+        # checked BEFORE the CAS decide so the stale decision wins the race.
+        before = await self._backend.get_approval(
+            agent_name=self._app_name,
+            principal_id=principal_id,
+            approval_id=approval_id,
+        )
+        if before is None:
+            return None  # unknown
+        if before.config_generation != self._applied.generation:
+            await self._backend.decide_approval(
+                agent_name=self._app_name,
+                principal_id=principal_id,
+                approval_id=approval_id,
+                decision="stale_approval",
+                reason="config generation changed",
+            )
+            return {"status": "stale_approval", "approval_id": approval_id, "run_id": before.run_id}
         record = await self._backend.decide_approval(
             agent_name=self._app_name,
             principal_id=principal_id,
@@ -422,12 +442,42 @@ class AgentRunner:
             reason=reason,
         )
         if record is None:
-            return None  # unknown or the race was lost (HITL-04)
+            return None  # the race was lost (HITL-04)
         if record.status != "approved":
             return {"status": record.status, "approval_id": approval_id, "run_id": record.run_id}
+        return await self._execute_resume(record, principal_id, reason)
 
-        # Execute the approved tool from the checkpoint (reusing the original
-        # tool-call ID), then continue the conversation with the result.
+    async def _execute_resume(
+        self, record: ApprovalRecord, principal_id: str, reason: str | None = None
+    ) -> dict[str, Any]:
+        """Execute the approved tool from the checkpoint (reusing the original
+        tool-call ID), then continue the conversation with the result.
+        HITL-05: the resume is idempotent — the deterministic resume run
+        record guards against double execution (restart reconciler + a
+        racing decision)."""
+        approval_id = record.approval_id
+        # resume-once guard: the deterministic resume run (request_id =
+        # resume-{approval_id}) exists -> the resume already executed (or is
+        # executing). The runner mints its own run uuid, so the guard
+        # matches the run INPUT request_id within the session.
+        existing = await self._backend.list_runs(
+            agent_name=self._app_name,
+            principal_id=principal_id,
+            session_id=record.session_id,
+        )
+        already = next(
+            (r for r in existing if r.input.get("request_id") == f"resume-{approval_id}"),
+            None,
+        )
+        if already is not None:
+            return {
+                "status": "approved",
+                "approval_id": approval_id,
+                "run_id": record.run_id,
+                "events": [],
+                "session_id": record.session_id,
+                "resumed": True,
+            }
         checkpoint = record.checkpoint
         tool = None
         if self._mcp is not None:
@@ -493,6 +543,104 @@ class AgentRunner:
             "events": events,
             "session_id": record.session_id,
         }
+
+    async def reconcile_pending(self, *, now: datetime | None = None) -> dict[str, int]:
+        """HITL-05: the restart/config-change reconciler.
+
+        - Expired pendings follow the onTimeout policy (deny = the run
+          finishes denied; allow = the tool runs only after the same
+          stale/cancellation checks).
+        - Decided-but-not-resumed approvals (decided while the process was
+          down) are resumed exactly once (the deterministic resume run
+          record guards double execution).
+        - Pendings from a retired config generation terminate stale_approval
+          and the tool never executes.
+        Returns the per-outcome counters for the audit.
+        """
+        from ..config.models import ApprovalTimeout
+
+        counters: dict[str, int] = {
+            "timed_out": 0,
+            "allow": 0,
+            "deny": 0,
+            "resumed": 0,
+            "stale_approval": 0,
+        }
+        now = now or utcnow()
+        policy = (
+            self._applied.config.approval.onTimeout
+            if self._applied.config.approval is not None
+            else ApprovalTimeout.DENY
+        )
+        # 1. the timeout sweep + policy handling
+        timed_out = await self._backend.expire_approvals(now=now)
+        for record in timed_out:
+            counters["timed_out"] += 1
+            if policy == ApprovalTimeout.ALLOW:
+                # timeout-allow follows approval only after the same
+                # stale/cancellation checks as a manual decision; the record
+                # is already timed_out so the resume executes directly (the
+                # deterministic resume run record still guards re-entry).
+                if record.config_generation != self._applied.generation:
+                    counters["stale_approval"] += 1
+                    await self._finish_pending_run(record, "stale_approval", "timeout-allow stale")
+                else:
+                    outcome = await self._execute_resume(record, record.principal_id)
+                    counters["allow" if outcome.get("status") == "approved" else "deny"] += 1
+            else:
+                await self._finish_pending_run(record, "denied", "timeout-deny")
+                counters["deny"] += 1
+        # 2. every other record of this agent: stale pendings + resumes
+        for record in await self._backend.list_all_approvals(agent_name=self._app_name):
+            if record.pending:
+                if record.config_generation != self._applied.generation:
+                    stale = await self._backend.decide_approval(
+                        agent_name=self._app_name,
+                        principal_id=record.principal_id,
+                        approval_id=record.approval_id,
+                        decision="stale_approval",
+                        reason="config generation changed",
+                    )
+                    counters["stale_approval"] += 1
+                    if stale is not None:
+                        await self._finish_pending_run(
+                            stale, "stale_approval", "config generation changed"
+                        )
+                continue
+            if record.status == "approved":
+                # decided while the process was down (or racing) -> resume
+                # exactly once; _execute_resume's record guard is the CAS.
+                existing = await self._backend.list_runs(
+                    agent_name=self._app_name,
+                    principal_id=record.principal_id,
+                    session_id=record.session_id,
+                )
+                if any(
+                    r.input.get("request_id") == f"resume-{record.approval_id}" for r in existing
+                ):
+                    continue
+                outcome = await self._execute_resume(record, record.principal_id)
+                if outcome.get("status") == "approved":
+                    counters["resumed"] += 1
+            elif record.status in ("denied", "cancelled", "stale_approval"):
+                await self._finish_pending_run(record, record.status, record.reason)
+        return counters
+
+    async def _finish_pending_run(
+        self, record: ApprovalRecord, status: str, reason: str | None = None
+    ) -> None:
+        """Terminate the run that was awaiting_approval (the approval is
+        already decided)."""
+        with suppress(Exception):  # noqa: BLE001 - best effort persistence
+            await self._backend.update_run(
+                agent_name=self._app_name,
+                principal_id=record.principal_id,
+                session_id=record.session_id,
+                run_id=record.run_id,
+                status="failed" if status != "cancelled" else "cancelled",
+                outcome={"approval": status, "reason": reason},
+                now=utcnow(),
+            )
 
     # -- event conversion + controls -------------------------------------------------
 

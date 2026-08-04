@@ -128,6 +128,9 @@ SQL = {
         "SELECT session_id, data FROM agent_runs"
         " WHERE agent_name = %s AND principal_id = %s AND run_id = %s"
     ),
+    "list_all_approvals": (
+        "SELECT principal_id, approval_id, data FROM agent_approvals WHERE agent_name = %s"
+    ),
     "expire_approvals": (
         "SELECT agent_name, principal_id, approval_id, data FROM agent_approvals"
         " WHERE data->>'status' = 'pending' AND data->>'expires_at' < %s"
@@ -845,6 +848,19 @@ class PostgresBackend(StorageBackend):
                 out.append(ApprovalRecord.from_json(json.loads(row["data"])))
             except (ValueError, TypeError, json.JSONDecodeError):
                 continue
+        out.sort(key=lambda r: r.created_at)
+        return out
+
+    async def list_all_approvals(self, *, agent_name: str) -> list[ApprovalRecord]:
+        rows = await self._db.query(SQL["list_all_approvals"], (agent_name,))
+        out: list[ApprovalRecord] = []
+        for row in rows:
+            try:
+                record = ApprovalRecord.from_json(json.loads(row["data"]))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if record.agent_name == agent_name:
+                out.append(record)
         out.sort(key=lambda r: r.created_at)
         return out
 

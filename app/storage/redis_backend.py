@@ -648,6 +648,24 @@ class RedisBackend(StorageBackend):
         out.sort(key=lambda r: r.created_at)
         return out
 
+    async def list_all_approvals(self, *, agent_name: str) -> list[ApprovalRecord]:
+        entries = await self._client.eval(
+            LIST_APPROVALS,
+            [self._approval_index],
+            [],
+        )
+        out: list[ApprovalRecord] = []
+        for entry in entries or []:
+            parts = entry.split(":")
+            if len(parts) != 3 or parts[0] != agent_name:
+                continue
+            a_name, p_id, a_id = parts
+            record = await self.get_approval(agent_name=a_name, principal_id=p_id, approval_id=a_id)
+            if record is not None:
+                out.append(record)
+        out.sort(key=lambda r: r.created_at)
+        return out
+
     async def decide_approval(
         self,
         *,

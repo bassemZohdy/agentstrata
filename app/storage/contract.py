@@ -351,6 +351,11 @@ class StorageBackend(ABC):
     ) -> list[ApprovalRecord]: ...
 
     @abstractmethod
+    @abstractmethod
+    async def list_all_approvals(self, *, agent_name: str) -> list[ApprovalRecord]:
+        """Global owner-scoped scan across sessions (HITL-05 reconciler)."""
+
+    @abstractmethod
     async def decide_approval(
         self,
         *,
