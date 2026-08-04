@@ -8,6 +8,8 @@ transfer, and MCP tool isolation per toolServers (root = all servers).
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from app.config.models import AgentConfig
@@ -197,3 +199,55 @@ async def test_transfer_to_unknown_agent_fails_run():
     errors = [e for e in events if isinstance(e, RunError)]
     assert errors, "expected a RunError for the unknown transfer target"
     assert errors[0].code in ("provider_error", "invalid_request"), errors[0].code
+
+
+@pytest.mark.asyncio
+async def test_tool_isolation_per_toolservers():
+    """MA-03: a sub-agent receives only its toolServers' tools (post
+    filter/collision mapping); the root coordinator sees every server."""
+    import asyncio
+
+    from app.engine.agent import AppliedConfig
+    from app.engine.mcp.manager import ServerManager
+
+    config = _config(
+        tools={
+            "mcpServers": [
+                {
+                    "name": "alpha",
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": ["scripts/spike_mcp_server.py"],
+                },
+                {
+                    "name": "beta",
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": ["scripts/spike_mcp_server.py"],
+                },
+            ]
+        },
+        agents=[{"name": "worker", "systemInstruction": "w", "toolServers": ["alpha"]}],
+    )
+    component = build_agent_component(config)
+    mcp = ServerManager(
+        AppliedConfig.from_config(config), tool_targets=list(component.tool_targets)
+    )
+    mcp.configure(config.tools.mcpServers)
+    await mcp.start()
+    try:
+        for _ in range(100):
+            if mcp.readiness() and component.agent.tools and component.sub_agents[0].tools:
+                break
+            await asyncio.sleep(0.1)
+        root_names = sorted(getattr(t, "name", "") for t in component.agent.tools)
+        worker = component.sub_agents[0]
+        worker_names = sorted(getattr(t, "name", "") for t in worker.tools)
+        # collision-safe final names (MCP-03): the first server (alpha) keeps
+        # the raw 'echo'; beta's copy is disambiguated to beta_echo.
+        assert root_names == ["beta_echo", "echo"], root_names
+        assert worker_names == ["echo"], worker_names
+        # the sub-agent cannot see the beta server's tool at all (MA-03)
+        assert "beta_echo" not in worker_names
+    finally:
+        await mcp.close()

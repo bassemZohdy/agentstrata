@@ -22,7 +22,7 @@ from google.adk.tools import McpToolset
 
 from ..agent import AppliedConfig
 from .bounds import bounded_httpx_client_factory
-from .filtering import apply_tool_filter, rename_collision_safe
+from .filtering import apply_tool_filter
 from .stdio_sandbox import build_stdio_params, wrap_stdio_params
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,7 @@ class ServerHandle:
     state: ServerState = ServerState.DISCONNECTED
     tools: list[Any] = field(default_factory=list)
     raw_names: list[str] = field(default_factory=list)
+    filtered_names: list[str] = field(default_factory=list)
     final_names: list[str] = field(default_factory=list)
     backoff_seconds: float = 1.0
     last_error: str | None = None
@@ -99,6 +100,8 @@ class ServerManager:
         self._attach_lock = asyncio.Lock()
         # server -> final tool names currently attached to the targets.
         self._attached: dict[str, list[str]] = {}
+        # server -> last computed final names (stable across reconnects).
+        self._final_by_server: dict[str, list[str]] = {}
 
     def set_tool_targets(self, tool_targets: list[tuple[Any, list[str] | None]]) -> None:
         """(Re)bind which agents see which servers (component rebuild)."""
@@ -113,34 +116,45 @@ class ServerManager:
         ]
 
     async def _attach_tools(self, handle: ServerHandle) -> None:
-        """MA-03: attach the server's final-named tools to the agents that may
-        see it (idempotent: previous attachments of this server are removed
-        first). Renames the raw tool objects in place to their final names so
-        the model sees the collision-safe surface."""
+        """MA-03: attach final-named tools to the agents that may see the
+        server (idempotent). Every attach re-syncs ALL connected servers:
+        raw tools are renamed in place to their CURRENT global finals (a
+        later-connecting server may change an earlier one's final name), and
+        each target's tool list is rebuilt from the servers it may see."""
         if handle.toolset is None or not handle.tools:
             return
         async with self._attach_lock:
-            final_by_raw: dict[str, Any] = {}
-            for raw, final in zip(handle.raw_names, handle.final_names, strict=False):
-                for tool in handle.tools:
-                    if tool.name == raw:
-                        tool.name = final
-                        final_by_raw[raw] = tool
-                        break
-            attached = [t for raw, t in final_by_raw.items()]
-            for agent in self._targets_for(handle.name):
-                old = self._attached.get(handle.name, [])
-                agent.tools = [t for t in agent.tools if t.name not in old] + attached
-            self._attached[handle.name] = [t.name for t in attached]
+            self._recompute_finals()
+            # Rename every connected server's raw tools to the current finals.
+            for _name, other in self._handles.items():
+                if not other.tools:
+                    continue
+                final_of = dict(zip(other.raw_names, other.final_names, strict=False))
+                for tool in other.tools:
+                    if tool.name in final_of:
+                        tool.name = final_of[tool.name]
+            # Rebuild each target's list from the servers it may see.
+            attached: dict[str, list[Any]] = {}
+            for name, other in self._handles.items():
+                if other.tools:
+                    attached[name] = [t for t in other.tools if t.name in other.final_names]
+            for agent, allowed in self._tool_targets:
+                allowed_names = [n for n in self._handles if allowed is None or n in allowed]
+                agent.tools = [t for n in allowed_names for t in attached.get(n, [])]
+            self._attached = {n: [t.name for t in ts] for n, ts in attached.items()}
 
     async def _detach_tools(self, handle: ServerHandle) -> None:
         """Remove the server's tools from every target (disconnect/close)."""
         async with self._attach_lock:
-            old = set(self._attached.pop(handle.name, []))
-            if not old:
-                return
-            for agent in self._targets_for(handle.name):
-                agent.tools = [t for t in agent.tools if t.name not in old]
+            self._handles[handle.name].tools = []
+            self._attached.pop(handle.name, None)
+            attached: dict[str, list[Any]] = {}
+            for name, other in self._handles.items():
+                if other.tools:
+                    attached[name] = [t for t in other.tools if t.name in other.final_names]
+            for agent, allowed in self._tool_targets:
+                allowed_names = [n for n in self._handles if allowed is None or n in allowed]
+                agent.tools = [t for n in allowed_names for t in attached.get(n, [])]
 
     # -- configuration ----------------------------------------------------------
 
@@ -157,6 +171,32 @@ class ServerManager:
                 max_transport_message_bytes=server.maxTransportMessageBytes,
                 max_tools=server.maxTools,
             )
+        self._final_by_server = {}
+
+    def _recompute_finals(self) -> None:
+        """MCP-03: cross-server collision-safe final names.
+
+        The final name space is GLOBAL (a raw name claimed by one server is
+        ``{server}_{raw}`` for the next) and deterministic: computed from all
+        servers' current filtered names in configured order, so reconnects
+        keep stable final names."""
+        used: set[str] = set()
+        for name, handle in self._handles.items():
+            finals: list[str] = []
+            for raw in handle.filtered_names:
+                if raw not in used:
+                    finals.append(raw)
+                    used.add(raw)
+                else:
+                    candidate = f"{name}_{raw}"
+                    suffix = 2
+                    while candidate in used:
+                        candidate = f"{name}_{raw}_{suffix}"
+                        suffix += 1
+                    finals.append(candidate)
+                    used.add(candidate)
+            handle.final_names = finals
+            self._final_by_server[name] = finals
 
     def handles(self) -> list[ServerHandle]:
         return list(self._handles.values())
@@ -257,23 +297,24 @@ class ServerManager:
             params = self._build_params(handle)
             toolset = McpToolset(connection_params=params)
             tools = await toolset.get_tools()
-            # MCP-03: filter + collision-safe rename
+            # MCP-03: filter, then compute the GLOBAL collision-safe final
+            # names across all servers (deterministic in configured order).
             raw_names = [t.name for t in tools]
             filtered = apply_tool_filter(
                 raw_names, handle.tool_filter_allow, handle.tool_filter_deny
             )
-            final = rename_collision_safe(filtered, handle.name)
             handle.tools = tools
             handle.raw_names = raw_names
-            handle.final_names = final
+            handle.filtered_names = filtered
             handle.toolset = toolset
             handle.state = ServerState.CONNECTED
             handle.last_error = None
             handle.backoff_seconds = 1.0  # reset on success
-            logger.info("MCP server %s connected (%d tools)", handle.name, len(final))
-            # MA-03: attach the final-named tools to the agents that may see
-            # this server (best-effort; a failed attach must not drop the
-            # connection state).
+            logger.info(
+                "MCP server %s connected (%d tools)", handle.name, len(handle.filtered_names)
+            )
+            # MA-03: recompute the GLOBAL final names + attach under the lock
+            # (best-effort; a failed attach must not drop the connection).
             try:
                 await self._attach_tools(handle)
             except Exception:  # noqa: BLE001
