@@ -321,3 +321,70 @@ def test_health_marker_written_on_app_startup(monkeypatch, tmp_path):
         assert client.get("/healthz").status_code == 200
         assert marker.is_file(), "health marker was never written"
         assert marker.read_text() == "8080", marker.read_text()
+
+
+class TestMultiAgentReloadMA05:
+    @pytest.mark.asyncio
+    async def test_agents_change_is_component_rebuild(self):
+        """MA-05: a change to agents[] is a component rebuild (transactional
+        apply with rollback on failure), not a live snapshot."""
+        from app.engine.agent import AppliedConfig
+
+        config = _resolved_config()
+
+        def builder(cfg, generation):
+            from app.storage.memory import MemoryBackend
+
+            return {
+                "applied": AppliedConfig.from_config(cfg, generation),
+                "backend": MemoryBackend(),
+                "generation": generation,
+            }
+
+        manager = ReloadManager(builder, config, builder(config, 1), bundled_dir=REPO_CONFIG)
+        result = await manager.apply_tier8(
+            {"agents": [{"name": "worker", "systemInstruction": "w"}]}
+        )
+        assert result.outcome == "applied_rebuild"
+        assert manager.generation == 2
+        assert manager.components["generation"] == 2
+        # an invalid agents change rolls back (no generation advance)
+        before = manager.generation
+        failed = await manager.apply_tier8(
+            {"agents": [{"name": "Bad_Name", "systemInstruction": "x"}]}
+        )
+        assert failed.outcome == "rejected"
+        assert manager.generation == before
+
+    @pytest.mark.asyncio
+    async def test_rebuild_replaces_runner_with_sub_agents(self):
+        """MA-05: after the rebuild, the live runner carries the new agent
+        tree (sub-agents included)."""
+        from app.engine.agent import AppliedConfig, build_agent_component
+        from app.storage.memory import MemoryBackend
+
+        config = _resolved_config()
+
+        def builder(cfg, generation):
+            component = build_agent_component(cfg, generation)
+            backend = MemoryBackend()
+            return {
+                "applied": AppliedConfig.from_config(cfg, generation),
+                "agent": component,
+                "backend": backend,
+                "generation": generation,
+            }
+
+        manager = ReloadManager(builder, config, builder(config, 1), bundled_dir=REPO_CONFIG)
+        result = await manager.apply_tier8(
+            {
+                "agents": [
+                    {"name": "worker", "systemInstruction": "w"},
+                    {"name": "helper", "systemInstruction": "h"},
+                ]
+            }
+        )
+        assert result.outcome == "applied_rebuild"
+        component = manager.components["agent"]
+        assert [a.name for a in component.sub_agents] == ["worker", "helper"]
+        assert [a.name for a in component.agent.sub_agents] == ["worker", "helper"]

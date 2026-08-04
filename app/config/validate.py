@@ -354,21 +354,19 @@ def _cross_field(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
 
 
 def _capability(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
+    """CAP-01 fail-closed gating. P2 (multi-agent + ACP) is implemented and
+    its acceptance suite is in the tree, so those configs are accepted; P3/P4
+    remain fail-closed."""
+
     def issue(path: str, msg: str) -> None:
         issues.append(ConfigIssue(path, "capability_error", msg, _tier_of(res, path)))
 
-    if doc.raw("agents"):
-        issue("agents", "this P1 build does not implement the multi-agent capability (CAP-01)")
-    if doc.get("server.protocols.acp"):
-        issue(
-            "server.protocols.acp", "this P1 build does not implement the ACP capability (CAP-01)"
-        )
     if doc.get("approval.enabled"):
         issue(
-            "approval.enabled", "this P1 build does not implement the approval capability (CAP-01)"
+            "approval.enabled", "this P2 build does not implement the approval capability (CAP-01)"
         )
     if doc.get("rag.enabled"):
-        issue("rag.enabled", "this P1 build does not implement the RAG capability (CAP-01)")
+        issue("rag.enabled", "this P2 build does not implement the RAG capability (CAP-01)")
 
 
 # ---------------------------------------------------------------------------

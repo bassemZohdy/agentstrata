@@ -2,18 +2,19 @@
 
 The image exposes its phase and capabilities at build time and through
 ``GET /health`` (Milestone 5). A capability is reported ``true`` only when its
-acceptance suite is present and passing — none of the P2–P4 capabilities are
-implemented in this P1 build.
+acceptance suite is present and passing — P2 (multi-agent + ACP) is now
+implemented and its acceptance suite is in the tree; P3/P4 remain fail-closed.
 """
 
 from __future__ import annotations
 
 from .resolver import ConfigError
 
-PHASE = "P1"
+PHASE = "P2"
 
-# CAP-01: a P1 build rejects non-empty agents, acp:true, approval.enabled,
-# and rag.enabled (fail closed, never warn-and-continue).
+# CAP-01: a P2 build rejects approval.enabled and rag.enabled (fail closed,
+# never warn-and-continue); multi-agent and ACP are implemented and gated on
+# their acceptance suite (CAP-02).
 CAPABILITY_PATHS = {
     "multiAgent": "agents",
     "acp": "server.protocols.acp",
@@ -22,8 +23,8 @@ CAPABILITY_PATHS = {
 }
 
 BUILD_CAPABILITIES: dict[str, bool] = {
-    "multiAgent": False,
-    "acp": False,
+    "multiAgent": True,
+    "acp": True,
     "approval": False,
     "rag": False,
 }

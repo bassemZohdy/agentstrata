@@ -243,13 +243,19 @@ class TestCrossField:
 
 
 class TestCapability:
-    def test_acp_forbidden(self):
-        assert ("server.protocols.acp", "capability_error") in issues_for(
-            {"server": {"protocols": {"acp": True}}}
-        )
+    def test_acp_accepted_in_p2(self):
+        # P2 flip (CAP-02): the ACP surface is implemented and its acceptance
+        # suite is in the tree.
+        assert valid({"server": {"protocols": {"acp": True}}})
 
-    def test_agents_forbidden(self):
-        assert ("agents", "capability_error") in issues_for({"agents": [{"name": "x"}]})
+    def test_agents_accepted_in_p2(self):
+        assert valid(
+            {
+                "agents": [
+                    {"name": "worker", "systemInstruction": "w"},
+                ]
+            }
+        )
 
     def test_approval_forbidden(self):
         assert ("approval.enabled", "capability_error") in issues_for(
@@ -262,18 +268,21 @@ class TestCapability:
     def test_disabled_stubs_accepted(self):
         assert valid({"agents": [], "approval": {"enabled": False}, "rag": {"enabled": False}})
 
-    def test_capability_status_reports_p1(self):
+    def test_capability_status_reports_p2(self):
         from app.config.capabilities import BUILD_CAPABILITIES, capability_status
 
         assert BUILD_CAPABILITIES == {
-            "multiAgent": False,
-            "acp": False,
+            "multiAgent": True,
+            "acp": True,
             "approval": False,
             "rag": False,
         }
         status = capability_status()
-        assert status["phase"] == "P1"
-        assert status["acp"] == False  # noqa: E712
+        assert status["phase"] == "P2"
+        assert status["multiAgent"] is True
+        assert status["acp"] is True
+        assert status["approval"] is False
+        assert status["rag"] is False
 
 
 class TestAggregate:
@@ -308,10 +317,11 @@ class TestAggregate:
 class TestBootOrder:
     def test_validate_then_capability_order(self):
         # A config with BOTH a schema error and a capability error must report
-        # both, with capability checks not masking schema checks.
-        issues = issues_for({"server": {"protocols": {"acp": True}}, "engine": {"bogus": 1}})
+        # both, with capability checks not masking schema checks (P2: acp is
+        # accepted; approval still gates).
+        issues = issues_for({"approval": {"enabled": True}, "engine": {"bogus": 1}})
         codes = dict(issues)
-        assert codes["server.protocols.acp"] == "capability_error"
+        assert codes["approval.enabled"] == "capability_error"
         assert codes["engine.bogus"] == "unknown_field"
 
 
@@ -329,8 +339,7 @@ class TestMultiAgentSchemaMA01:
         return doc
 
     def test_valid_sub_agent_parses(self):
-        # The CAP-01 gate still fails closed until the capability flips
-        # (P2-7), so "valid per MA-01" means the ONLY issue is the gate.
+        # P2 flip (CAP-02): valid MA-01 definitions pass validation entirely.
         for doc in (
             self._base(agents=[{"name": "worker", "systemInstruction": "work"}]),
             self._base(
@@ -345,7 +354,7 @@ class TestMultiAgentSchemaMA01:
                 ]
             ),
         ):
-            assert issues_for(doc) == [("agents", "capability_error")]
+            assert issues_for(doc) == []
 
     def test_duplicate_names_rejected(self):
         assert ("agents", "cross_field") in issues_for(
@@ -395,12 +404,12 @@ class TestMultiAgentSchemaMA01:
             )
         )
 
-    def test_capability_gate_still_fail_closed(self):
-        # CAP-01: a P2 build in progress still rejects enabling multi-agent
-        # until the capability flips (P2-7).
-        assert ("agents", "capability_error") in issues_for(
-            self._base(agents=[{"name": "worker", "systemInstruction": "a"}])
+    def test_capability_gate_fail_closed_for_p3_p4(self):
+        # CAP-01: P3/P4 capabilities stay fail-closed; multi-agent and ACP are
+        # accepted (the P2 flip, CAP-02).
+        assert issues_for(self._base(agents=[{"name": "worker", "systemInstruction": "a"}])) == []
+        assert issues_for(self._base(server={"protocols": {"acp": True}})) == []
+        assert ("approval.enabled", "capability_error") in issues_for(
+            self._base(approval={"enabled": True})
         )
-        assert ("server.protocols.acp", "capability_error") in issues_for(
-            self._base(server={"protocols": {"acp": True}})
-        )
+        assert ("rag.enabled", "capability_error") in issues_for(self._base(rag={"enabled": True}))
