@@ -280,8 +280,13 @@ async def nfr01_startup(
 
 
 async def nfr02_overhead(platform: str, config: Path) -> dict:
-    """NFR-02: after 100 warm-up, p95 over 1 000 non-streaming @ conc 10 < 50 ms."""
-    runtime = Runtime(platform, config)
+    """NFR-02: after 100 warm-up, p95 over 1 000 non-streaming @ conc 10
+    < 50 ms, measured from request receipt through validation/session work
+    to serialization of a DETERMINISTIC IN-PROCESS mock result (the spec's
+    definition, REQUIREMENTS.md §6: the gates run with the deterministic
+    mock AgentRunner). The container runs with AGENT_MOCK_MODEL=1 so no
+    provider, network, or subprocess participates in the measurement."""
+    runtime = Runtime(platform, config, extra_env={"AGENT_MOCK_MODEL": "1"})
     runtime.start()
     try:
         await runtime.wait_ready()
@@ -306,6 +311,35 @@ async def nfr02_overhead(platform: str, config: Path) -> dict:
             await asyncio.gather(*(one() for _ in range(1000)))
     finally:
         runtime.stop()
+    # Reference: the same gate measured END-TO-END through the real
+    # LiteLLM bridge + the localhost mock OpenAI server (what the original
+    # harness recorded); kept for context, not for the gate verdict.
+    reference: dict[str, float] = {}
+    ref_runtime = Runtime(platform, config)
+    ref_runtime.start()
+    try:
+        await ref_runtime.wait_ready()
+        async with httpx.AsyncClient(timeout=30) as client:
+            ref_latencies: list[float] = []
+            limiter = asyncio.Semaphore(10)
+
+            async def ref_one() -> None:
+                async with limiter:
+                    started = time.perf_counter()
+                    r = await client.post(
+                        f"http://127.0.0.1:{ref_runtime.port}/v1/chat/completions",
+                        json=chat_body(),
+                    )
+                    ref_latencies.append(time.perf_counter() - started)
+                    assert r.status_code == 200
+
+            await asyncio.gather(*(ref_one() for _ in range(200)))
+        reference = {
+            "samples": len(ref_latencies),
+            "p95_ms": round(percentile(ref_latencies, 0.95) * 1000, 2),
+        }
+    finally:
+        ref_runtime.stop()
     # Context probes: raw server overhead (no engine) for the breakdown.
     overhead: dict[str, float] = {}
     probe = Runtime(platform, config)
@@ -330,15 +364,16 @@ async def nfr02_overhead(platform: str, config: Path) -> dict:
         "p95_ms": round(percentile(latencies, 0.95) * 1000, 2),
         "failures": failures,
         "server_overhead_ms": overhead,
+        "end_to_end_reference_p95_ms": reference.get("p95_ms"),
         "threshold_p95_ms": 50.0,
         "note": (
-            "Measured end-to-end (server + engine + localhost mock model through "
-            "the real LiteLLM bridge); the spec's gate assumes an in-process "
-            "deterministic mock result. Raw server overhead (healthz/models) "
-            "is ~2 ms; the engine+model round trip adds ~13 ms single-request "
-            "and ~90-150 ms under concurrency 10 (ADK per-run scheduling "
-            "tail). The strict 50 ms p95 gate is therefore not met as "
-            "measured."
+            "Spec-conformant measurement (REQUIREMENTS.md §6): the container "
+            "runs AGENT_MOCK_MODEL=1, so the measurement covers request "
+            "receipt -> validation/session work -> serialization of a "
+            "deterministic in-process mock result. The end_to_end_reference "
+            "(real LiteLLM bridge + localhost mock OpenAI server) is recorded "
+            "for context; raw server overhead (healthz/models) is also "
+            "recorded."
         ),
         "status": PASS if percentile(latencies, 0.95) * 1000 < 50.0 else FAIL,
     }

@@ -298,33 +298,26 @@ class DeterministicEmbedding:
 
 
 def build_embedding(cfg: RagConfig) -> EmbeddingProvider:
-    """Construct the embedding provider; the real adapters are thin shells
-    whose drivers are import-guarded (real-instance proofs deferred per the
-    ACC-01 deviation)."""
+    """Construct the embedding provider; FAILS CLOSED (ConfigError) when
+    the configured provider's driver is missing — no silent degradation.
+    DeterministicEmbedding is the ACC-01 substitute for tests/offline dev
+    only, constructed directly."""
     if cfg.embedding.provider.value == "openai":
-        try:
-            from .rag_connectors import OpenAIEmbedding
+        from .rag_connectors import OpenAIEmbedding
 
-            return OpenAIEmbedding(cfg.embedding)
-        except ImportError:
-            pass
-    try:
-        from .rag_connectors import GeminiEmbedding
+        return OpenAIEmbedding(cfg.embedding)
+    from .rag_connectors import GeminiEmbedding
 
-        return GeminiEmbedding(cfg.embedding)
-    except ImportError:
-        return DeterministicEmbedding(cfg.embedding.model)
+    return GeminiEmbedding(cfg.embedding)
 
 
 def build_store(cfg: RagConfig) -> RagStore:
-    """Construct the store; chroma/pgvector are import-guarded thin shells
-    (real-instance proofs deferred per the ACC-01 deviation)."""
-    try:
-        from .rag_connectors import build_connector_store
+    """Construct the store; FAILS CLOSED (ConfigError) when the configured
+    store type's driver is missing. MemoryRagStore is the ACC-01 substitute
+    for tests/offline dev only, constructed directly."""
+    from .rag_connectors import build_connector_store
 
-        return build_connector_store(cfg)
-    except ImportError:
-        return MemoryRagStore()
+    return build_connector_store(cfg)
 
 
 @dataclass

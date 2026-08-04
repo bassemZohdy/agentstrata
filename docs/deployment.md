@@ -68,7 +68,35 @@ growth; TTLs (`sessionTtlSeconds`, `runTtlSeconds`, `idempotencyTtlSeconds`)
 are swept every 10 minutes. Multi-replica deployments MUST use Redis or
 Postgres (session fencing, SES-05).
 
-## Approvals (P3, §14)
+## Multi-agent and ACP (P2, §13 + API-16)
+
+`agents[]` (optional, flat, one level) declares sub-agents; the root agent
+becomes an ADK coordinator that transfers to them by name/description:
+
+```yaml
+agents:
+  - name: worker            # DNS-label, distinct from the root
+    systemInstruction: "…"  # required, non-empty
+    description: "…"        # optional, <= 2000 code points
+    llm:                    # optional; deep-merged over the root llm
+      model: "…"
+    toolServers: ["alpha"]  # optional; defaults to EVERY MCP server
+```
+
+- Empty/absent `agents[]` keeps the P1 single-agent behavior.
+- Tool isolation (MA-03): a sub-agent sees only its `toolServers` tools
+  (after MCP filter + collision-safe renaming); the coordinator has no
+  hidden tools; transfer grants no new principal/budget.
+- Transfers surface as `agent_transfer` events in events/debug streams and
+  in the run audit; streaming-mode gating follows API-13.
+- The ACP surface (API-16, annex §13.1) is enabled with
+  `server.protocols.acp: true`: `GET /acp/agents` lists the coordinator
+  and sub-agents (name/description/tools), `POST /acp/runs` runs an agent
+  by name (non-streaming and SSE; the annex error table applies).
+- Changing `agents` is a component rebuild (REL-02): in-flight runs
+  finish on the old generation; new runs use the new one.
+
+
 
 Human-in-the-loop tool approval gates matched tools before any side effect.
 While `approval.enabled` is true:

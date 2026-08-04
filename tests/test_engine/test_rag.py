@@ -574,3 +574,57 @@ class TestSecurityRAG05:
             query="CONFIDENTIAL-BODY-MARKER",
         )
         assert context is not None and "CONFIDENTIAL-BODY-MARKER" in context
+
+
+class TestConnectorsFailClosedRAG05:
+    """RAG-05: the configured real store/embedding NEVER silently degrades —
+    a missing driver is a ConfigError at construction."""
+
+    def test_chroma_store_missing_driver_fails_closed(self):
+        from app.config.resolver import ConfigError
+        from app.engine.rag import build_store
+
+        cfg = _rag_config(store={"type": "chroma"}).rag
+        with pytest.raises(ConfigError):
+            build_store(cfg)
+
+    def test_openai_embedding_constructs_with_driver(self):
+        # the openai SDK ships via litellm in the runtime image; the
+        # adapter must construct (no network at construction).
+        from app.engine.rag import build_embedding
+
+        cfg = _rag_config(embedding={"provider": "openai"}).rag
+        adapter = build_embedding(cfg)
+        assert adapter.model == cfg.embedding.model
+
+    def test_pgvector_store_constructs_with_driver(self):
+        # psycopg ships in the runtime image; construction must succeed
+        # (no connection is attempted until first use — health() probes).
+        from app.engine.rag import build_store
+
+        cfg = _rag_config(store={"type": "pgvector"}).rag
+        store = build_store(cfg)
+        import asyncio
+
+        assert asyncio.run(store.health()) is False  # no server reachable
+
+
+class TestMockModelHook:
+    def test_mock_model_env_selects_deterministic_model(self, monkeypatch):
+        """NFR-02: AGENT_MOCK_MODEL=1 swaps in the in-process deterministic
+        model at component build time (the spec's deterministic mock
+        AgentRunner); the hook is inert without the env."""
+        import app.main as main_mod
+        from app.engine.mock_model import MockLlm
+
+        monkeypatch.setenv("AGENT_MOCK_MODEL", "1")
+        config = _rag_config(enabled=False)
+        components = main_mod.build_components(config, MemoryBackend())
+        assert isinstance(components["agent"].agent.model, MockLlm)
+        components["mcp"].close()
+
+        monkeypatch.delenv("AGENT_MOCK_MODEL")
+        config2 = _rag_config(enabled=False)
+        components2 = main_mod.build_components(config2, MemoryBackend())
+        assert not isinstance(components2["agent"].agent.model, MockLlm)
+        components2["mcp"].close()

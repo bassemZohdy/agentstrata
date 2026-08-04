@@ -23,7 +23,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | API-13 | app/config/models.py (engine.streaming); app/protocol/routes/chat.py |
 | API-14 | app/protocol/routes/chat.py (usage reporting) |
 | API-15 | app/protocol/errors.py |
-| API-16 | P2 — deferred (multi-agent/ACP) |
+| API-16 | REQUIREMENTS.md §13.1 annex; tests/test_protocol/test_acp.py (A-1..A-6) |
 | API-17 | app/protocol/routes/sessions.py::register_models |
 | API-18 | scripts/gen-schemas.py; schemas/openapi.json |
 | API-19 | app/protocol/routes/chat.py (snake_case surface) |
@@ -77,20 +77,20 @@ verified by the Milestone 8 acceptance/chaos run.
 | ENG-09 | app/engine/tools.py::ToolLedger |
 | ENG-10 | app/engine/events.py::sanitize_error; app/protocol/errors.py |
 | GATE-01 | deleted in v2.2 scope pass (referenced only in revision history) |
-| HITL-01 | P3 — deferred (approval) |
-| HITL-02 | P3 — deferred |
-| HITL-03 | P3 — deferred |
-| HITL-04 | P3 — deferred |
-| HITL-05 | P3 — deferred |
-| HITL-06 | P3 — deferred |
+| HITL-01 | app/config/models.py (ApprovalConfig); tests/test_config/test_validation.py |
+| HITL-02 | app/storage/*_backend.py (approvals); tests/test_storage/test_contract.py |
+| HITL-03 | app/protocol/routes/{chat,approvals}.py; tests/test_protocol/test_approval_api.py |
+| HITL-04 | app/engine/runner.py::resume_approval; tests/test_engine/test_approval_gate.py |
+| HITL-05 | app/engine/runner.py::reconcile_pending; tests/test_engine/test_approval_gate.py |
+| HITL-06 | tests/test_engine/test_approval_gate.py + tests/test_protocol/test_approval_api.py |
 | LLM-01 | app/engine/connectors.py::build_llm |
 | LLM-02 | app/engine/connectors.py (CredentialHealth/SecretResolver) |
 | LLM-03 | app/engine/connectors.py::RetryableLlm |
-| MA-01 | P2 — deferred (multi-agent schema) |
-| MA-02 | P2 — deferred (construction/routing) |
-| MA-03 | P2 — deferred (tool isolation) |
-| MA-04 | P2 — deferred (transfer events) |
-| MA-05 | P2 — deferred (reload/acceptance) |
+| MA-01 | app/config/models.py (agents[]); tests/test_config/test_validation.py |
+| MA-02 | app/engine/agent.py (coordinator/sub_agents); tests/test_engine/test_multiagent.py |
+| MA-03 | app/engine/mcp/manager.py (tool_targets); tests/test_engine/test_multiagent.py |
+| MA-04 | app/engine/events.py (AgentTransfer) + chat.py; tests/test_engine/test_multiagent.py |
+| MA-05 | app/watcher/reload.py; tests/test_watcher/test_reload.py + test_multiagent.py |
 | MCP-01 | app/engine/mcp/manager.py |
 | MCP-02 | app/engine/mcp/manager.py::readiness |
 | MCP-03 | app/engine/mcp/filtering.py |
@@ -122,12 +122,12 @@ verified by the Milestone 8 acceptance/chaos run.
 | OBS-06 | tests/test_observability/test_obs.py (zero-cost subprocess) |
 | PHASE-01 | REQUIREMENTS.md §1.3; app/config/capabilities.py (CAP-02) |
 | PROD-01 | REQUIREMENTS.md §1 (product boundary) |
-| RAG-01 | P4 — deferred |
-| RAG-02 | P4 — deferred |
-| RAG-03 | P4 — deferred |
-| RAG-04 | P4 — deferred |
-| RAG-05 | P4 — deferred |
-| RAG-06 | P4 — deferred |
+| RAG-01 | app/config/models.py (RagConfig); tests/test_config/test_validation.py |
+| RAG-02 | app/engine/rag.py + runner context injection; tests/test_engine/test_rag.py |
+| RAG-03 | app/protocol/routes/documents.py; tests/test_protocol/test_documents.py |
+| RAG-04 | app/engine/runner.py + health.py; tests/test_engine/test_rag.py |
+| RAG-05 | app/engine/rag_connectors.py + reload.py; tests/test_engine/test_rag.py |
+| RAG-06 | tests/test_engine/test_rag.py + test_documents.py + test_validation.py |
 | REL-01 | app/watcher/reload.py::apply_tier8 |
 | REL-02 | app/watcher/reload.py::classify_change |
 | REL-03 | app/watcher/reload.py (transactional swap) |
