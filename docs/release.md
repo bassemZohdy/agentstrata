@@ -17,7 +17,8 @@ dependency-lock hash, and test results that verified it.
 
 | Field | Value |
 | --- | --- |
-| Source commit | `670acea` (P4 acceptance run + docs) |
+| Source commit | `670acea` → `76453da` (P4 acceptance run + final docs) |
+| Image digest | `agentbase@sha256:45b6cd8931631e63a50a74fe8a3b5472f42c1f78f7132dc7d78732bc14d42145` (amd64; re-verify per build) |
 | Acceptance | **446/446 passed inside the image on linux/amd64 AND linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}` — RAG-01..06 suites included) |
 | Host suite | **446 passed**, ruff + mypy clean, schemas zero-diff, traceability 164 IDs mapped |
 | Capabilities | phase `P4`; `multiAgent`/`acp`/`approval`/`rag` all true (CAP-02) |
