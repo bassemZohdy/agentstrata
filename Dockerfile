@@ -49,6 +49,16 @@ RUN useradd --uid 10001 --gid 0 --no-create-home --shell /usr/sbin/nologin agent
     && mkdir -p /tmp /var/lib/agentbase \
     && chmod -R g+w /tmp /var/lib/agentbase /app \
     && chown -R 10001:0 /tmp /var/lib/agentbase /app
+# CNT-01/CNT-12: the runtime never invokes pip — drop pip (and pip's
+# vendored msgpack/setuptools, which carry HIGH CVEs with available fixes)
+# from the venv and the base image. ensurepip stays: the test image uses it
+# to reinstall pip for the locked dev-tooling install.
+RUN rm -rf /opt/venv/lib/python3.12/site-packages/pip \
+           /opt/venv/lib/python3.12/site-packages/pip-*.dist-info \
+           /usr/local/lib/python3.12/site-packages/pip \
+           /usr/local/lib/python3.12/site-packages/pip-*.dist-info \
+    && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
+             /opt/venv/bin/pip /opt/venv/bin/pip3 /opt/venv/bin/pip3.12
 USER 10001:0
 
 # CNT-11: read-only rootfs — writes confined to /tmp and storage.path

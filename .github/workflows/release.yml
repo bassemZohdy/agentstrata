@@ -1,0 +1,68 @@
+name: release
+
+# CNT-12 keyless signing + provenance: triggered on version tags. Keyless
+# signing requires an OIDC identity (GitHub Actions id-token) — it cannot run
+# from a local machine, so this workflow is the signing step of record. The
+# image digest, SBOM and provenance attestations are signed with cosign and
+# the signatures are stored next to the image in the registry.
+#
+# Local exit-check evidence (SBOM, vulnerability scan, provenance OCI layout,
+# canary scan) is produced by the M8 supply-chain run — see docs/supplychain/.
+#
+# Registry: GHCR by default (GHCR OIDC is fully supported); to publish to
+# Docker Hub instead, set REGISTRY/releaseImage secrets and swap the login.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  id-token: write # keyless signing identity
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-sign:
+    name: Build, SBOM, sign (multi-arch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f89e91997287f526999809f2940d7825 # v3.6.0
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push with SBOM + provenance attestations
+        id: build
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6deb34f1b56a3a88 # v6.9.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          provenance: true
+          sbom: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb16cf1363d57646f3464e4 # v3.7.0
+
+      - name: Sign the image and its attestations (keyless, OIDC)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE}"
+          cosign sign --yes "${IMAGE}" --attestation-uri "${IMAGE}"

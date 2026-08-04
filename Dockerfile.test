@@ -20,9 +20,15 @@ USER root
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
+# The runtime image drops pip (CNT-01/12); the test image needs it back to
+# install the locked dev tooling. ensurepip's bundled pip is hash-verified by
+# the python distribution itself; the dev lock install then stays hash-pinned.
+# (Invoke via ``python -m pip``: ensurepip may recreate only pip3/pip3.12.)
+RUN python -m ensurepip --upgrade
+
 COPY requirements-dev.lock /build/requirements-dev.lock
-RUN /opt/venv/bin/pip install --require-hashes -r /build/requirements-dev.lock \
-    && /opt/venv/bin/pip check
+RUN python -m pip install --require-hashes -r /build/requirements-dev.lock \
+    && python -m pip check
 
 WORKDIR /repo
 ENTRYPOINT ["python", "-m", "pytest"]
