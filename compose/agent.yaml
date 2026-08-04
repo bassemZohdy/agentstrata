@@ -19,5 +19,5 @@ tools:
     - name: "echo"
       transport: "stdio"
       command: "python"
-      args: ["/srv/server.py"]
+      args: ["/scripts/spike_mcp_server.py"]
       required: false

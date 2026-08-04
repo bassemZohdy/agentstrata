@@ -26,6 +26,9 @@ services:
       - "8080:8080"
     volumes:
       - ./compose/agent.yaml:/etc/agent/agent.yaml:ro
+      # stdio MCP: the runtime spawns the server process itself, so the
+      # sample server script is mounted read-only here too.
+      - ./scripts:/scripts:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -52,8 +55,14 @@ services:
       timeout: 3s
       retries: 10
 
-  # Sample MCP server (stdio) the runtime can connect to.
+  # Sample MCP server (stdio) the runtime can connect to. The server script
+  # is mounted read-only from ./scripts (the .dockerignore excludes scripts/
+  # from build contexts per CNT-01); stdin_open keeps the stdio server alive
+  # as a packaged reference service.
   mcp-sample:
     build:
       context: .
       dockerfile: Dockerfile.mcp-sample
+    stdin_open: true
+    volumes:
+      - ./scripts:/srv:ro

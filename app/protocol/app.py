@@ -13,7 +13,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -55,10 +55,18 @@ class RunSlotGate:
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI, components: dict[str, Any]) -> AsyncIterator[None]:
+async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> AsyncIterator[None]:
     """Startup: the tier-8 watch loop and the MCP reconcilers need a live
     event loop; main.py only constructs them (M8 gate regressions: both
-    were never started in production)."""
+    were never started in production). Also writes the CNT-10 bound-port
+    marker (uvicorn binds before the lifespan startup, so the file appears
+    only after a successful bind)."""
+    import os
+    from pathlib import Path
+
+    marker = Path(os.environ.get("AGENT_HEALTH_MARKER", "/tmp/agentbase.ready"))
+    with suppress(OSError):
+        marker.write_text(str(port), encoding="utf-8")
     watcher = components.get("watcher")
     if watcher is not None and hasattr(watcher, "run"):
         components["watcher_task"] = asyncio.create_task(watcher.run())
@@ -76,7 +84,7 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
         docs_url=None,  # API-18: documented OpenAPI, no interactive docs by default
         redoc_url=None,
         openapi_url="/openapi.json",
-        lifespan=lambda _app: _lifespan(_app, components),
+        lifespan=lambda _app: _lifespan(_app, components, config.server.port),
     )
 
     # NFR-03 / API-15: replica-local in-flight run cap. The chat route

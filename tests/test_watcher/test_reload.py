@@ -289,3 +289,35 @@ def test_production_wiring_starts_mcp_reconcilers_on_app_startup():
     with TestClient(app) as client:
         assert client.get("/healthz").status_code == 200
         assert started.is_set(), "mcp.start() was never called"
+
+
+def test_health_marker_written_on_app_startup(monkeypatch, tmp_path):
+    """CNT-10 regression: the bound-port marker (/tmp/agentbase.ready by
+    default) must be written once the listener binds — without it the
+    container HEALTHCHECK fails forever."""
+    from fastapi.testclient import TestClient
+
+    from app.protocol.app import create_app
+
+    marker = tmp_path / "agentbase.ready"
+    monkeypatch.setenv("AGENT_HEALTH_MARKER", str(marker))
+    config = AgentConfig.model_validate(
+        {
+            "name": "agent",
+            "engine": {"systemInstruction": "t"},
+            "llm": {"provider": "gemini", "model": "mock"},
+            "server": {"port": 8080},
+        }
+    )
+    from app.storage.memory import MemoryBackend
+
+    components = {
+        "applied": AppliedConfig.from_config(config),
+        "backend": MemoryBackend(),
+        "mcp": SimpleNamespace(readiness=lambda: True, health=lambda: []),
+    }
+    app = create_app(config, components, mode="standalone")
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+        assert marker.is_file(), "health marker was never written"
+        assert marker.read_text() == "8080", marker.read_text()
