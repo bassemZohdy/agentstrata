@@ -39,6 +39,15 @@ class ToolResult:
 
 
 @dataclass(frozen=True)
+class AgentTransfer:
+    """MA-04: one ADK transfer between agents (event/debug streams only;
+    text mode stays text-only)."""
+
+    from_agent: str
+    to_agent: str
+
+
+@dataclass(frozen=True)
 class Iteration:
     index: int
 
@@ -56,7 +65,7 @@ class RunError:
     message: str
 
 
-AgentEvent = TextDelta | ToolCall | ToolResult | Iteration | Done | RunError
+AgentEvent = TextDelta | ToolCall | ToolResult | AgentTransfer | Iteration | Done | RunError
 
 
 # ---------------------------------------------------------------------------

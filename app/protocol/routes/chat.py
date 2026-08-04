@@ -19,7 +19,15 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from ...engine.events import Done, Iteration, RunError, TextDelta, ToolCall, ToolResult
+from ...engine.events import (
+    AgentTransfer,
+    Done,
+    Iteration,
+    RunError,
+    TextDelta,
+    ToolCall,
+    ToolResult,
+)
 from ...engine.runner import RunRequest
 from ..errors import PublicErrorResponse
 
@@ -355,6 +363,9 @@ async def _stream(
     slow_seconds = config.server.slowConsumerSeconds
     slow_consumer = asyncio.Event()
     gen = runner.execute(run_request)
+    # API-13: text = text deltas only; events = + tool_call/tool_result + agent
+    # transfer; debug = + iteration events (MA-04: text mode stays text-only).
+    stream_mode = config.engine.streaming.value
 
     async def produce() -> None:
         try:
@@ -413,6 +424,8 @@ async def _stream(
                     }
                 )
             elif isinstance(event, Iteration):
+                if stream_mode != "debug":
+                    continue
                 yield _sse_data(
                     {
                         "id": request_id,
@@ -422,7 +435,27 @@ async def _stream(
                         "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
                     }
                 )
+            elif isinstance(event, AgentTransfer):
+                # MA-04: event/debug streams only; text mode stays text-only.
+                if stream_mode == "text":
+                    continue
+                yield _sse_data(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": _now(),
+                        "model": config.llm.model,
+                        "choices": [],
+                        "x_agent_event": {
+                            "type": "agent_transfer",
+                            "from": event.from_agent,
+                            "to": event.to_agent,
+                        },
+                    }
+                )
             elif isinstance(event, ToolCall):
+                if stream_mode == "text":
+                    continue
                 yield _sse_data(
                     {
                         "id": request_id,

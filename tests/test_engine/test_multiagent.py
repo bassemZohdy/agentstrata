@@ -9,6 +9,7 @@ transfer, and MCP tool isolation per toolServers (root = all servers).
 from __future__ import annotations
 
 import sys
+from typing import Any
 
 import pytest
 
@@ -251,3 +252,110 @@ async def test_tool_isolation_per_toolservers():
         assert "beta_echo" not in worker_names
     finally:
         await mcp.close()
+
+
+def _transfer_stream_body(stream_mode: str, events) -> str:
+    """Drive the SSE _stream directly with a fake runner (test_streaming.py
+    pattern) and collect the body."""
+    import asyncio
+    from types import SimpleNamespace
+    from typing import cast
+
+    from app.protocol.routes.chat import _stream
+
+    class _FakeRequest:
+        async def is_disconnected(self) -> bool:
+            return False
+
+    async def _execute(_request):
+        for event in events:
+            yield event
+
+    async def _drain(gen):
+        out = []
+        async for chunk in gen:
+            out.append(chunk)
+        return "".join(out)
+
+    runner = SimpleNamespace(execute=_execute)
+    cfg = _config(engine={"systemInstruction": "t", "streaming": stream_mode})
+    return asyncio.run(
+        _drain(
+            _stream(
+                runner,
+                cast(Any, SimpleNamespace(session_id=None)),
+                cast(Any, _FakeRequest()),
+                "rid1",
+                cfg,
+                None,
+                {},
+                "p1",
+                "agent",
+            )
+        )
+    )
+
+
+def test_agent_transfer_only_in_events_and_debug_streams():
+    from app.engine.events import AgentTransfer, Done, TextDelta
+
+    events = [
+        TextDelta(text="hello"),
+        AgentTransfer(from_agent="agent", to_agent="researcher"),
+        Done(finish_reason="stop", x_agent_status=None, usage={}),
+    ]
+    text_body = _transfer_stream_body("text", events)
+    assert '"type": "agent_transfer"' not in text_body
+    assert '"content": "hello"' in text_body
+    events_body = _transfer_stream_body("events", events)
+    assert '"type": "agent_transfer"' in events_body
+    assert '"from": "agent"' in events_body and '"to": "researcher"' in events_body
+    debug_body = _transfer_stream_body("debug", events)
+    assert '"type": "agent_transfer"' in debug_body
+
+
+@pytest.mark.asyncio
+async def test_transfer_recorded_in_run_audit():
+    """MA-04: transfers land in the run audit (outcome), never as a
+    user-visible session message."""
+    from google.adk.agents import LlmAgent
+
+    from .conftest import ScriptedLlm
+
+    sub = LlmAgent(
+        name="researcher",
+        instruction="research things",
+        model=ScriptedLlm([[text_response("research findings")]]),
+    )
+    root = LlmAgent(
+        name="agent",
+        instruction="route to the researcher",
+        model=ScriptedLlm(
+            [
+                [function_call_response("transfer_to_agent", "t1", {"agent_name": "researcher"})],
+                [text_response("done")],
+            ]
+        ),
+        sub_agents=[sub],
+    )
+    from google.adk.runners import Runner as AdkRunner
+
+    from app.engine.agent import AppliedConfig
+    from app.engine.runner import AgentRunner
+    from app.storage.adk_adapter import AdkSessionService
+    from app.storage.memory import MemoryBackend
+
+    backend = MemoryBackend()
+    adk = AdkRunner(agent=root, app_name="agent", session_service=AdkSessionService(backend))
+    runner = AgentRunner(
+        AppliedConfig.from_config(_config()), adk, backend, app_name="agent"
+    )
+    req = RunRequest(principal_id="p1", user_message="research X", request_id="r3")
+    events = [e async for e in runner.execute(req)]
+    assert events  # run completed
+    runs = await backend.list_runs(
+        agent_name="agent", principal_id="p1", session_id=req.session_id or ""
+    )
+    assert runs, "no run record persisted"
+    outcome = runs[-1].outcome or {}
+    assert outcome.get("transfers") == [{"from": "agent", "to": "researcher"}]

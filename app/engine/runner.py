@@ -32,6 +32,7 @@ from ..storage.model import utcnow
 from .agent import AppliedConfig
 from .events import (
     AgentEvent,
+    AgentTransfer,
     Done,
     Iteration,
     PublicError,
@@ -113,6 +114,7 @@ class AgentRunner:
         )
         ledger = ToolLedger()
         text_parts: list[str] = []
+        transfers: list[dict[str, str]] = []
 
         sid = request.session_id or ""
         admit_revision = 1
@@ -133,7 +135,9 @@ class AgentRunner:
                     if state.terminal:
                         break
                     limiter.check_deadline()
-                    async for agent_event in self._convert(adk_event, limiter, ledger, text_parts):
+                    async for agent_event in self._convert(
+                        adk_event, limiter, ledger, text_parts, transfers
+                    ):
                         if isinstance(agent_event, RunError):
                             errored = True
                         yield agent_event
@@ -158,15 +162,17 @@ class AgentRunner:
                     keep_revision=admit_revision,
                 )
                 code = error_code or "provider_error"
-                await self._commit_failure(request, sid, run_id, state.state, code)
+                await self._commit_failure(request, sid, run_id, state.state, code, transfers)
                 yield RunError(code=code, message=_PUBLIC_MESSAGES.get(code, code))
                 yield Done(finish_reason="error", x_agent_status=code)
             else:
                 finish, status, usage = self._finalize(state, limiter, text_parts, request)
                 if state.succeed():
-                    await self._commit_success(request, sid, run_id, text_parts, usage)
+                    await self._commit_success(request, sid, run_id, text_parts, usage, transfers)
                 else:
-                    await self._commit_failure(request, sid, run_id, state.state)
+                    await self._commit_failure(
+                        request, sid, run_id, state.state, transfers=transfers
+                    )
                 yield Done(
                     finish_reason=finish,
                     x_agent_status=status,
@@ -177,7 +183,7 @@ class AgentRunner:
                 )
         except CancelledError:
             self._mark_cancelled(state)
-            await self._commit_failure(request, sid, run_id, state.state)
+            await self._commit_failure(request, sid, run_id, state.state, transfers=transfers)
             raise
         except GeneratorExit:
             # Generator closed mid-run (API-08a stream teardown): persist a
@@ -186,7 +192,7 @@ class AgentRunner:
             if not state.terminal:
                 state.fail()
             with suppress(BaseException):
-                await self._commit_failure(request, sid, run_id, state.state)
+                await self._commit_failure(request, sid, run_id, state.state, transfers=transfers)
             raise
         except Exception as exc:  # noqa: BLE001 — transport/model errors
             logger.exception("run %s failed: %s", run_id, type(exc).__name__)
@@ -199,7 +205,9 @@ class AgentRunner:
             if not state.terminal:
                 state.fail()
             with suppress(BaseException):
-                await self._commit_failure(request, sid, run_id, state.state, public.code)
+                await self._commit_failure(
+                    request, sid, run_id, state.state, public.code, transfers
+                )
             yield RunError(code=public.code, message=public.message)
             yield Done(finish_reason="error", x_agent_status=public.code)
 
@@ -301,9 +309,20 @@ class AgentRunner:
         limiter: RunLimiter,
         ledger: ToolLedger,
         text_parts: list[str],
+        transfers: list[dict[str, str]],
     ) -> AsyncGenerator[AgentEvent, None]:
         if adk_event.usage_metadata:
             limiter.observe_usage(_usage_dict(adk_event.usage_metadata))
+        # MA-04: an ADK transfer action becomes one AgentTransfer event,
+        # recorded in the run audit (deduped per (from, to)).
+        if adk_event.actions and adk_event.actions.transfer_to_agent:
+            entry = {
+                "from": adk_event.author or "",
+                "to": adk_event.actions.transfer_to_agent,
+            }
+            if entry not in transfers:
+                transfers.append(entry)
+                yield AgentTransfer(from_agent=entry["from"], to_agent=entry["to"])
         if adk_event.error_code or adk_event.error_message:
             yield RunError(
                 code=adk_event.error_code or "provider_error",
@@ -375,6 +394,7 @@ class AgentRunner:
         run_id: str,
         text_parts: list[str],
         usage: dict[str, int],
+        transfers: list[dict[str, str]],
     ) -> None:
         """ENG-06: one revision-checked transaction commits pruning + the
         complete turn + usage, and marks the run succeeded."""
@@ -397,7 +417,7 @@ class AgentRunner:
             session_id=session_id,
             run_id=run_id,
             status="succeeded",
-            outcome={"text": "".join(text_parts)},
+            outcome={"text": "".join(text_parts), "transfers": transfers},
             usage=usage,
             now=utcnow(),
         )
@@ -409,6 +429,7 @@ class AgentRunner:
         run_id: str,
         run_state: RunState,
         error_code: str | None = None,
+        transfers: list[dict[str, str]] | None = None,
     ) -> None:
         """ENG-06: persist terminal state + actual usage, append neither the
         user message nor partial assistant text."""
@@ -421,7 +442,10 @@ class AgentRunner:
                 session_id=session_id,
                 run_id=run_id,
                 status=run_state.value,
-                outcome={"error_code": error_code or run_state.value},
+                outcome={
+                    "error_code": error_code or run_state.value,
+                    "transfers": transfers or [],
+                },
                 now=utcnow(),
             )
 
