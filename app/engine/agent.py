@@ -75,25 +75,99 @@ class AppliedConfig:
 
 @dataclass(frozen=True)
 class AgentComponent:
-    """One immutable agent + its model connector (ENG-01)."""
+    """One immutable agent set + connectors (ENG-01/MA-02).
+
+    ``agent`` is the root (a coordinator carrying ``sub_agents`` when the
+    config has any). ``tool_targets`` maps each agent to the MCP servers it
+    may see (None = every server): the MCP manager attaches final tool names
+    to the right agents on connect (MA-03).
+    """
 
     agent: LlmAgent
     generation: int
     model: RetryableLlm
+    sub_agents: tuple[LlmAgent, ...] = ()
+    tool_targets: tuple[tuple[LlmAgent, list[str] | None], ...] = ()
+
+
+def _merge_llm(root: Any, override: Any | None) -> Any:
+    """MA-01: the sub-agent's optional llm block is deep-merged over the
+    root's (sub-agent values win per leaf)."""
+    if override is None:
+        return root
+    merged = root.model_dump(by_alias=True, mode="json")
+    merged.update(override.model_dump(by_alias=True, mode="json"))
+    from app.config.models import Llm
+
+    return Llm.model_validate(merged)
 
 
 def build_agent_component(config: Any, generation: int = 1) -> AgentComponent:
-    """Construct the root agent from the validated AgentConfig (ENG-01)."""
+    """Construct the root agent (and, with a non-empty ``agents`` list, the
+    sub-agents + coordinator) from the validated AgentConfig (ENG-01/MA-02).
+    An empty list retains P1 behavior exactly."""
+    from google.adk.agents import LlmAgent
+
     applied = AppliedConfig.from_config(config, generation)
-    model = RetryableLlm(build_llm(config.llm))
-    agent = LlmAgent(
-        name=applied.name,
-        instruction=applied.system_instruction,
-        model=model,
-        generate_content_config=types.GenerateContentConfig(
-            temperature=applied.temperature,
-            top_p=applied.top_p,
-            max_output_tokens=applied.max_tokens,
-        ),
+
+    def _agent(
+        name: str, instruction: str, description: str, llm_cfg: Any
+    ) -> tuple[LlmAgent, RetryableLlm]:
+        model = RetryableLlm(build_llm(llm_cfg))
+        agent = LlmAgent(
+            name=name,
+            instruction=instruction,
+            description=description,
+            model=model,
+            generate_content_config=types.GenerateContentConfig(
+                temperature=applied.temperature,
+                top_p=applied.top_p,
+                max_output_tokens=applied.max_tokens,
+            ),
+        )
+        return agent, model
+
+    sub_agents: list[Any] = []  # ADK's param type is list[BaseAgent]
+    tool_targets: list[tuple[LlmAgent, list[str] | None]] = []
+    for agent_def in config.agents:
+        merged_llm = _merge_llm(config.llm, agent_def.llm)
+        sub, _ = _agent(
+            agent_def.name,
+            agent_def.systemInstruction,
+            agent_def.description,
+            merged_llm,
+        )
+        sub_agents.append(sub)
+        tool_targets.append((sub, agent_def.toolServers))
+
+    root, root_model = _agent(
+        applied.name,
+        applied.system_instruction,
+        "",
+        config.llm,
     )
-    return AgentComponent(agent=agent, generation=applied.generation, model=model)
+    if sub_agents:
+        # MA-02: the root becomes a coordinator carrying sub_agents in
+        # configured order; routing via ADK's native transfer.
+        root = LlmAgent(
+            name=applied.name,
+            instruction=applied.system_instruction,
+            description="",
+            model=root_model,
+            sub_agents=sub_agents,
+            generate_content_config=types.GenerateContentConfig(
+                temperature=applied.temperature,
+                top_p=applied.top_p,
+                max_output_tokens=applied.max_tokens,
+            ),
+        )
+    # The root sees every configured MCP server (MA-03: the coordinator's
+    # own tools); sub-agents see only their toolServers.
+    tool_targets.insert(0, (root, None))
+    return AgentComponent(
+        agent=root,
+        generation=applied.generation,
+        model=root_model,
+        sub_agents=tuple(sub_agents),
+        tool_targets=tuple(tool_targets),
+    )

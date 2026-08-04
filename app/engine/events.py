@@ -183,4 +183,9 @@ def sanitize_error(exc: BaseException) -> PublicError:
         return PublicError("agent_timeout", "The request was cancelled by timeout or disconnect.")
     if isinstance(exc, TimeoutError):
         return PublicError("agent_timeout", "The request exceeded its deadline.")
+    if isinstance(exc, ValueError) and "Transfer target agent" in str(exc):
+        # MA-04: a transfer to an unknown/unavailable agent fails the run
+        # with provider_error; no silent fallback (ADK raises this from the
+        # coordinator's scheduler for unknown transfer targets).
+        return PublicError("provider_error", "The requested transfer target agent is unavailable.")
     return PublicError("internal_error", "An internal error occurred; see correlated logs.")

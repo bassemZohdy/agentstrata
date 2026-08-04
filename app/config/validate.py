@@ -242,6 +242,38 @@ def _cross_field(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
         dupes = sorted({n for n in names if n and names.count(n) > 1})
         if dupes:
             issue("tools.mcpServers", f"duplicate MCP server names: {dupes}")
+    else:
+        names = []
+
+    # MA-01: sub-agent definitions — unique DNS-label names distinct from the
+    # root, and every toolServers reference must exist (absent toolServers
+    # defaults to every configured MCP server). Nested/cyclic definitions are
+    # structurally impossible (AgentDef has no agents field).
+    server_names = set(names)
+    agents = doc.raw("agents", [])
+    if isinstance(agents, list) and agents:
+        root_name = _s(doc.get("name"))
+        agent_names: list[str] = []
+        for i, agent in enumerate(agents):
+            if not isinstance(agent, dict):
+                continue
+            prefix = f"agents[{i}]"
+            aname = _s(agent.get("name"))
+            if aname:
+                agent_names.append(aname)
+                if root_name and aname == root_name:
+                    issue(f"{prefix}.name", "sub-agent name must differ from the root name (MA-01)")
+            ts = agent.get("toolServers")
+            if isinstance(ts, list):
+                for j, ref in enumerate(ts):
+                    if not isinstance(ref, str) or ref not in server_names:
+                        issue(
+                            f"{prefix}.toolServers[{j}]",
+                            f"unknown MCP server reference: {ref} (MA-01)",
+                        )
+        dupes = sorted({n for n in agent_names if n and agent_names.count(n) > 1})
+        if dupes:
+            issue("agents", f"duplicate sub-agent names: {dupes} (MA-01)")
 
     auth_mode = doc.get("server.auth.mode")
     if auth_mode == "apiKey" and not (

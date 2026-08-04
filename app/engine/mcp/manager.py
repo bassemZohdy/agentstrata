@@ -77,14 +77,70 @@ class ServerHandle:
 
 
 class ServerManager:
-    """MCP-05 lifecycle manager + MCP-01 reconcilers + MCP-02 readiness."""
+    """MCP-05 lifecycle manager + MCP-01 reconcilers + MCP-02 readiness.
 
-    def __init__(self, applied: AppliedConfig) -> None:
+    ``tool_targets`` (MA-03): ``(agent, allowed_server_names | None)`` pairs;
+    None means every configured server. On connect, the server's FINAL
+    (filtered + collision-renamed) tools are attached to every target that
+    may see the server; on disconnect/close they are detached.
+    """
+
+    def __init__(
+        self, applied: AppliedConfig, tool_targets: list[tuple[Any, list[str] | None]] | None = None
+    ) -> None:
         self._applied = applied
         self._handles: dict[str, ServerHandle] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._closed = False
         self._started = False
+        # (agent, allowed server names | None = all). Agents' tool lists are
+        # mutated only under this lock (reconcilers run concurrently).
+        self._tool_targets: list[tuple[Any, list[str] | None]] = list(tool_targets or [])
+        self._attach_lock = asyncio.Lock()
+        # server -> final tool names currently attached to the targets.
+        self._attached: dict[str, list[str]] = {}
+
+    def set_tool_targets(self, tool_targets: list[tuple[Any, list[str] | None]]) -> None:
+        """(Re)bind which agents see which servers (component rebuild)."""
+        self._tool_targets = list(tool_targets)
+        self._attached = {}
+
+    def _targets_for(self, server_name: str) -> list[Any]:
+        return [
+            agent
+            for agent, allowed in self._tool_targets
+            if allowed is None or server_name in allowed
+        ]
+
+    async def _attach_tools(self, handle: ServerHandle) -> None:
+        """MA-03: attach the server's final-named tools to the agents that may
+        see it (idempotent: previous attachments of this server are removed
+        first). Renames the raw tool objects in place to their final names so
+        the model sees the collision-safe surface."""
+        if handle.toolset is None or not handle.tools:
+            return
+        async with self._attach_lock:
+            final_by_raw: dict[str, Any] = {}
+            for raw, final in zip(handle.raw_names, handle.final_names, strict=False):
+                for tool in handle.tools:
+                    if tool.name == raw:
+                        tool.name = final
+                        final_by_raw[raw] = tool
+                        break
+            attached = [t for raw, t in final_by_raw.items()]
+            for agent in self._targets_for(handle.name):
+                old = self._attached.get(handle.name, [])
+                agent.tools = [t for t in agent.tools if t.name not in old] + attached
+            self._attached[handle.name] = [t.name for t in attached]
+
+    async def _detach_tools(self, handle: ServerHandle) -> None:
+        """Remove the server's tools from every target (disconnect/close)."""
+        async with self._attach_lock:
+            old = set(self._attached.pop(handle.name, []))
+            if not old:
+                return
+            for agent in self._targets_for(handle.name):
+                agent.tools = [t for t in agent.tools if t.name not in old]
 
     # -- configuration ----------------------------------------------------------
 
@@ -154,6 +210,11 @@ class ServerManager:
     async def _close_toolset(self, handle: ServerHandle) -> None:
         if handle.toolset is None:
             return
+        # MA-03: the server's tools leave the agents' surfaces on close.
+        try:
+            await self._detach_tools(handle)
+        except Exception:  # noqa: BLE001
+            logger.exception("MCP tool detach failed for %s", handle.name)
         try:
             await handle.toolset.close()
         except Exception:  # noqa: BLE001
@@ -210,6 +271,13 @@ class ServerManager:
             handle.last_error = None
             handle.backoff_seconds = 1.0  # reset on success
             logger.info("MCP server %s connected (%d tools)", handle.name, len(final))
+            # MA-03: attach the final-named tools to the agents that may see
+            # this server (best-effort; a failed attach must not drop the
+            # connection state).
+            try:
+                await self._attach_tools(handle)
+            except Exception:  # noqa: BLE001
+                logger.exception("MCP tool attach failed for %s", handle.name)
         except Exception as exc:  # noqa: BLE001
             handle.state = ServerState.DISCONNECTED
             handle.last_error = str(exc)[:200]

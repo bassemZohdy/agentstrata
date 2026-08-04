@@ -1,5 +1,59 @@
 {
   "$defs": {
+    "AgentDef": {
+      "additionalProperties": false,
+      "description": "MA-01: one root-owned sub-agent (P2). One flat level \u2014 AgentDef has\nno agents field, so nested/cyclic definitions are structurally impossible\n(extra=\"forbid\" rejects unknown fields).",
+      "properties": {
+        "description": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Description",
+          "type": "string"
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Llm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "systemInstruction": {
+          "minLength": 1,
+          "title": "Systeminstruction",
+          "type": "string"
+        },
+        "toolServers": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Toolservers"
+        }
+      },
+      "required": [
+        "name",
+        "systemInstruction"
+      ],
+      "title": "AgentDef",
+      "type": "object"
+    },
     "ApprovalConfig": {
       "additionalProperties": false,
       "properties": {
@@ -922,7 +976,9 @@
       "type": "string"
     },
     "agents": {
-      "items": {},
+      "items": {
+        "$ref": "#/$defs/AgentDef"
+      },
       "title": "Agents",
       "type": "array"
     },

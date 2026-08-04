@@ -101,3 +101,94 @@ Every milestone below is broken into a checked task list in TODO.md under the sa
 - **P4 — RAG** (§15): document ingestion, chunking, retrieval-scoped context injection.
 
 Each phase gets its own milestone breakdown in this file once P1's acceptance criteria pass — see [TODO.md](TODO.md) for what's tracked in the meantime.
+
+---
+
+## Phase 2 — Multi-agent and ACP (P2, §13 + API-16)
+
+P1's §18 acceptance criteria pass; P2 is independently releasable per PHASE-01.
+The API-16 acceptance annex (frozen in REQUIREMENTS.md §13.1) is the normative
+contract for the ACP surface; nothing below contradicts it.
+
+**Cross-cutting:** the `agents` section stays fail-closed (CAP-01) until the P2
+acceptance suite passes; the capability flip (`multiAgent`/`acp` true in
+`/health`) is the LAST commit of the phase (CAP-02). `agents` is classified as
+component-rebuild in REL-02 (already present).
+
+## Milestone P2-1 — Schema and capability gating (MA-01)
+
+- Full `agents[]` field contract in the Pydantic schema: DNS-label `name`
+  (unique, distinct from root), `systemInstruction` (required, non-empty),
+  `description` ≤ 2 000 code points, optional `llm` block (deep-merged over
+  the root's), `toolServers: list[str]` defaulting to every configured MCP
+  server.
+- Cross-field validation: flat one level only, no nested/cyclic definitions,
+  every `toolServers` reference exists; root name distinctness.
+- Schema/overlay regeneration + CI zero-diff (DEL-02).
+
+**Exit check:** an `agents` definition with any violation is rejected with a
+stable aggregate error; a valid one parses; the generated `agent.schema.json`
+carries the new fields.
+
+## Milestone P2-2 — Construction and routing (MA-02)
+
+- `build_agent_component`: with a non-empty `agents` list, the root becomes an
+  ADK coordinator carrying `sub_agents` in configured order; routing via ADK's
+  native transfer informed by name/description. Empty list keeps P1 behavior
+  and public fixtures byte-identical.
+- All agents share the run's principal, session adapter, cancellation,
+  deadline, iteration counter, request/session budget, and Applied Config
+  generation (one `AgentRunner`/limits object per run).
+
+**Exit check:** a routed run with two sub-agents executes a transfer and
+returns; a single-agent config yields the P1 fixture output unchanged.
+
+## Milestone P2-3 — Tool isolation (MA-03)
+
+- Sub-agent toolsets are built from `toolServers`-named servers only, AFTER the
+  shared MCP filter/collision mapping (final names). The coordinator's hidden
+  tools are not visible to sub-agents; no direct cross-agent calls except via
+  transfer; transfer does not change principal or reset budgets.
+
+**Exit check:** a sub-agent with `toolServers: ["a"]` sees only server a's
+(final, renamed) tools; a transfer target cannot see the coordinator's tools.
+
+## Milestone P2-4 — Transfer events and audit (MA-04)
+
+- `agent_transfer` events (`{"type":"agent_transfer","from","to"}`) in
+  event/debug streams only; text mode stays text-only.
+- Transfers stored in the run audit, never as user-visible session messages
+  (session replay must not feed transfers back to the model).
+- Transfer to an unknown/unavailable agent fails the run with
+  `provider_error`; no silent fallback.
+
+**Exit check:** event-stream tests observe the transfer event shape; replay
+fixtures show no transfer in the session history; unknown-target runs end
+with `provider_error`.
+
+## Milestone P2-5 — ACP REST surface (API-16 + frozen annex §13.1)
+
+- `GET /acp/agents` manifest and `POST /acp/runs` (SSE streaming + non-
+  streaming) per the frozen annex schemas; auth/session/idempotency/error
+  behavior per the annex. No 501 stubs.
+- `server.protocols.acp` gates route registration; disabled = ordinary 404
+  (API-00).
+
+**Exit check:** annex golden fixtures pass over the real HTTP surface
+(non-streaming + streaming), including the error table.
+
+## Milestone P2-6 — Reload and acceptance (MA-05)
+
+- `agents` as component-rebuild with transactional apply/rollback and
+  in-flight run safety (the P1 reload machinery already rebuilds the runner;
+  verify sub-agent configs rebuild cleanly).
+- Full MA-05 acceptance suite: deterministic construction, routing fixtures,
+  tool isolation, shared limits/cancellation, transfer events, session
+  replay, reload with in-flight runs, and the single-agent regression suite.
+- Capability flip (CAP-02): `multiAgent` and `acp` true in `/health` only
+  after the suite passes; P1's fail-closed tests re-baselined (P1's
+  forbidden cases become P2's accepted cases).
+
+**Exit check:** the full P1 regression set + the P2 suite pass on the host and
+in the image on both architectures; docs/TODO/CHANGELOG updated; release
+evidence recorded per TRC-02.

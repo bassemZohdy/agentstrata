@@ -719,6 +719,65 @@ All FastAPI/Pydantic validation failures under `/v1/` MUST be translated from fr
 
 **MA-05 (reload/acceptance)** — `agents` is a component rebuild. P2 capability is true only after tests cover deterministic construction, routing fixtures, tool isolation, shared limits/cancellation, transfer events, session replay, reload with in-flight runs, and a single-agent regression suite.
 
+### 13.1 ACP acceptance annex (API-16, normative, frozen before P2 implementation)
+
+This annex freezes the P2 ACP REST surface. Changes require a versioned spec revision, not a silent implementation drift. "ACP" here means only this REST surface (API-16); §1.4 exclusions (ACP-stdio, A2A) stand.
+
+**A-1 (surface)** — Routes live under the `/acp` prefix, registered only when `server.protocols.acp: true`; otherwise the paths are ordinary 404s (API-00). Case: snake_case (API-19). All routes require runtime auth (API-00); `/healthz`/`/readyz` stay anonymous. Every response carries `X-Request-Id`.
+
+**A-2 (`GET /acp/agents`, manifest)** — Returns the agent manifest:
+
+```json
+{
+  "object": "agent.manifest",
+  "name": "agent",
+  "description": "",
+  "tools": ["server_tool"],
+  "sub_agents": [
+    {"name": "researcher", "description": "", "tools": ["server_tool"]}
+  ]
+}
+```
+
+`tools`/`sub_agents[].tools` use the FINAL (post-filter, post-collision-rename) tool names (MA-03). Stable configured order (API-03). `name` is the top-level agent name.
+
+**A-3 (`POST /acp/runs`, request)** — Body (snake_case):
+
+```json
+{
+  "session_id": "optional; SES-02 syntax",
+  "message": {"role": "user", "content": "text"},
+  "stream": true,
+  "idempotency_key": "optional"
+}
+```
+
+`message.content` is non-empty and bounded by `server.maxMessageBytes`. `session_id` optional: absent creates a session (stateless-style); present must be a valid SES-02 ID. `Idempotency-Key` header or `idempotency_key` field: API-06a canonicalization (SHA-256 of the trimmed key) and replay semantics apply. A run is admitted through the same admission pipeline as chat (ENG-03: request id, auth, capability, rate limit, budget, run record) and consumes the same `server.maxConcurrentRequests` slots.
+
+**A-4 (`POST /acp/runs`, response)** — `stream: false` returns 200 with:
+
+```json
+{
+  "object": "run.completion",
+  "run_id": "run-…",
+  "session_id": "sess-…",
+  "choices": [{"index": 0, "message": {"role": "assistant", "content": "…"}, "finish_reason": "stop"}],
+  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+}
+```
+
+`stream: true` returns `text/event-stream` with the P1 SSE event vocabulary (delta chunks, finish chunk, optional usage chunk, `[DONE]`) plus the P2 `agent_transfer` event:
+
+```json
+{"type": "agent_transfer", "from": "root", "to": "researcher"}
+```
+
+`agent_transfer` appears only in event/debug streams (API-13); text mode remains text-only (MA-04). Mid-stream disconnect/cancellation follows API-08a.
+
+**A-5 (auth, session, idempotency, errors)** — Auth: API-00 runtime auth on every `/acp` route. Session: SES-02 semantics; a `session_id` owned by another principal is an ordinary 404 `not_found` (no enumeration, API-09). Idempotency: API-06a; a completed replay returns the stored run result with 200; an in-progress key returns 409 `idempotency_in_progress`. Errors: the API-15 envelope and status table apply verbatim (`invalid_request` 400, `unauthorized` 401, `not_found` 404, `method_not_allowed` 405, `payload_too_large` 413, `rate_limited` 429, `provider_error` 502, `agent_timeout` 504, `internal` 500, …). Model routing: the request `model` field is not part of ACP runs; the configured model is used (API-12).
+
+**A-6 (golden fixtures)** — The P2 acceptance suite pins: the manifest shape (root + sub-agents + final tool names), a non-streaming run, a streaming run with an `agent_transfer` event, idempotency replay + conflict, foreign-principal 404, every A-5 error mapping, and the ACP-disabled 404s.
+
 ## 14. Human-in-the-loop approval (Phase 3)
 
 **HITL-01 (schema/fail closed)** — `approval` is `{enabled: false, tools: [], timeoutSeconds: 300, onTimeout: "deny"}`; `tools` contains exact `server/rawTool` or `server/*` patterns, matched before public tool renaming. Enabling requires P3 capability, auth not `none`, and Redis/PostgreSQL storage; memory/file are rejected. While enabled, every chat request MUST be stateful with `session_id`; reject a stateless request before model work with 400 `approval_session_required`. `onTimeout: "allow"` is accepted only when explicitly configured and emits a high-severity startup audit warning.

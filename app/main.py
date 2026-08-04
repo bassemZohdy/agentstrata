@@ -136,7 +136,8 @@ def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str
 
     adk_runner = AdkRunner(agent=component.agent, app_name=config.name, session_service=service)
     runner = AgentRunner(applied, adk_runner, backend, app_name=config.name)
-    mcp = ServerManager(applied)
+    # MA-03: agents receive only their toolServers' tools (root: all servers).
+    mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
     mcp.configure(config.tools.mcpServers)
     return {
         "applied": applied,

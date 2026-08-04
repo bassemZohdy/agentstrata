@@ -313,3 +313,94 @@ class TestBootOrder:
         codes = dict(issues)
         assert codes["server.protocols.acp"] == "capability_error"
         assert codes["engine.bogus"] == "unknown_field"
+
+
+class TestMultiAgentSchemaMA01:
+    """MA-01: agents[] field contract + cross-field rules (P2)."""
+
+    def _base(self, **overrides) -> dict:
+        doc = {
+            "name": "root",
+            "engine": {"systemInstruction": "t"},
+            "llm": {"provider": "gemini", "model": "m"},
+            "tools": {"mcpServers": [{"name": "alpha", "transport": "stdio", "command": "x"}]},
+        }
+        doc.update(overrides)
+        return doc
+
+    def test_valid_sub_agent_parses(self):
+        # The CAP-01 gate still fails closed until the capability flips
+        # (P2-7), so "valid per MA-01" means the ONLY issue is the gate.
+        for doc in (
+            self._base(agents=[{"name": "worker", "systemInstruction": "work"}]),
+            self._base(
+                agents=[
+                    {
+                        "name": "worker",
+                        "systemInstruction": "work",
+                        "description": "d" * 2000,
+                        "llm": {"provider": "openai", "model": "other"},
+                        "toolServers": ["alpha"],
+                    }
+                ]
+            ),
+        ):
+            assert issues_for(doc) == [("agents", "capability_error")]
+
+    def test_duplicate_names_rejected(self):
+        assert ("agents", "cross_field") in issues_for(
+            self._base(
+                agents=[
+                    {"name": "worker", "systemInstruction": "a"},
+                    {"name": "worker", "systemInstruction": "b"},
+                ]
+            )
+        )
+
+    def test_root_name_collision_rejected(self):
+        assert ("agents[0].name", "cross_field") in issues_for(
+            self._base(agents=[{"name": "root", "systemInstruction": "a"}])
+        )
+
+    def test_unknown_tool_server_reference_rejected(self):
+        assert ("agents[0].toolServers[0]", "cross_field") in issues_for(
+            self._base(
+                agents=[{"name": "worker", "systemInstruction": "a", "toolServers": ["nope"]}]
+            )
+        )
+
+    def test_system_instruction_required_non_empty(self):
+        assert not valid(self._base(agents=[{"name": "worker", "systemInstruction": ""}]))
+        assert not valid(self._base(agents=[{"name": "worker"}]))
+
+    def test_description_length_and_name_shape(self):
+        assert not valid(
+            self._base(
+                agents=[{"name": "worker", "systemInstruction": "a", "description": "d" * 2001}]
+            )
+        )
+        assert not valid(self._base(agents=[{"name": "Bad_Name", "systemInstruction": "a"}]))
+
+    def test_nested_definition_rejected(self):
+        # AgentDef has no agents field: a nested definition is an unknown field.
+        assert not valid(
+            self._base(
+                agents=[
+                    {
+                        "name": "worker",
+                        "systemInstruction": "a",
+                        "agents": [{"name": "inner", "systemInstruction": "b"}],
+                    }
+                ]
+            )
+        )
+
+    def test_capability_gate_still_fail_closed(self):
+        # CAP-01: a P2 build in progress still rejects enabling multi-agent
+        # until the capability flips (P2-7).
+        assert ("agents", "capability_error") in issues_for(
+            self._base(agents=[{"name": "worker", "systemInstruction": "a"}])
+        )
+        assert ("server.protocols.acp", "capability_error") in issues_for(
+            self._base(server={"protocols": {"acp": True}})
+        )

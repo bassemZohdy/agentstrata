@@ -181,6 +181,22 @@ class Tools(BaseModel):
     mcpServers: list[McpServer] = Field(default_factory=list)
 
 
+class AgentDef(BaseModel):
+    """MA-01: one root-owned sub-agent (P2). One flat level — AgentDef has
+    no agents field, so nested/cyclic definitions are structurally impossible
+    (extra="forbid" rejects unknown fields)."""
+
+    model_config = BASE_CONFIG
+
+    name: str = Field(pattern=_DNS_1123)
+    systemInstruction: str = Field(min_length=1)
+    description: str = Field(default="", max_length=2000)
+    # Optional full llm block; inherited from the root by deep merge (MA-02).
+    llm: Llm | None = None
+    # None = every configured MCP server (resolved at validation, MA-01).
+    toolServers: list[str] | None = None
+
+
 class Storage(BaseModel):
     model_config = BASE_CONFIG
 
@@ -320,7 +336,7 @@ class AgentDefinition(BaseModel):
     server: Server = Field(default_factory=Server)
     k8s: K8s = Field(default_factory=K8s, alias="k8s")  # to_camel would yield "k8S"
     observability: Observability = Field(default_factory=Observability)
-    agents: list[Any] = Field(default_factory=list)  # P2
+    agents: list[AgentDef] = Field(default_factory=list)  # P2 (MA-01)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)  # P3
     rag: RagConfig = Field(default_factory=RagConfig)  # P4
 
