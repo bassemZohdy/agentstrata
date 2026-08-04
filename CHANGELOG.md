@@ -31,7 +31,7 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   are deployment responsibilities.
 - **Capability flip (CAP-02):** phase `P4`, `rag` true in `/health`;
   earlier fail-closed tests re-baselined; traceability regenerated (164
-  IDs); **446/446 acceptance inside the image on linux/amd64 AND
+  IDs); **450/450 acceptance inside the image on linux/amd64 AND
   linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}`, staleness pass).
 
 

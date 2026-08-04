@@ -20,8 +20,8 @@ dependency-lock hash, and test results that verified it.
 | Source commit | `32d048a` (exact final candidate — all audit fixes, CI gates green) |
 | Image digest | amd64 `agentbase@sha256:f9831410d2a06b71afd9b1f5b619de4c32fd2109000cf034afe90278f3158dac`; arm64 `agentbase@sha256:d83d97b9249c0641aa25e3d9a9f82430127ce685f8b7cddae1980cbc7eca235a` (re-verify per build) |
 | ACC-01 exact-candidate | `docs/acceptance-{amd64,arm64}.json` record `source_commit: 32d048a` == HEAD, staleness pass, **450/450 both archs** |
-| Acceptance | **446/446 passed inside the image on linux/amd64 AND linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}` — RAG-01..06 suites included) |
-| Host suite | **446 passed**, ruff + mypy clean, schemas zero-diff, traceability 164 IDs mapped |
+| Acceptance | **450/450 passed inside the image on linux/amd64 AND linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}` — RAG-01..06 suites included) |
+| Host suite | **450 passed**, ruff + mypy clean, schemas zero-diff, traceability 164 IDs mapped |
 | Capabilities | phase `P4`; `multiAgent`/`acp`/`approval`/`rag` all true (CAP-02) |
 
 ## Recorded evidence — P3 acceptance run (2026-08-04)

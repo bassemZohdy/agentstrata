@@ -6,30 +6,30 @@
     "docker": "29.6.2",
     "platform": "linux/amd64",
     "image": "agentbase:amd64",
-    "image_id": "sha256:b86a29b0236e3915e6f7ffba716e7933ed57d6aa5ec2ab2fcbdd36f3a10384cd",
+    "image_id": "sha256:f9831410d2a06b71afd9b1f5b619de4c32fd2109000cf034afe90278f3158dac",
     "lock_hash": "e6f4ec176f693a1305a5b1d0c5e7bfcb09163adf65ecb13c6ed2579689af4944",
-    "commit": "1fb386e1535d733c02579efeac4c8de66634022e",
+    "commit": "18896fab1ef334ee44f463f44dcb6e5420e72e72",
     "environment_notes": "1.0 CPU quota, 512 MiB limit, memory storage, no MCP (except NFR-09a), auth none, OTel disabled, local mock OpenAI model (host.docker.internal)."
   },
   "nfr01_startup": {
     "samples": 20,
-    "p50_seconds": 2.746,
-    "p95_seconds": 3.238,
-    "max_seconds": 3.238,
+    "p50_seconds": 2.748,
+    "p95_seconds": 3.025,
+    "max_seconds": 3.025,
     "threshold_seconds": 5.0,
     "status": "pass"
   },
   "nfr02_overhead": {
     "warmup": 100,
     "samples": 1000,
-    "p50_ms": 12.88,
-    "p95_ms": 18.68,
+    "p50_ms": 12.4,
+    "p95_ms": 17.37,
     "failures": 0,
     "server_overhead_ms": {
-      "/healthz": 2.04,
-      "/v1/models": 2.06
+      "/healthz": 2.14,
+      "/v1/models": 2.08
     },
-    "end_to_end_reference_p95_ms": 2668.15,
+    "end_to_end_reference_p95_ms": 2445.68,
     "threshold_p95_ms": 50.0,
     "note": "Spec-conformant measurement (REQUIREMENTS.md \u00a76): the container runs AGENT_MOCK_MODEL=1, so the measurement covers request receipt -> validation/session work -> serialization of a deterministic in-process mock result. The end_to_end_reference (real LiteLLM bridge + localhost mock OpenAI server) is recorded for context; raw server overhead (healthz/models) is also recorded.",
     "status": "pass"
@@ -39,7 +39,7 @@
     "events_per_run_min": 144,
     "events_per_run_p50": 144,
     "observation_seconds": 30,
-    "peak_rss_kb": 303718,
+    "peak_rss_kb": 303104,
     "cap_101st_overloaded": true,
     "threshold_events_per_second": 1,
     "threshold_peak_rss_mib": 512,
@@ -47,31 +47,31 @@
   },
   "nfr04_footprint": {
     "samples_kb": [
+      115814,
       115712,
       115712,
       115814,
-      116019,
       115712
     ],
-    "max_rss_kb": 116019,
+    "max_rss_kb": 115814,
     "threshold_rss_kb": 307200,
     "status": "pass"
   },
   "nfr07_bounded": {
-    "baseline_rss_kb": 115814,
+    "baseline_rss_kb": 116326,
     "rounds_rss_kb": [
-      270131,
+      270848,
       270643,
-      270540,
-      270745
+      270950,
+      271257
     ],
     "round_growths_kb": [
-      154317,
-      512,
-      -103,
-      205
+      154522,
+      -205,
+      307,
+      307
     ],
-    "peak_rss_kb": 270745,
+    "peak_rss_kb": 271257,
     "plateaued": true,
     "serving_after": true,
     "limit_rss_kb": 524288,
@@ -122,15 +122,15 @@
   "nfr10_arm64_smoke": {
     "startup_reference": {
       "samples": 5,
-      "p50_seconds": 2.725,
-      "p95_seconds": 2.742,
-      "max_seconds": 2.742,
+      "p50_seconds": 2.745,
+      "p95_seconds": 2.795,
+      "max_seconds": 2.795,
       "threshold_seconds": 5.0,
       "status": "pass"
     },
     "non_streaming_chat": true,
     "streaming_chat": true,
-    "idle_rss_kb": 270028,
+    "idle_rss_kb": 269824,
     "note": "arm64 runs under QEMU emulation here (cold boot ~35 s vs ~2.7 s native); the NFR-01 5 s gate applies to the amd64 image per NFR-00. The full acceptance suite also passes in-image on arm64 (docs/acceptance-arm64.log).",
     "status": "pass"
   },

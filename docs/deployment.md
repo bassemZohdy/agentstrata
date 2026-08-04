@@ -131,8 +131,10 @@ knowledge) after the system instruction.
 - **Store** (`rag.store`): `chroma` or `pgvector` with
   `connectionStringEnv/File` (SEC-04) and a DNS-1123 `collection`. The
   ACC-01 deviation applies: the acceptance proofs and offline runs use the
-  in-memory substitute; the real driver shells degrade to the substitute
-  when the driver is not installed. Changing any store/embedding/chunk
+  in-memory substitute, constructed directly by tests/offline dev; when
+  the configured driver is not installed the runtime FAILS CLOSED with a
+  ConfigError at boot (no silent degradation). Changing any
+  store/embedding/chunk
   identity field is a component rebuild — old documents are NEVER silently
   re-embedded; migrate explicitly (RAG-05).
 - **Embedding** (`rag.embedding`): `gemini` or `openai` with
