@@ -13,6 +13,20 @@ dependency-lock hash, and test results that verified it.
 | Schema artifacts | `sha256sum schemas/*.json` |
 | Test results | `pytest --tb=short -q` output archive |
 
+## Recorded evidence — M8 exit-check run (2026-08-04)
+
+| Field | Value |
+| --- | --- |
+| amd64 image ID | `sha256:cbfbf71efab6987a062aed4f540bfee0ed89ad5d3657803ace2dc1e440425df3` (current code; re-verify per build) |
+| Source commit | `c7e8329` (M8 exit-check run: `98f2a8c` + compose/CNT-10 commit `c7e8329`) |
+| Lock hash | `e6f4ec176f693a1305a5b1d0c5e7bfcb09163adf65ecb13c6ed2579689af4944` (`requirements.lock`) |
+| Acceptance | **339/339 passed inside the image on linux/amd64 AND linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}`, incl. image ID / commit / lock hash / staleness check) |
+| Host suite | **340 passed**, ruff + mypy clean, schemas zero-diff |
+| NFR-00 | `docs/nfr-report.json` — 6 gates pass; NFR-02 fails as measured (recorded with breakdown; spec's gate assumes an in-process mock) |
+| NFR-08 | zero-downtime reload PASS (live 1→2, rebuild 2→3, 0 failures, no restart) |
+| Supply chain | `docs/supplychain/` — CycloneDX + SPDX SBOMs, trivy scan (23 OS HIGH/CRIT with no fix yet — release-blocking per CNT-12 until Debian ships; 0 fixable python findings), buildx SLSA v1 provenance, keyless-signing workflow, canary scan passed |
+| Compose smoke | PASS (runtime healthy, MCP sample connected, redis/postgres healthy, auth 401/200) |
+
 ## Release checklist
 
 1. `git rev-parse HEAD` — record the commit.

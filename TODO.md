@@ -47,6 +47,19 @@ the bottom are not part of the P1 critical path.
 > restart) are **done** — see [CHANGELOG.md](CHANGELOG.md) and
 > `docs/acceptance-{amd64,arm64}.{log,json}` / `docs/nfr-report.json`.
 
+- [x] **NFR-08 — zero-downtime reload verification.** PASS against the
+      running image: a live-snapshot update (observability.logLevel) and a
+      component-rebuild update (engine.systemInstruction) both advanced the
+      config generation (1→2, 2→3) with **0 failed admitted requests, 0
+      readyz 503s, and no listener restart** (PID and StartedAt stable),
+      exercised through the real tier-8 path (a controlled K8s ConfigMap API
+      + the runtime's real watcher/kubeconfig client). Recorded in
+      `docs/nfr-report.json` (nfr08_reload). Enabled by five production
+      fixes the probe surfaced: engine streaming_mode, the watcher never
+      being started, the MCP reconcilers never being started, the rebuild
+      swap wiping manager-owned singletons, and the reload-builder backend
+      binding.
+
 ### Milestone 8 — Supply chain (CNT-12/13) evidence
 
 - [x] **SBOM** — CycloneDX (`docs/supplychain/sbom-agentbase-amd64.cdx.json`,
