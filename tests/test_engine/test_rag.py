@@ -519,3 +519,58 @@ class TestAvailabilityRAG04:
             assert not any(isinstance(e, Done) for e in events)
         finally:
             await mcp.close()
+
+
+class TestSecurityRAG05:
+    @pytest.mark.asyncio
+    async def test_degraded_log_never_contains_document_content(self, caplog):
+        """RAG-05: the degraded log is redacted — never the query or any
+        document content."""
+
+        class BrokenStore(MemoryRagStore):
+            async def search(self, **kwargs):
+                raise ConnectionError("down")
+
+        import logging
+
+        retriever = RagRetriever(
+            config=_rag_config().rag, store=BrokenStore(), embedding=DeterministicEmbedding()
+        )
+        with caplog.at_level(logging.ERROR, logger="app.engine.rag"):
+            context = await retriever.retrieve(
+                agent_name="agent",
+                principal_id="p1",
+                query="SUPER-SECRET-QUERY-MARKER",
+            )
+        assert context is None
+        assert retriever.degraded
+        logs = "\n".join(r.message for r in caplog.records)
+        assert "SUPER-SECRET-QUERY-MARKER" not in logs
+        assert "ConnectionError" not in logs  # no internal exception text
+
+    @pytest.mark.asyncio
+    async def test_document_text_never_in_public_metadata(self):
+        """RAG-05: GET /v1/documents exposes metadata/hash only."""
+        r = _retriever()
+        record = await r.ingest(
+            agent_name="agent",
+            principal_id="p1",
+            document_id="doc-sec",
+            text="CONFIDENTIAL-BODY-MARKER",
+            metadata={"tag": "kb"},
+        )
+        public = {
+            "id": record.document_id,
+            "chunk_count": record.chunk_count,
+            "content_hash": record.content_hash,
+            "metadata": record.metadata,
+        }
+        dumped = str(public)
+        assert "CONFIDENTIAL-BODY-MARKER" not in dumped
+        # the full text is retrievable only through the search surface
+        context = await r.retrieve(
+            agent_name="agent",
+            principal_id="p1",
+            query="CONFIDENTIAL-BODY-MARKER",
+        )
+        assert context is not None and "CONFIDENTIAL-BODY-MARKER" in context

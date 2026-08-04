@@ -59,6 +59,12 @@ class TestClassification:
 
     def test_component_rebuild(self):
         assert classify_change(["llm.model"]) == "component_rebuild"
+        # RAG-05: any store/embedding/chunk-identity change is a component
+        # rebuild (no silent re-embed of old documents).
+        assert classify_change(["rag.store.collection"]) == "component_rebuild"
+        assert classify_change(["rag.embedding.model"]) == "component_rebuild"
+        assert classify_change(["rag.chunkChars"]) == "component_rebuild"
+        assert classify_change(["rag.topK"]) == "component_rebuild"
 
     def test_restart_required_wins(self):
         assert classify_change(["llm.model", "server.port"]) == "restart_required"
