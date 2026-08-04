@@ -23,6 +23,7 @@ from .contract import (
     StorageSettings,
 )
 from .model import (
+    ApprovalRecord,
     Fence,
     IdempotencyRecord,
     RunRecord,
@@ -46,6 +47,7 @@ class MemoryBackend(StorageBackend):
         self._sessions: dict[tuple[str, str, str], SessionRecord] = {}
         self._runs: dict[tuple[str, str, str, str], RunRecord] = {}
         self._idempotency: dict[tuple[str, str, str, str], IdempotencyRecord] = {}
+        self._approvals: dict[tuple[str, str, str], ApprovalRecord] = {}
         self._fences: dict[tuple[str, str, str], Fence] = {}
         self._fence_counters: dict[tuple[str, str, str], int] = {}
         self._lock = asyncio.Lock()
@@ -422,6 +424,100 @@ class MemoryBackend(StorageBackend):
         records = [r for k, r in self._idempotency.items() if k[:3] == skey]
         if len(records) >= self._settings.max_idempotency_records_per_session:
             raise CapacityError("maxIdempotencyRecordsPerSession reached")
+
+    # -- approvals (HITL-02/04) ----------------------------------------------
+
+    async def create_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        run_id: str,
+        approval_id: str,
+        config_generation: int,
+        server_name: str,
+        raw_tool_name: str,
+        final_tool_name: str,
+        args_hash: str,
+        args_preview: str,
+        checkpoint: dict[str, Any],
+        timeout_seconds: int,
+        now: datetime | None = None,
+    ) -> ApprovalRecord:
+        from .model import ApprovalRecord as _AR
+
+        now = now or utcnow()
+        record = _AR(
+            agent_name=agent_name,
+            principal_id=principal_id,
+            session_id=session_id,
+            run_id=run_id,
+            approval_id=approval_id,
+            config_generation=config_generation,
+            server_name=server_name,
+            raw_tool_name=raw_tool_name,
+            final_tool_name=final_tool_name,
+            args_hash=args_hash,
+            args_preview=args_preview,
+            checkpoint=checkpoint,
+            timeout_seconds=timeout_seconds,
+            created_at=now,
+            expires_at=now + __import__("datetime").timedelta(seconds=timeout_seconds),
+        )
+        self._approvals[(agent_name, principal_id, approval_id)] = record
+        return record
+
+    async def get_approval(
+        self, *, agent_name: str, principal_id: str, approval_id: str
+    ) -> ApprovalRecord | None:
+        return self._approvals.get((agent_name, principal_id, approval_id))
+
+    async def list_approvals(
+        self, *, agent_name: str, principal_id: str, session_id: str
+    ) -> list[ApprovalRecord]:
+        return [
+            r
+            for r in self._approvals.values()
+            if r.agent_name == agent_name
+            and r.principal_id == principal_id
+            and r.session_id == session_id
+        ]
+
+    async def decide_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        now: datetime | None = None,
+    ) -> ApprovalRecord | None:
+        """HITL-04 CAS: the first decision wins; expired pendings are
+        owned by the sweep."""
+        now = now or utcnow()
+        record = self._approvals.get((agent_name, principal_id, approval_id))
+        if record is None or not record.pending:
+            return None
+        if now > record.expires_at and decision != "timed_out":
+            return None
+        record.status = decision
+        record.reason = reason
+        record.decided_at = now
+        record.revision += 1
+        return record
+
+    async def expire_approvals(self, *, now: datetime | None = None) -> list[ApprovalRecord]:
+        now = now or utcnow()
+        expired: list[ApprovalRecord] = []
+        for record in list(self._approvals.values()):
+            if record.pending and now > record.expires_at:
+                record.status = "timed_out"
+                record.decided_at = now
+                record.revision += 1
+                expired.append(record)
+        return expired
 
 
 def _expiry(now: datetime, ttl_seconds: int) -> datetime:

@@ -61,6 +61,7 @@ class FakeRedis:
         self._store: dict[str, bytes] = {}
         self._expires: dict[str, datetime] = {}
         self._sorted_sets: dict[str, dict[str, float]] = {}
+        self._sets: dict[str, set] = {}
         self.now = now_fn or _clock()
 
     # -- raw ops -------------------------------------------------------------------
@@ -341,6 +342,45 @@ def _t_sweep_runs(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
     return deleted
 
 
+def _t_create_approval(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
+    """CREATE_APPROVAL twin: SET the record + SADD the index entry."""
+    key, index = keys
+    raw, entry = args
+    if fake._store.get(key) is not None:
+        return None
+    fake._store[key] = raw.encode("utf-8")
+    fake._sets.setdefault(index, set()).add(entry)
+    return raw
+
+
+def _t_list_approvals(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
+    index = keys[0]
+    return sorted(fake._sets.get(index, set()))
+
+
+def _t_decide_approval(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
+    """DECIDE_APPROVAL twin: pending + unexpired only; first decision wins."""
+    import json as _json
+
+    key = keys[0]
+    now, decision, reason = args
+    raw = fake._store.get(key)
+    if raw is None:
+        return None
+    record = _json.loads(raw)
+    if record.get("status") != "pending":
+        return None
+    if now > record.get("expires_at", "") and decision != "timed_out":
+        return None
+    record["status"] = decision
+    record["reason"] = reason
+    record["decided_at"] = now
+    record["revision"] = record.get("revision", 1) + 1
+    encoded = _json.dumps(record)
+    fake._store[key] = encoded.encode("utf-8")
+    return encoded
+
+
 _TWINS: dict[str, Callable[[FakeRedis, list[str], list[str]], Any]] = {
     rb.CREATE_SESSION: _t_create_session,
     rb.MUTATE_SESSION: _t_mutate_session,
@@ -353,6 +393,9 @@ _TWINS: dict[str, Callable[[FakeRedis, list[str], list[str]], Any]] = {
     rb.RENEW_FENCE: _t_renew_fence,
     rb.RELEASE_FENCE: _t_release_fence,
     rb.SWEEP_RUNS: _t_sweep_runs,
+    rb.CREATE_APPROVAL: _t_create_approval,
+    rb.LIST_APPROVALS: _t_list_approvals,
+    rb.DECIDE_APPROVAL: _t_decide_approval,
     rb.TRUNCATE_SESSION: _t_truncate_session,
 }
 

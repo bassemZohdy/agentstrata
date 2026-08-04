@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from .model import (
+    ApprovalRecord,
     Fence,
     IdempotencyRecord,
     RunRecord,
@@ -315,3 +316,55 @@ class StorageBackend(ABC):
 class AsyncLock(Protocol):
     async def __aenter__(self) -> Any: ...
     async def __aexit__(self, *exc: Any) -> None: ...
+
+    # -- approvals (HITL-02/04, P3) ------------------------------------------
+
+    @abstractmethod
+    async def create_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        run_id: str,
+        approval_id: str,
+        config_generation: int,
+        server_name: str,
+        raw_tool_name: str,
+        final_tool_name: str,
+        args_hash: str,
+        args_preview: str,
+        checkpoint: dict[str, Any],
+        timeout_seconds: int,
+        now: datetime | None = None,
+    ) -> ApprovalRecord: ...
+
+    @abstractmethod
+    async def get_approval(
+        self, *, agent_name: str, principal_id: str, approval_id: str
+    ) -> ApprovalRecord | None: ...
+
+    @abstractmethod
+    async def list_approvals(
+        self, *, agent_name: str, principal_id: str, session_id: str
+    ) -> list[ApprovalRecord]: ...
+
+    @abstractmethod
+    async def decide_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        now: datetime | None = None,
+    ) -> ApprovalRecord | None:
+        """HITL-04 CAS: the FIRST decision wins. Returns the record with the
+        applied decision, or None when the race was lost (already decided,
+        timed out, cancelled or stale) or the record is unknown."""
+
+    @abstractmethod
+    async def expire_approvals(self, *, now: datetime | None = None) -> list[ApprovalRecord]:
+        """Sweep pending approvals past their expiry: mark timed_out and
+        return them (the engine resumes the runs with the deny/allow policy)."""

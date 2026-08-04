@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import stat
 import tempfile
 from collections.abc import Callable
@@ -33,6 +34,7 @@ from .contract import (
     StorageSettings,
 )
 from .model import (
+    ApprovalRecord,
     Fence,
     IdempotencyRecord,
     RunRecord,
@@ -629,3 +631,131 @@ class FileBackend(StorageBackend):
         self, *, agent_name: str, principal_id: str, session_id: str
     ) -> Fence | None:
         return self._fences.get(self._fkey(agent_name, principal_id, session_id))
+
+    # -- approvals (HITL-02/04) ----------------------------------------------
+
+    def _approval_path(self, agent_name: str, principal_id: str, approval_id: str) -> Path:
+        directory = self._session_dir(agent_name, principal_id)
+        safe = re.sub(r"[^0-9a-zA-Z_-]", "_", approval_id)
+        return directory / f"approval-{safe}.json"
+
+    async def create_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        run_id: str,
+        approval_id: str,
+        config_generation: int,
+        server_name: str,
+        raw_tool_name: str,
+        final_tool_name: str,
+        args_hash: str,
+        args_preview: str,
+        checkpoint: dict[str, Any],
+        timeout_seconds: int,
+        now: datetime | None = None,
+    ) -> ApprovalRecord:
+        if not self._ready:
+            raise BackendUnavailableError("file storage not ready")
+        now = now or utcnow()
+        record = ApprovalRecord(
+            agent_name=agent_name,
+            principal_id=principal_id,
+            session_id=session_id,
+            run_id=run_id,
+            approval_id=approval_id,
+            config_generation=config_generation,
+            server_name=server_name,
+            raw_tool_name=raw_tool_name,
+            final_tool_name=final_tool_name,
+            args_hash=args_hash,
+            args_preview=args_preview,
+            checkpoint=checkpoint,
+            timeout_seconds=timeout_seconds,
+            created_at=now,
+            expires_at=now + __import__("datetime").timedelta(seconds=timeout_seconds),
+        )
+        path = self._approval_path(agent_name, principal_id, approval_id)
+        async with self._lock:
+            await asyncio.to_thread(self._atomic_write, path, record.to_json())
+        return record
+
+    async def get_approval(
+        self, *, agent_name: str, principal_id: str, approval_id: str
+    ) -> ApprovalRecord | None:
+        path = self._approval_path(agent_name, principal_id, approval_id)
+        return await asyncio.to_thread(self._read_record, path, ApprovalRecord.from_json)
+
+    async def list_approvals(
+        self, *, agent_name: str, principal_id: str, session_id: str
+    ) -> list[ApprovalRecord]:
+        directory = self._session_dir(agent_name, principal_id)
+        records: list[ApprovalRecord] = []
+
+        def _scan() -> list[ApprovalRecord]:
+            out: list[ApprovalRecord] = []
+            if not directory.is_dir():
+                return out
+            for path in directory.glob("approval-*.json"):
+                record = self._read_record(path, ApprovalRecord.from_json)
+                if record is not None and record.session_id == session_id:
+                    out.append(record)
+            return out
+
+        records = await asyncio.to_thread(_scan)
+        records.sort(key=lambda r: r.created_at)
+        return records
+
+    async def decide_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        now: datetime | None = None,
+    ) -> ApprovalRecord | None:
+        now = now or utcnow()
+        path = self._approval_path(agent_name, principal_id, approval_id)
+        async with self._lock:
+
+            def _decide() -> ApprovalRecord | None:
+                record = self._read_record(path, ApprovalRecord.from_json)
+                if record is None or not record.pending:
+                    return None
+                if now > record.expires_at and decision != "timed_out":
+                    return None
+                record.status = decision
+                record.reason = reason
+                record.decided_at = now
+                record.revision += 1
+                self._atomic_write(path, record.to_json())
+                return record
+
+            return await asyncio.to_thread(_decide)
+
+    async def expire_approvals(self, *, now: datetime | None = None) -> list[ApprovalRecord]:
+        now = now or utcnow()
+        expired: list[ApprovalRecord] = []
+        async with self._lock:
+            base = self._base
+            directories = [d for d in base.iterdir() if d.is_dir()] if base.is_dir() else []
+
+            def _expire(directory: Path) -> list[ApprovalRecord]:
+                out: list[ApprovalRecord] = []
+                for path in directory.rglob("approval-*.json"):
+                    record = self._read_record(path, ApprovalRecord.from_json)
+                    if record is not None and record.pending and now > record.expires_at:
+                        record.status = "timed_out"
+                        record.decided_at = now
+                        record.revision += 1
+                        self._atomic_write(path, record.to_json())
+                        out.append(record)
+                return out
+
+            for directory in directories:
+                expired.extend(await asyncio.to_thread(_expire, directory))
+        return expired

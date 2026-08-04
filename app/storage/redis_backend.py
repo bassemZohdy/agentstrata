@@ -28,6 +28,7 @@ from .contract import (
     StorageSettings,
 )
 from .model import (
+    ApprovalRecord,
     Fence,
     IdempotencyRecord,
     RunRecord,
@@ -81,6 +82,7 @@ class RedisBackend(StorageBackend):
         self._client = client
         self._settings = settings or StorageSettings()
         self._ready = False
+        self._approval_index = "agentbase:approval-index"
 
     async def initialize(self) -> None:
         try:
@@ -127,6 +129,9 @@ class RedisBackend(StorageBackend):
 
     def _fence(self, agent: str, tag: str, sid: str) -> str:
         return _k(tag, "fence", agent, sid)
+
+    def _approval(self, agent: str, tag: str, approval_id: str) -> str:
+        return _k(tag, "approval", agent, approval_id)
 
     def _fcount(self, agent: str, tag: str, sid: str) -> str:
         return _k(tag, "fcount", agent, sid)
@@ -535,11 +540,174 @@ class RedisBackend(StorageBackend):
             fencing_number=_to_int(data.get("fencing_number", 0)),
         )
 
+    # ---------------------------------------------------------------------------
+    # Atomic Lua scripts (real redis) with python twins (FakeRedis).
+    # Scripts are identified by their source; FakeRedis maps source -> python fn.
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Atomic Lua scripts (real redis) with python twins (FakeRedis).
-# Scripts are identified by their source; FakeRedis maps source -> python fn.
-# ---------------------------------------------------------------------------
+    # -- approvals (HITL-02/04) ----------------------------------------------
+
+    async def create_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        run_id: str,
+        approval_id: str,
+        config_generation: int,
+        server_name: str,
+        raw_tool_name: str,
+        final_tool_name: str,
+        args_hash: str,
+        args_preview: str,
+        checkpoint: dict[str, Any],
+        timeout_seconds: int,
+        now: datetime | None = None,
+    ) -> ApprovalRecord:
+        now = now or utcnow()
+        record = ApprovalRecord(
+            agent_name=agent_name,
+            principal_id=principal_id,
+            session_id=session_id,
+            run_id=run_id,
+            approval_id=approval_id,
+            config_generation=config_generation,
+            server_name=server_name,
+            raw_tool_name=raw_tool_name,
+            final_tool_name=final_tool_name,
+            args_hash=args_hash,
+            args_preview=args_preview,
+            checkpoint=checkpoint,
+            timeout_seconds=timeout_seconds,
+            created_at=now,
+            expires_at=now + __import__("datetime").timedelta(seconds=timeout_seconds),
+        )
+        key = self._approval(agent_name, self._tag(principal_id), approval_id)
+        await self._client.eval(
+            CREATE_APPROVAL,
+            [key, self._approval_index],
+            [record.to_json(), f"{agent_name}:{principal_id}:{approval_id}"],
+        )
+        return record
+
+    async def get_approval(
+        self, *, agent_name: str, principal_id: str, approval_id: str
+    ) -> ApprovalRecord | None:
+        raw = await self._client.get(
+            self._approval(agent_name, self._tag(principal_id), approval_id)
+        )
+        if not raw:
+            return None
+        try:
+            return ApprovalRecord.from_json(json.loads(raw))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    async def list_approvals(
+        self, *, agent_name: str, principal_id: str, session_id: str
+    ) -> list[ApprovalRecord]:
+        entries = await self._client.eval(
+            LIST_APPROVALS,
+            [self._approval_index],
+            [],
+        )
+        out: list[ApprovalRecord] = []
+        for entry in entries or []:
+            parts = entry.split(":")
+            if len(parts) != 3:
+                continue
+            a_name, p_id, a_id = parts
+            if a_name != agent_name or p_id != principal_id:
+                continue
+            record = await self.get_approval(
+                agent_name=agent_name, principal_id=principal_id, approval_id=a_id
+            )
+            if record is not None and record.session_id == session_id:
+                out.append(record)
+        out.sort(key=lambda r: r.created_at)
+        return out
+
+    async def decide_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        now: datetime | None = None,
+    ) -> ApprovalRecord | None:
+        """HITL-04 CAS via Lua: only a pending, unexpired record can be
+        decided; the first decision wins."""
+        now = now or utcnow()
+        key = self._approval(agent_name, self._tag(principal_id), approval_id)
+        raw = await self._client.eval(
+            DECIDE_APPROVAL,
+            [key],
+            [now.isoformat(), decision, reason or ""],
+        )
+        if not raw:
+            return None
+        try:
+            return ApprovalRecord.from_json(json.loads(raw))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    async def expire_approvals(self, *, now: datetime | None = None) -> list[ApprovalRecord]:
+        now = now or utcnow()
+        entries = await self._client.eval(
+            LIST_APPROVALS,
+            [self._approval_index],
+            [],
+        )
+        expired: list[ApprovalRecord] = []
+        for entry in entries or []:
+            parts = entry.split(":")
+            if len(parts) != 3:
+                continue
+            a_name, p_id, a_id = parts
+            record = await self.get_approval(agent_name=a_name, principal_id=p_id, approval_id=a_id)
+            if record is not None and record.pending and now > record.expires_at:
+                decided = await self.decide_approval(
+                    agent_name=a_name,
+                    principal_id=p_id,
+                    approval_id=a_id,
+                    decision="timed_out",
+                    now=now,
+                )
+                if decided is not None:
+                    expired.append(decided)
+        return expired
+
+
+# -- approval Lua scripts (HITL-02/04) ------------------------------------------
+
+CREATE_APPROVAL = """
+local raw = redis.call('GET', KEYS[1])
+if raw then return nil end
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('SADD', KEYS[2], ARGV[2])
+return ARGV[1]
+"""
+
+LIST_APPROVALS = """
+return redis.call('SMEMBERS', KEYS[1])
+"""
+
+DECIDE_APPROVAL = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return nil end
+local record = cjson.decode(raw)
+if record['status'] ~= 'pending' then return nil end
+if ARGV[1] > record['expires_at'] and ARGV[2] ~= 'timed_out' then return nil end
+record['status'] = ARGV[2]
+record['reason'] = ARGV[3]
+record['decided_at'] = ARGV[1]
+record['revision'] = record['revision'] + 1
+redis.call('SET', KEYS[1], cjson.encode(record))
+return cjson.encode(record)
+"""
 
 CREATE_SESSION = """
 if redis.call('EXISTS', KEYS[1]) == 1 then return nil end

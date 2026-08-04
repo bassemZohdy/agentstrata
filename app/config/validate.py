@@ -380,7 +380,6 @@ def _capability(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
         issue("rag.enabled", "this P2 build does not implement the RAG capability (CAP-01)")
 
 
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

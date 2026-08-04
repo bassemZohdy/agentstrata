@@ -13,6 +13,7 @@ recorded as deferred (approved ACC-01 deviation).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta
@@ -29,6 +30,7 @@ from .contract import (
     StorageSettings,
 )
 from .model import (
+    ApprovalRecord,
     Fence,
     IdempotencyRecord,
     RunRecord,
@@ -85,6 +87,17 @@ DDL = [
         PRIMARY KEY (agent_name, principal_id, session_id, key)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS agent_approvals (
+        agent_name   TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        approval_id  TEXT NOT NULL,
+        data         JSONB NOT NULL,
+        created_at   TIMESTAMPTZ NOT NULL,
+        expires_at   TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (agent_name, principal_id, approval_id)
+    )
+    """,
 ]
 
 SQL = {
@@ -93,6 +106,28 @@ SQL = {
     ),
     "schema_version": "SELECT version FROM agent_schema ORDER BY version DESC LIMIT 1",
     "health_probe": "SELECT 1",
+    "insert_approval": (
+        "INSERT INTO agent_approvals"
+        " (agent_name, principal_id, approval_id, data, created_at, expires_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s)"
+    ),
+    "get_approval": (
+        "SELECT data FROM agent_approvals"
+        " WHERE agent_name = %s AND principal_id = %s AND approval_id = %s"
+    ),
+    "list_approvals": (
+        "SELECT data FROM agent_approvals"
+        " WHERE agent_name = %s AND principal_id = %s AND data->>'session_id' = %s"
+    ),
+    "decide_approval": (
+        "UPDATE agent_approvals SET data = %s, expires_at = %s WHERE agent_name = %s"
+        " AND principal_id = %s AND approval_id = %s AND data->>'status' = 'pending'"
+        " AND (data->>'expires_at' > %s OR %s = 'timed_out') RETURNING data"
+    ),
+    "expire_approvals": (
+        "SELECT agent_name, principal_id, approval_id, data FROM agent_approvals"
+        " WHERE data->>'status' = 'pending' AND data->>'expires_at' < %s"
+    ),
     "insert_session": (
         "INSERT INTO agent_sessions "
         "(agent_name, principal_id, session_id, revision, data, created_at, updated_at) "
@@ -729,3 +764,136 @@ class PostgresBackend(StorageBackend):
         # real driver both expose the held-lock state via try_advisory_lock
         # semantics (a second try fails while held).
         return None
+
+    # -- approvals (HITL-02/04) ----------------------------------------------
+
+    async def create_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str,
+        run_id: str,
+        approval_id: str,
+        config_generation: int,
+        server_name: str,
+        raw_tool_name: str,
+        final_tool_name: str,
+        args_hash: str,
+        args_preview: str,
+        checkpoint: dict[str, Any],
+        timeout_seconds: int,
+        now: datetime | None = None,
+    ) -> ApprovalRecord:
+        now = now or utcnow()
+        record = ApprovalRecord(
+            agent_name=agent_name,
+            principal_id=principal_id,
+            session_id=session_id,
+            run_id=run_id,
+            approval_id=approval_id,
+            config_generation=config_generation,
+            server_name=server_name,
+            raw_tool_name=raw_tool_name,
+            final_tool_name=final_tool_name,
+            args_hash=args_hash,
+            args_preview=args_preview,
+            checkpoint=checkpoint,
+            timeout_seconds=timeout_seconds,
+            created_at=now,
+            expires_at=now + __import__("datetime").timedelta(seconds=timeout_seconds),
+        )
+        await self._db.execute(
+            SQL["insert_approval"],
+            (agent_name, principal_id, approval_id, record.to_json(), now, record.expires_at),
+        )
+        return record
+
+    async def get_approval(
+        self, *, agent_name: str, principal_id: str, approval_id: str
+    ) -> ApprovalRecord | None:
+        rows = await self._db.query(SQL["get_approval"], (agent_name, principal_id, approval_id))
+        if not rows:
+            return None
+        try:
+            return ApprovalRecord.from_json(json.loads(rows[0]["data"]))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    async def list_approvals(
+        self, *, agent_name: str, principal_id: str, session_id: str
+    ) -> list[ApprovalRecord]:
+        rows = await self._db.query(SQL["list_approvals"], (agent_name, principal_id, session_id))
+        out: list[ApprovalRecord] = []
+        for row in rows:
+            try:
+                out.append(ApprovalRecord.from_json(json.loads(row["data"])))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+        out.sort(key=lambda r: r.created_at)
+        return out
+
+    async def decide_approval(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        now: datetime | None = None,
+    ) -> ApprovalRecord | None:
+        """HITL-04 CAS: the UPDATE's WHERE clause is the CAS - only a pending,
+        unexpired record matches; the first decision wins."""
+        now = now or utcnow()
+        record = await self.get_approval(
+            agent_name=agent_name, principal_id=principal_id, approval_id=approval_id
+        )
+        if record is None or not record.pending:
+            return None
+        if now > record.expires_at and decision != "timed_out":
+            return None
+        record.status = decision
+        record.reason = reason
+        record.decided_at = now
+        record.revision += 1
+        rows = await self._db.query(
+            SQL["decide_approval"],
+            (
+                record.to_json(),
+                record.expires_at,
+                agent_name,
+                principal_id,
+                approval_id,
+                now.isoformat(),
+                decision,
+            ),
+        )
+        if not rows:
+            return None
+        try:
+            return ApprovalRecord.from_json(json.loads(rows[0]["data"]))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    async def expire_approvals(self, *, now: datetime | None = None) -> list[ApprovalRecord]:
+        now = now or utcnow()
+        rows = await self._db.query(SQL["expire_approvals"], (now.isoformat(),))
+        expired: list[ApprovalRecord] = []
+        for row in rows:
+            try:
+                record = ApprovalRecord.from_json(json.loads(row["data"]))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if not record.pending:
+                continue
+            decided = await self.decide_approval(
+                agent_name=record.agent_name,
+                principal_id=record.principal_id,
+                approval_id=record.approval_id,
+                decision="timed_out",
+                now=now,
+            )
+            if decided is not None:
+                expired.append(decided)
+        return expired

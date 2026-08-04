@@ -226,11 +226,7 @@ async def test_tool_isolation_per_toolservers():
                     "transport": "stdio",
                     "command": sys.executable,
                     "args": [
-                        str(
-                            Path(__file__).resolve().parents[2]
-                            / "scripts"
-                            / "spike_mcp_server.py"
-                        )
+                        str(Path(__file__).resolve().parents[2] / "scripts" / "spike_mcp_server.py")
                     ],
                 },
                 {
@@ -238,11 +234,7 @@ async def test_tool_isolation_per_toolservers():
                     "transport": "stdio",
                     "command": sys.executable,
                     "args": [
-                        str(
-                            Path(__file__).resolve().parents[2]
-                            / "scripts"
-                            / "spike_mcp_server.py"
-                        )
+                        str(Path(__file__).resolve().parents[2] / "scripts" / "spike_mcp_server.py")
                     ],
                 },
             ]

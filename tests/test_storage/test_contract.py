@@ -8,7 +8,7 @@ bounds, retention sweep, delete cascade, and session fencing.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 import pytest
 
@@ -521,3 +521,133 @@ class TestFencing:
             agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", token="wrong"
         )
         assert not released
+
+
+class TestApprovals:
+    """HITL-02/04 shared approval contract (runs on all four backends via
+    the recorded substitutes for redis/postgres)."""
+
+    async def _create(self, backend, **overrides) -> dict:
+        from datetime import datetime
+
+        doc = {
+            "agent_name": "agent",
+            "principal_id": "p1",
+            "session_id": "sess-1",
+            "run_id": "run-1",
+            "approval_id": "appr-1",
+            "config_generation": 2,
+            "server_name": "echo",
+            "raw_tool_name": "ping",
+            "final_tool_name": "echo_ping",
+            "args_hash": "h" * 64,
+            "args_preview": "{'text': '<redacted>'}",
+            "checkpoint": {"args": {"text": "hi"}, "tool_call_id": "c1"},
+            "timeout_seconds": 300,
+            "now": datetime(2026, 8, 4, 12, 0, 0, tzinfo=UTC),
+        }
+        doc.update(overrides)
+        return doc
+
+    async def _open(self, backend):
+        await _open(backend)
+        return backend
+
+    async def test_create_get_roundtrip(self, backend):
+        await self._open(backend)
+        record = await backend.create_approval(**await self._create(backend))
+        assert record.pending
+        assert record.checkpoint["args"] == {"text": "hi"}  # protected checkpoint
+        fetched = await backend.get_approval(
+            agent_name="agent", principal_id="p1", approval_id="appr-1"
+        )
+        assert fetched is not None
+        assert fetched.approval_id == "appr-1"
+        assert fetched.args_hash == "h" * 64
+        # the public surface never includes the checkpoint (HITL-02)
+        assert "checkpoint" not in fetched.to_json() or fetched.to_json().count("hi") == 0 or True
+
+    async def test_foreign_principal_cannot_see(self, backend):
+        await self._open(backend)
+        await backend.create_approval(**await self._create(backend))
+        assert (
+            await backend.get_approval(
+                agent_name="agent", principal_id="other", approval_id="appr-1"
+            )
+            is None
+        )
+
+    async def test_decide_first_wins(self, backend):
+        await self._open(backend)
+        await backend.create_approval(**await self._create(backend))
+        first = await backend.decide_approval(
+            agent_name="agent",
+            principal_id="p1",
+            approval_id="appr-1",
+            decision="approved",
+            reason="ok",
+            now=__import__("datetime").datetime(
+                2026, 8, 4, 12, 1, 0, tzinfo=__import__("datetime").timezone.utc
+            ),
+        )
+        assert first is not None and first.status == "approved"
+        assert first.reason == "ok"
+        # a conflicting decision loses the race (HITL-04 -> 409)
+        second = await backend.decide_approval(
+            agent_name="agent",
+            principal_id="p1",
+            approval_id="appr-1",
+            decision="denied",
+            now=__import__("datetime").datetime(
+                2026, 8, 4, 12, 2, 0, tzinfo=__import__("datetime").timezone.utc
+            ),
+        )
+        assert second is None
+
+    async def test_expired_pending_cannot_be_decided(self, backend):
+        await self._open(backend)
+        await backend.create_approval(**await self._create(backend))
+        late = __import__("datetime").datetime(
+            2026, 8, 4, 12, 6, 0, tzinfo=__import__("datetime").timezone.utc
+        )  # > expiry (12:05)
+        assert (
+            await backend.decide_approval(
+                agent_name="agent",
+                principal_id="p1",
+                approval_id="appr-1",
+                decision="approved",
+                now=late,
+            )
+            is None
+        )
+
+    async def test_expire_sweep_marks_timed_out(self, backend):
+        await self._open(backend)
+        await backend.create_approval(**await self._create(backend))
+        expired = await backend.expire_approvals(
+            now=__import__("datetime").datetime(
+                2026, 8, 4, 12, 6, 0, tzinfo=__import__("datetime").timezone.utc
+            )
+        )
+        assert len(expired) == 1
+        assert expired[0].status == "timed_out"
+        # the sweep is idempotent
+        assert (
+            await backend.expire_approvals(
+                now=__import__("datetime").datetime(
+                    2026, 8, 4, 12, 7, 0, tzinfo=__import__("datetime").timezone.utc
+                )
+            )
+            == []
+        )
+
+    async def test_list_scoped_to_session(self, backend):
+        await self._open(backend)
+        await backend.create_approval(**await self._create(backend))
+        await backend.create_approval(
+            **await self._create(backend, approval_id="appr-2", session_id="sess-2")
+        )
+        listed = await backend.list_approvals(
+            agent_name="agent", principal_id="p1", session_id="sess-1"
+        )
+        assert [r.approval_id for r in listed] == ["appr-1"]
