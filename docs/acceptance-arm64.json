@@ -1,10 +1,10 @@
 {
   "platform": "linux/arm64",
   "test_image": "agentbase-test:arm64",
-  "image_id": "sha256:121593a7eb05846cd7faee3b2e9a6f64ec285c9bcf0a6f44dd5ee3018e5382df",
-  "source_commit": "4c5c5bc097d34f86b8457e1715e473ce9cd76511",
+  "image_id": "sha256:f50c97c1dca4466e8557cd31ed920513749745e6db318d1d9e8b7472c114f931",
+  "source_commit": "efa264f1f911ebdb3cacfba68f0acc2e644cb44d",
   "lock_hash": "e6f4ec176f693a1305a5b1d0c5e7bfcb09163adf65ecb13c6ed2579689af4944",
   "status": "pass",
   "staleness_check": "pass",
-  "pytest_summary": "417 passed"
+  "pytest_summary": "446 passed"
 }

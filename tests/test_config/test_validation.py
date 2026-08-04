@@ -264,27 +264,30 @@ class TestCapability:
             c == "capability_error" for _p, c in issues_for({"approval": {"enabled": True}})
         )
 
-    def test_rag_forbidden(self):
-        assert ("rag.enabled", "capability_error") in issues_for({"rag": {"enabled": True}})
+    def test_rag_accepted(self):
+        # CAP-02 (P4): rag.enabled is accepted by the capability gate.
+        assert not any(
+            c == "capability_error" for _p, c in issues_for({"rag": {"enabled": True}})
+        )
 
     def test_disabled_stubs_accepted(self):
         assert valid({"agents": [], "approval": {"enabled": False}, "rag": {"enabled": False}})
 
-    def test_capability_status_reports_p3(self):
+    def test_capability_status_reports_p4(self):
         from app.config.capabilities import BUILD_CAPABILITIES, capability_status
 
         assert BUILD_CAPABILITIES == {
             "multiAgent": True,
             "acp": True,
             "approval": True,
-            "rag": False,
+            "rag": True,
         }
         status = capability_status()
-        assert status["phase"] == "P3"
+        assert status["phase"] == "P4"
         assert status["multiAgent"] is True
         assert status["acp"] is True
         assert status["approval"] is True
-        assert status["rag"] is False
+        assert status["rag"] is True
 
 
 class TestAggregate:
@@ -318,12 +321,8 @@ class TestAggregate:
 
 class TestBootOrder:
     def test_validate_then_capability_order(self):
-        # A config with BOTH a schema error and a capability error must report
-        # both, with capability checks not masking schema checks (P3: approval
-        # is accepted; RAG still gates).
+        # Schema checks are never masked (P4: no capability gates remain).
         issues = issues_for({"rag": {"enabled": True}, "engine": {"bogus": 1}})
-        rag_codes = {code for path, code in issues if path == "rag.enabled"}
-        assert "capability_error" in rag_codes
         assert ("engine.bogus", "unknown_field") in issues
 
 
@@ -406,9 +405,8 @@ class TestMultiAgentSchemaMA01:
             )
         )
 
-    def test_capability_gate_fail_closed_for_p4(self):
-        # CAP-01: P4 (RAG) stays fail-closed; multi-agent, ACP, and approval
-        # are accepted (the P2/P3 flips, CAP-02).
+    def test_capability_gate_all_accepted_at_p4(self):
+        # CAP-02 (P2/P3/P4 flips): every implemented capability is accepted.
         assert issues_for(self._base(agents=[{"name": "worker", "systemInstruction": "a"}])) == []
         assert issues_for(self._base(server={"protocols": {"acp": True}})) == []
         # approval is capability-accepted (P3); the minimal base has no
@@ -417,7 +415,11 @@ class TestMultiAgentSchemaMA01:
             code == "capability_error"
             for _p, code in issues_for(self._base(approval={"enabled": True}))
         )
-        assert ("rag.enabled", "capability_error") in issues_for(self._base(rag={"enabled": True}))
+        # rag is capability-accepted (P4)
+        assert not any(
+            code == "capability_error"
+            for _p, code in issues_for(self._base(rag={"enabled": True}))
+        )
 
 
 class TestApprovalSchemaHITL01:
@@ -549,26 +551,31 @@ class TestRagSchemaRAG01:
         assert not valid(self._doc(minScore=1.1))
 
     def test_overlap_must_be_smaller_than_chunk(self):
-        # the P4 capability gate is still fail-closed, so the schema-level
-        # assertion filters it: a degenerate overlap adds a schema code
-        def codes(rag: dict) -> set[str]:
-            return {c for _p, c in issues_for(self._doc(**rag))}
-
-        assert codes({"chunkChars": 100, "chunkOverlapChars": 100}) != {"capability_error"}
-        assert codes({"chunkChars": 100, "chunkOverlapChars": 200}) != {"capability_error"}
-        assert codes({"chunkChars": 100, "chunkOverlapChars": 99}) == {"capability_error"}
+        # a degenerate overlap adds a schema code; the valid config is clean
+        assert any(
+            code != "capability_error"
+            for _p, code in issues_for(self._doc(chunkChars=100, chunkOverlapChars=100))
+        )
+        assert any(
+            code != "capability_error"
+            for _p, code in issues_for(self._doc(chunkChars=100, chunkOverlapChars=200))
+        )
+        assert issues_for(self._doc(chunkChars=100, chunkOverlapChars=99)) == []
 
     def test_collection_is_safe_identifier(self):
-        def codes(rag: dict) -> set[str]:
-            return {c for _p, c in issues_for(self._doc(**rag))}
-
-        assert codes({"store": {"collection": "bad name!"}}) != {"capability_error"}
-        assert codes({"store": {"collection": "-leading-dash"}}) != {"capability_error"}
-        assert codes({"store": {"collection": "kb-prod-v1"}}) == {"capability_error"}
+        assert any(
+            code != "capability_error"
+            for _p, code in issues_for(self._doc(store={"collection": "bad name!"}))
+        )
+        assert any(
+            code != "capability_error"
+            for _p, code in issues_for(self._doc(store={"collection": "-leading-dash"}))
+        )
+        assert issues_for(self._doc(store={"collection": "kb-prod-v1"})) == []
 
     def test_document_size_bound(self):
-        def codes(rag: dict) -> set[str]:
-            return {c for _p, c in issues_for(self._doc(**rag))}
-
-        assert codes({"maxDocumentBytes": 0}) != {"capability_error"}
-        assert codes({"maxDocumentBytes": 1024}) == {"capability_error"}
+        assert any(
+            code != "capability_error"
+            for _p, code in issues_for(self._doc(maxDocumentBytes=0))
+        )
+        assert issues_for(self._doc(maxDocumentBytes=1024)) == []

@@ -276,3 +276,80 @@ reconcile is a no-op.
 
 **Exit check:** the full regression set + the P3 suite pass on the host and
 in the image on both architectures; release evidence recorded per TRC-02.
+
+---
+
+## Phase 4 — RAG / long-term memory (P4, §15)
+
+P3's §18 acceptance criteria pass; P4 is independently releasable per
+PHASE-01. The capability flip (`rag` true in `/health`, phase `P4`) is the
+LAST commit of the phase (CAP-02); the store/embedding connectors follow
+the recorded ACC-01 deviation (acceptance runs the memory substitute; the
+real chroma/pgvector/gemini/openai drivers are import-guarded shells whose
+real-instance proofs are deferred like the redis/postgres ones).
+
+## Milestone P4-1 — Schema and gating (RAG-01)
+
+- `rag` field contract: `required`, `store {type chroma|pgvector,
+  connectionStringEnv/File (SEC-04), collection DNS-1123, options
+  passthrough}`, `embedding {provider gemini|openai, model,
+  apiKeyEnv/File}`, `topK 1..100`, `minScore 0..1`, `chunkChars`,
+  `chunkOverlapChars < chunkChars`, `maxDocumentBytes` (default 10 MiB).
+  Capability fail-closed until the suite passes.
+
+**Exit check:** schema + constraint tests pass; `rag.enabled` under a P3
+build is rejected with a stable error.
+
+## Milestone P4-2 — Retrieval engine (RAG-02)
+
+- Chunk keys by agent/principal/doc/chunk/embedding model/content hash;
+  principal-scoped retrieval; ≤topK chunks before the root LLM call,
+  sorted descending score then stable chunk id, minScore filter; one
+  delimited context message after the system instruction, explicitly
+  labeled untrusted knowledge. MemoryRagStore substitute + import-guarded
+  chroma/pgvector/gemini/openai shells (ACC-01 deviation).
+
+**Exit check:** chunking/tenancy/ranking/context-injection tests pass; the
+model receives the labeled context in the runner integration test.
+
+## Milestone P4-3 — Ingestion API (RAG-03)
+
+- `POST /v1/documents` (id syntax, text bounded by maxDocumentBytes,
+  metadata ≤ 64 KiB scalar-only, Idempotency-Key replay, 201 with
+  id/chunk count/content hash), `GET /v1/documents/{id}` (metadata/count/
+  hash only — never the stored text), `DELETE /v1/documents/{id}` (204
+  idempotent). Atomic upsert: embedding failure leaves the previous
+  version intact. Registered only when rag is enabled.
+
+**Exit check:** the endpoint suite passes over the real HTTP surface,
+including the error table and the failure-never-silent case.
+
+## Milestone P4-4 — Availability (RAG-04)
+
+- Optional: unavailable store logs ONE redacted error, emits
+  `rag_degraded` only in events/debug streams, answers without context,
+  readiness stays 200. Required: readyz 503 and the run fails
+  `rag_unavailable`. Ingestion never degrades silently.
+
+**Exit check:** required/optional failure-recovery tests pass at the
+runner and the HTTP surface.
+
+## Milestone P4-5 — Lifecycle/security (RAG-05)
+
+- Any rag identity change (store/embedding/chunk fields) is a component
+  rebuild (REL-02) — no silent re-embed of old documents; delete removes
+  every scoped chunk; SEC-04 Env/File secrets; SEC-02 passthrough
+  redaction; document content excluded from logs/traces; backups/
+  retention are deployment responsibilities (documented).
+
+**Exit check:** rebuild classification + redaction tests pass.
+
+## Milestone P4-6 — Acceptance (CAP-02)
+
+- Capability flip: `rag` true in `/health`, phase `P4`; earlier
+  fail-closed tests re-baselined. Docs/TODO/CHANGELOG updated;
+  traceability regenerated (RAG-01..06); image acceptance on both
+  architectures.
+
+**Exit check:** the full regression set + the P4 suite pass on the host and
+in the image on both architectures; release evidence recorded per TRC-02.

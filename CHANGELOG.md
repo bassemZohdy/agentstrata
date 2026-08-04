@@ -4,6 +4,38 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### P4 — RAG / long-term memory (RAG-01..06, §15, complete)
+
+- **RAG-01/02 (complete):** `rag` field contract with all constraints;
+  the retrieval engine — deterministic code-point chunking with overlap,
+  content hashing, chunk keys by agent/principal/doc/chunk/model/hash,
+  principal-scoped search (descending score, stable chunk-id ties,
+  minScore filter), and one delimited context message labeled untrusted
+  knowledge injected before the root LLM call. MemoryRagStore +
+  DeterministicEmbedding are the ACC-01 substitutes; chroma/pgvector/
+  gemini/openai connector shells are import-guarded (real-instance proofs
+  deferred).
+- **RAG-03 (complete):** owner-scoped documents API — POST (id syntax,
+  `maxDocumentBytes` bound, ≤64 KiB scalar-only metadata,
+  Idempotency-Key replay, 201 with chunk count + content hash), GET
+  (metadata/count/hash only, never the stored text), DELETE 204
+  idempotent; atomic upsert (embedding failure leaves the previous
+  version intact); registered only when rag is enabled.
+- **RAG-04 (complete):** optional — one redacted log, `rag_degraded` in
+  events/debug streams only, answer without context, readiness 200;
+  required — readyz 503 + the run fails `rag_unavailable`; ingestion
+  never degrades silently.
+- **RAG-05 (complete):** rag identity changes are component rebuilds
+  (no silent re-embed); delete removes all scoped chunks; SEC-04 Env/File
+  secrets; document content excluded from logs/traces; backups/retention
+  are deployment responsibilities.
+- **Capability flip (CAP-02):** phase `P4`, `rag` true in `/health`;
+  earlier fail-closed tests re-baselined; traceability regenerated (164
+  IDs); **446/446 acceptance inside the image on linux/amd64 AND
+  linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}`, staleness pass).
+
+
+
 ### P3 — human-in-the-loop approvals (HITL-01..05, §14, complete)
 
 - **HITL-05 (complete):** the restart/config-change reconciler — startup

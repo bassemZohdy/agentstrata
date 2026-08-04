@@ -43,7 +43,7 @@ class TestHealth:
             assert "storage" in body["components"]
             assert "mcp" in body["components"]
             assert body["mode"] == "standalone"
-            assert body["capabilities"]["phase"] == "P3"
+            assert body["capabilities"]["phase"] == "P4"
 
     def test_config_redacts_and_masks_system_instruction(self):
         with _client() as c:

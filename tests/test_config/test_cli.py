@@ -73,7 +73,7 @@ class TestVersion:
         assert code == EX_OK
         assert "agentbase 0.1.0" in out
         assert "schema major 1" in out
-        assert "phase P3" in out
+        assert "phase P4" in out
 
 
 class TestHelp:

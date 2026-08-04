@@ -149,8 +149,8 @@ Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria
       task breakdown below.
 - [x] **P3 — Human-in-the-loop** (§14): **DONE** — milestone breakdown in
       PLAN.md; task breakdown below.
-- [ ] **P4 — RAG / long-term memory** (§15): document ingestion, chunking,
-      retrieval-scoped context injection.
+- [x] **P4 — RAG / long-term memory** (§15): **DONE** — milestone breakdown
+      in PLAN.md; task breakdown below.
 
 ### P3 — Human-in-the-loop (HITL-01..05, §14)
 
@@ -179,6 +179,38 @@ Each gets its own milestone breakdown in PLAN.md once P1's acceptance criteria
       and never execute the tool; timeout follows onTimeout policy with the
       same stale/cancellation checks; decided-while-down approvals resume
       exactly once (deterministic resume run guard).
+
+### P4 — RAG / long-term memory (RAG-01..06, §15)
+
+- [x] **P4-1 Schema + gating (RAG-01):** `rag` field contract (required,
+      store chroma|pgvector with SEC-04 connectionString Env/File +
+      DNS-1123 collection + options passthrough, embedding gemini|openai
+      with apiKey Env/File, topK 1..100, minScore 0..1, chunkChars,
+      chunkOverlapChars < chunkChars, maxDocumentBytes 10 MiB); CAP
+      fail-closed until acceptance.
+- [x] **P4-2 Retrieval (RAG-02):** chunk keys by agent/principal/doc/
+      chunk/embedding model/content hash; principal-scoped retrieval;
+      ≤topK chunks before the root LLM call sorted by descending score +
+      stable chunk id with minScore filter; one delimited context message
+      after the system instruction, labeled untrusted knowledge.
+- [x] **P4-3 Ingestion (RAG-03):** POST/GET/DELETE /v1/documents
+      (owner-scoped, Idempotency-Key, 201/204, metadata ≤ 64 KiB
+      scalar-only, line-ending normalization, code-point chunking with
+      overlap, atomic upsert — embedding failure leaves the previous
+      version intact).
+- [x] **P4-4 Availability (RAG-04):** optional → one redacted log +
+      `rag_degraded` events-only + answer without context, readiness
+      stays 200; required → readyz 503 + run fails `rag_unavailable`;
+      ingestion never degrades silently.
+- [x] **P4-5 Lifecycle/security (RAG-05):** rag identity changes are
+      component rebuilds without silent re-embed; delete removes scoped
+      chunks; SEC-04 secrets; no document content in logs/traces;
+      backups/retention are deployment responsibilities.
+- [x] **P4-6 Acceptance (RAG-06):** deterministic chunk/hash fixtures,
+      principal isolation, metadata/size limits, idempotent atomic
+      upsert, delete, stable ranking/tie-breaks, model-change behavior,
+      prompt-boundary tests, required/optional dependency failure
+      recovery; `rag` true in `/health` (phase P4); docs updated.
 
 ### P2 — Multi-agent and ACP (MA-01..05 + API-16, annex §13.1)
 
