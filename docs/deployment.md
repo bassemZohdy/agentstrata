@@ -198,6 +198,18 @@ limiter; the registry is process-local and shared across live reloads.
 Scrape `/metrics` from the same listener (the endpoint is served by the
 app, no sidecar or extra port).
 
+### WebSocket API (WS-01)
+
+`server.protocols.websocket: true` enables `/v1/ws`. Browser clients pass
+`?token=<apiKey|jwt>` (headers are not settable from browsers); native
+clients may use the standard Authorization/X-API-Key headers. One active
+run per connection — send `run.start`, receive `run.started` /
+`run.delta` / `run.done`; `run.cancel` cancels the active run;
+`approval.decide` resolves pending approvals mid-stream (same engine as
+the REST API). Messages are JSON and bounded by `server.maxMessageBytes`.
+Behind a reverse proxy, enable WebSocket upgrade passthrough (HTTP/1.1
+Upgrade) for `/v1/ws`.
+
 ## Known limitations (operator documentation required)
 
 - `maxTransportMessageBytes` is enforced on HTTP/SSE MCP transports; the

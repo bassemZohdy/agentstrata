@@ -116,7 +116,6 @@ Specifically, a P1 build MUST reject non-empty `agents`, `server.protocols.acp: 
 - A graphical UI of any kind.
 - Fine-tuning, training, or model hosting.
 - Acting as an MCP *server* (the runtime is an MCP *client* only).
-- A WebSocket API. Agent calling conventions in the wild are overwhelmingly request/response or SSE-streamed HTTP (OpenAI-compatible); a second stateful transport is deferred until a concrete caller needs it.
 - A Kubernetes Custom Resource / operator. Config reload watches a plain ConfigMap; a CRD adds an API-group/RBAC/status-subresource surface for the same job and is deferred.
 - Prometheus `/metrics` endpoint and per-request cost-in-dollars accounting
   (deferred; token counts are reported per API-14).
@@ -831,6 +830,35 @@ IDs follow session-ID syntax; text is non-empty and bounded by `maxDocumentBytes
 **RAG-06 (acceptance)** — P4 capability requires deterministic chunk/hash fixtures, principal isolation, metadata/size limits, idempotent atomic upsert, delete, stable ranking/tie-breaks, model-change behavior, prompt-boundary tests, and required/optional dependency failure recovery.
 
 ---
+
+## 15a. WebSocket API (Phase 5)
+
+**WS-01 (websocket)** — When `server.protocols.websocket` is true, serve a
+WebSocket endpoint at `/v1/ws` with the SAME authentication as the REST
+surface (Authorization/X-API-Key headers, or `?token=` injected as a bearer
+for browser clients); failed auth closes the socket with code 1008 and
+emits an `auth_failure` audit event. One active run per connection:
+- Inbound JSON messages (bounded by `server.maxMessageBytes`; oversize
+  closes with 1009): `run.start` (message + optional sessionId /
+  idempotencyKey), `run.cancel` (cancels the connection's active run),
+  `approval.decide` (approve|deny — routes to the SAME engine resume as
+  the REST approvals API), `ping`/`pong`.
+- Outbound messages mirror the SSE vocabulary: `run.started`,
+  `run.iteration`, `run.delta`, `run.tool_call`, `run.tool_result`,
+  `run.transfer`, `run.rag_degraded`, `approval.required`, `run.error`,
+  `run.done`, `run.cancelled`, `approval.decided`, protocol-level `error`.
+- Runs consume the replica-local run cap (`server.maxConcurrentRequests`)
+  and the output queue honors `server.streamQueueEvents` +
+  `server.slowConsumerSeconds` (a wedged consumer cancels the run and
+  records the output-queue-cancellation metric, OBS-05). Client disconnect
+  cancels the active run, which commits a terminal state (CNT-07).
+- `run.cancel` with no active run answers an `error` `no_active_run`; a
+  `run.start` while a run is active answers `run_in_progress`.
+
+**WS-02 (acceptance)** — P5 websocket capability requires tests covering
+auth (reject + `?token=` accept), a full run round trip (start → delta →
+done), ping/pong, cancel semantics, oversize-message close, sequential
+runs on one connection, and unknown-approval errors.
 
 ## 16. Container and runtime packaging
 

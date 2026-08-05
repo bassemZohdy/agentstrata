@@ -170,3 +170,5 @@ verified by the Milestone 8 acceptance/chaos run.
 | TRUST-01 | app/config/parse.py (trusted source handling); app/protocol/auth.py; MCP bounds |
 | TRUST-02 | app/storage/* (isolation); tests/test_storage/test_contract.py |
 | TRUST-03 | connectors.py; watcher.py; otel.py (nonfatal deps) |
+| WS-01 | app/protocol/routes/websocket.py; tests/test_protocol/test_websocket.py |
+| WS-02 | tests/test_protocol/test_websocket.py |

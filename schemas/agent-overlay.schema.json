@@ -603,6 +603,11 @@
           "default": true,
           "title": "Openaicompat",
           "type": "boolean"
+        },
+        "websocket": {
+          "default": false,
+          "title": "Websocket",
+          "type": "boolean"
         }
       },
       "title": "Protocols",

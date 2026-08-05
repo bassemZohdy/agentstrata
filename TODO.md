@@ -75,9 +75,10 @@ key facts on record there:
 Cut in the v2.2 scope pass. Don't reopen speculatively; reopen when an actual
 caller or deployment needs one.
 
-- [ ] **WebSocket API.** Revisit if a client needs bidirectional push (e.g.,
-      server-initiated cancellation notices, multiplexed tool-approval UI) that
-      SSE can't express.
+- [ ] **WebSocket API.** IN PROGRESS (P5, user decision 2026-08-05): the
+      `/v1/ws` surface ships in P5-2 (WS-01: auth, one active run per
+      connection, run.start/cancel + approval.decide + ping, SSE-vocabulary
+      push; WS-02 acceptance tests).
 - [ ] **Kubernetes CRD / operator.** Revisit once the product name/API-group
       is settled (DONE 2026-08-05 — the name stays as-is) and there's a real
       need for `kubectl get agentconfigs`, CRD-native status, or

@@ -4,6 +4,34 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### P5-2: WebSocket API (WS-01) — DONE
+
+- `server.protocols.websocket` (default false) enables `/v1/ws` — the
+  bidirectional surface SSE cannot express: client `run.start` /
+  `run.cancel` / `approval.decide` / `ping` over one connection with the
+  engine's SSE vocabulary pushed back (run.started/iteration/delta/
+  tool_call/tool_result/transfer/rag_degraded/approval.required/error/
+  done/cancelled/approval.decided/pong).
+- Auth reuses the REST provider (Authorization/X-API-Key headers or
+  `?token=` injected as a bearer for browser clients); failure closes
+  with 1008 + an auth_failure audit event; oversize inbound messages
+  close with 1009 (bounded by server.maxMessageBytes).
+- One active run per connection; runs consume the replica-local run cap;
+  the output queue honors streamQueueEvents/slowConsumerSeconds (wedged
+  consumers cancel the run + record the OBS-05 queue-cancellation
+  metric); client disconnect cancels the active run which commits a
+  terminal state (CNT-07); approval.decide routes to the same
+  resume_approval engine path as REST.
+- REQUIREMENTS: WS-01/WS-02 added, the §1.4 WebSocket deferral removed;
+  schemas + traceability regenerated; deployment.md documents the
+  endpoint + proxy upgrade guidance.
+- Tests: 9 WS tests (auth reject/accept, round trip, ping/pong, cancel,
+  oversize close, sequential runs, unknown-approval error, disabled-by-
+  default) — verified against a REAL uvicorn server + websockets client
+  as well as the TestClient suite.
+
+
+
 ### P5-1: Prometheus /metrics endpoint (OBS-05) — DONE
 
 - User decision 2026-08-05: implement all three deferred-scope items;

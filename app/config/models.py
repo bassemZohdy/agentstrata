@@ -245,6 +245,7 @@ class Protocols(BaseModel):
 
     openaiCompat: bool = True
     acp: bool = False  # Phase 2; CAP-01 forbids enabling in P1
+    websocket: bool = False  # Phase 5; WS-01 /v1/ws
 
 
 class Server(BaseModel):

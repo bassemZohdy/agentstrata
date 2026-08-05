@@ -199,6 +199,8 @@ MAPPINGS: dict[str, str] = {
     "OBS-05": "app/observability/metrics.py + otel.py + protocol/routes/metrics.py; "
     "tests/test_protocol/test_metrics.py",
     "OBS-06": "tests/test_observability/test_obs.py (zero-cost subprocess)",
+    "WS-01": "app/protocol/routes/websocket.py; tests/test_protocol/test_websocket.py",
+    "WS-02": "tests/test_protocol/test_websocket.py",
 }
 
 

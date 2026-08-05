@@ -248,6 +248,12 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
     approvals.register(app, config, components)
     documents.register(app, config, components)
     sessions.register(app, config, components)
+    # WS-01: the bidirectional WebSocket surface exists only when enabled;
+    # it authenticates with the SAME provider as the REST middleware.
+    if config.server.protocols.websocket:
+        from .routes.websocket import register as register_websocket
+
+        register_websocket(app, config, components, auth)
     # OBS-05: the Prometheus exposition endpoint exists only when enabled;
     # the registry lives on the shared Observability facade.
     if config.observability.prometheus.enabled:
