@@ -39,7 +39,7 @@ python_version = "3.12"
 strict = false
 show_error_codes = true
 warn_unused_configs = true
-exclude = ["build/", "dist/", ".venv/", "tests/"]
+exclude = ["build/", "dist/", ".venv/"]
 files = ["app", "scripts"]
 
 [tool.pyright]

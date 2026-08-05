@@ -87,7 +87,10 @@ Every option and backend is covered in [docs/deployment.md](docs/deployment.md).
 - **Configurable storage** — sessions, runs, and idempotency records in memory, local file, Redis, or PostgreSQL. Redis/PostgreSQL support multi-replica deployments via session fencing.
 - **Configurable auth** — none, static API key, or JWT/JWKS, selected per deployment.
 - **Kubernetes-native reload** — watches a ConfigMap for live config changes, with three reload categories (live snapshot, component rebuild, restart-required) and last-known-good rollback on a bad update.
-- **Observability** — structured JSON/text logs with request/run correlation, OpenTelemetry traces and metrics (opt-in, zero-cost when disabled), and a `/health` endpoint reporting per-component status.
+- **Observability** — structured JSON/text logs with request/run correlation, OpenTelemetry traces and metrics (opt-in, zero-cost when disabled), a `/health` endpoint reporting per-component status, and a Prometheus `/metrics` scrape endpoint.
+- **WebSocket API** — `/v1/ws` for streaming runs, mid-stream cancellation, and approval decisions (`server.protocols.websocket`).
+- **Kubernetes operator (optional)** — an in-cluster operator reconciles `AgentConfig` custom resources into running runtimes (`agentconfigs.agentstrata.io`), including live CR → ConfigMap → runtime reloads.
+- **Cost accounting** — per-request USD pricing from a `costs` config table (`usage.costUsd`, run-outcome `cost_usd`, `agentbase_cost_usd_total{model}` metric); disabled by default with zero surface change.
 - **Hardened container** — non-root, arbitrary-UID (OpenShift-compatible), read-only rootfs, multi-arch (`amd64`/`arm64`), graceful shutdown, SBOM + vulnerability scanning.
 
 ## Deploy it
@@ -100,21 +103,24 @@ kubectl apply -f manifests/deployment.yaml
 
 Set `k8s.enabled: true` and the runtime watches the ConfigMap named by `k8s.name` in `k8s.namespace`, reading key `agent.yaml` as a partial tier-8 overlay. Replicas reconcile independently — per-pod `/health` reports the local generation/hash. Full deployment, auth, storage, and observability guidance: [docs/deployment.md](docs/deployment.md).
 
+Alternatively, the optional in-cluster operator turns AgentConfig custom resources into runtimes (`kubectl apply -f k8s_operator/crd/agentconfigs.agentstrata.io.yaml` plus the RBAC and operator manifests — see [docs/deployment.md](docs/deployment.md)).
+
 ## Status
 
-Phase 1 (the core runtime above) is implemented and passing the host-based test suite. The remaining P1 work is the image-based release-gate checks (benchmark/chaos, zero-downtime reload proof, multi-architecture acceptance), which require the built image and a cluster/chaos harness — see [TODO.md](TODO.md). Future phases are sketched below; each is independently releasable and gated by its own acceptance criteria.
+The runtime is feature-complete through phase 5: P1 core, P2 multi-agent/ACP, P3 approvals, P4 RAG, and P5 (metrics, WebSocket, Kubernetes CRD/operator, cost accounting) are implemented and passing the host-based test suite. Remaining work is tracked in [TODO.md](TODO.md); the image-based release gates (benchmark/chaos, zero-downtime reload proof, multi-architecture acceptance) run against the built image per [PLAN.md](PLAN.md).
 
 | Phase | Adds |
-|---|---|
-| **P1 — Core runtime** | Everything above |
+| --- | --- |
+| **P1 — Core runtime** | Config engine, sessions/storage, OpenAI-compatible API, MCP tools, observability |
 | **P2 — Multi-agent** | Root-agent + sub-agent hierarchies, agent-to-agent REST (ACP) |
 | **P3 — Human-in-the-loop** | Tool-call approval workflow with durable checkpoints |
 | **P4 — RAG / long-term memory** | Document ingestion and retrieval-augmented context |
+| **P5 — Extensions** | P5-1 Prometheus `/metrics`, P5-2 WebSocket API (`/v1/ws`), P5-3 Kubernetes CRD/operator, P5-4 per-request cost accounting (`costs.enabled`, `usage.costUsd`) |
 
 ## Documentation
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | [docs/deployment.md](docs/deployment.md) | Operator guide: every configuration option, backend, auth mode, and deployment target. |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | The authoritative specification. Every rule has a stable ID (e.g. `CFG-03`, `API-07`) that code and tests trace back to. |
 | [PLAN.md](PLAN.md) | Build order and milestones. |

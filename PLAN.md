@@ -382,19 +382,6 @@ gates green; commit.
 **Exit check:** WS tests pass (start/cancel/approve/deny round-trips
 over the mock model); auth enforced; gates green; commit.
 
-## Milestone P5-4 — Cost accounting (COST-01)
-
-- `costs` config (enabled + USD-per-1M defaults and per-model overrides;
-  duplicate/negative validation); runner computes per-request cost when
-  enabled; recorded in the run outcome + committed usage; surfaced as
-  `usage.costUsd`; OBS-05 `agentbase_cost_usd_total{model}` counter.
-- REQUIREMENTS: §1.4 deferral removed, API-14 amended, COST-01/02;
-  schemas + traceability regenerated; deployment.md.
-
-**Exit check:** cost unit + surface + metric + validation tests pass;
-disabled builds show zero cost fields; gates green; commit.
-
-
 ## Milestone P5-3 — Kubernetes CRD / operator (K8S-01)
 
 - CRD `agentconfigs.agentstrata.io` (validation schema embedded from the
@@ -408,6 +395,18 @@ disabled builds show zero cost fields; gates green; commit.
 **Exit check:** CRD manifest validates; reconcile tests pass
 (create/update/delete + status); gates green; commit.
 
+## Milestone P5-4 — Cost accounting (COST-01)
+
+- `costs` config (enabled + USD-per-1M defaults and per-model overrides;
+  duplicate/negative validation); runner computes per-request cost when
+  enabled; recorded in the run outcome + committed usage; surfaced as
+  `usage.costUsd`; OBS-05 `agentbase_cost_usd_total{model}` counter.
+- REQUIREMENTS: §1.4 deferral removed, API-14 amended, COST-01/02;
+  schemas + traceability regenerated; deployment.md.
+
+**Exit check:** cost unit + surface + metric + validation tests pass;
+streaming usage is normalized like non-streaming (API-14 usage chunk
+opt-in); disabled builds show zero cost fields; gates green; commit.
 
 ## Milestone P4-6 — Acceptance (CAP-02)
 

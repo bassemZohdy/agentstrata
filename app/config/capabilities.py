@@ -12,9 +12,11 @@ from .resolver import ConfigError
 
 PHASE = "P5"
 
-# CAP-01: all four capabilities are implemented (fail closed,
-# never warn-and-continue); multi-agent and ACP are implemented and gated on
-# their acceptance suite (CAP-02).
+# CAP-01: all capabilities are implemented (fail closed, never
+# warn-and-continue); multi-agent and ACP are implemented and gated on their
+# acceptance suite (CAP-02). `costs` (COST-01) is not phase-gated — the code
+# is always in the build after P5-4, so it reports true whenever its
+# acceptance suite (tests/test_protocol/test_cost.py) is present and passing.
 CAPABILITY_PATHS = {
     "multiAgent": "agents",
     "acp": "server.protocols.acp",
@@ -27,6 +29,7 @@ BUILD_CAPABILITIES: dict[str, bool] = {
     "acp": True,
     "approval": True,
     "rag": True,
+    "costs": True,
 }
 
 

@@ -203,15 +203,19 @@ MAPPINGS: dict[str, str] = {
     "WS-02": "tests/test_protocol/test_websocket.py",
     "K8S-11": "k8s_operator/reconcile.py + kube.py + loop.py; tests/test_operator/test_operator.py",
     "K8S-12": "tests/test_operator/test_operator.py",
-    "COST-01": "app/engine/runner.py (_cost_usd) + config/models.py::Costs; "
-    "tests/test_protocol/test_cost.py",
+    "COST-01": "app/engine/runner.py (_cost_usd) + config/models.py::Costs + "
+    "observability/metrics.py (agentbase_cost_usd_total) + "
+    "config/capabilities.py (health `costs`); tests/test_protocol/test_cost.py",
     "COST-02": "tests/test_protocol/test_cost.py + tests/test_config/test_validation.py",
 }
 
 
 def main() -> int:
     text = (ROOT / "REQUIREMENTS.md").read_text(encoding="utf-8")
-    ids = sorted(set(re.findall(r"\b([A-Z]{2,5}-\d{2}[a-z]?)\b", text)))
+    # TRC-01: requirement IDs are UPPER-words that may contain digits in the
+    # prefix (e.g. K8S-01) followed by -NN with an optional letter suffix
+    # (e.g. CFG-11a).
+    ids = sorted(set(re.findall(r"\b([A-Z][A-Z0-9]{1,4}-\d{2}[a-z]?)\b", text)))
     missing = [i for i in ids if i not in MAPPINGS]
     if missing:
         print("unmapped requirement IDs:", ", ".join(missing), file=sys.stderr)

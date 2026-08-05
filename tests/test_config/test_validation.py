@@ -75,6 +75,17 @@ class TestCrossField:
         assert ("costs.defaultInputPerMillion", "greater_than_equal") in issues_for(
             {"costs": {"enabled": True, "defaultInputPerMillion": -1.0}}
         )
+        assert ("costs.defaultOutputPerMillion", "greater_than_equal") in issues_for(
+            {"costs": {"enabled": True, "defaultOutputPerMillion": -1.0}}
+        )
+        assert ("costs.models[0].inputPerMillion", "greater_than_equal") in issues_for(
+            {
+                "costs": {
+                    "enabled": True,
+                    "models": [{"model": "m1", "inputPerMillion": -1.0, "outputPerMillion": 1.0}],
+                }
+            }
+        )
 
     def test_costs_valid(self):
         assert valid({"costs": {"enabled": True, "models": [{"model": "m1"}]}})
@@ -318,6 +329,7 @@ class TestCapability:
             "acp": True,
             "approval": True,
             "rag": True,
+            "costs": True,
         }
         status = capability_status()
         assert status["phase"] == "P5"
@@ -325,6 +337,7 @@ class TestCapability:
         assert status["acp"] is True
         assert status["approval"] is True
         assert status["rag"] is True
+        assert status["costs"] is True
 
 
 class TestAggregate:

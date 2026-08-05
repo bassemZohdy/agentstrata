@@ -131,7 +131,7 @@ class RunRecord:
     iteration_count: int = 0
     input: dict[str, Any] = field(default_factory=dict)
     outcome: dict[str, Any] = field(default_factory=dict)
-    usage: dict[str, int] = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=utcnow)
     updated_at: datetime = field(default_factory=utcnow)
     schema_version: int = SCHEMA_VERSION

@@ -836,6 +836,7 @@ WebSocket endpoint at `/v1/ws` with the SAME authentication as the REST
 surface (Authorization/X-API-Key headers, or `?token=` injected as a bearer
 for browser clients); failed auth closes the socket with code 1008 and
 emits an `auth_failure` audit event. One active run per connection:
+
 - Inbound JSON messages (bounded by `server.maxMessageBytes`; oversize
   closes with 1009): `run.start` (message + optional sessionId /
   idempotencyKey), `run.cancel` (cancels the connection's active run),
@@ -866,6 +867,7 @@ Agent Definition document (the CRD validation schema is generated from the
 same model as `schemas/agent.schema.json` — `scripts/gen-schemas.py`
 regenerates `k8s_operator/crd/`). The `k8s_operator` package reconciles
 each AgentConfig into:
+
 - a ConfigMap `agentstrata-<cr>` holding the tier-8 overlay in key
   `agent.yaml` (the runtime's ConfigMap watcher consumes it via
   `AGENT_K8S_NAME`),
@@ -898,7 +900,7 @@ tokens per model in USD per 1M tokens: `defaultInputPerMillion` /
 match the exact `llm.model` string; duplicate model entries are a config
 error). When `costs.enabled`, every successful run computes
 `costUsd = (input_tokens*inputPrice + output_tokens*outputPrice) / 1e6`
-and: records it in the run outcome (`cost_usd`) and the committed usage,
+and records it in the run outcome (`cost_usd`) and the committed usage,
 reports it as `usage.costUsd` in non-streaming responses and the final
 streaming usage chunk, and records it in the OBS-05 cost counter
 (`agentbase_cost_usd_total{model}`). When disabled, no cost field appears

@@ -44,6 +44,9 @@ class TestHealth:
             assert "mcp" in body["components"]
             assert body["mode"] == "standalone"
             assert body["capabilities"]["phase"] == "P5"
+            # COST-01 is build-included after P5-4 (not phase-gated), so it
+            # reports true whenever the acceptance suite is present.
+            assert body["capabilities"]["costs"] is True
 
     def test_config_redacts_and_masks_system_instruction(self):
         with _client() as c:

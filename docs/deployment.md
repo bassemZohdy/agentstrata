@@ -96,7 +96,7 @@ agents:
 - Changing `agents` is a component rebuild (REL-02): in-flight runs
   finish on the old generation; new runs use the new one.
 
-
+## Human-in-the-loop (P3, §14)
 
 Human-in-the-loop tool approval gates matched tools before any side effect.
 While `approval.enabled` is true:
@@ -155,8 +155,6 @@ knowledge) after the system instruction.
   retention are the deployment's responsibility (the runtime stores
   documents until deleted).
 
-
-
 ```bash
 docker build -t agentbase:latest .
 docker run --rm -p 8080:8080 -e GEMINI_API_KEY=... agentbase:latest
@@ -191,12 +189,24 @@ when disabled, no OTel code is imported (zero-cost). A Prometheus
 `observability.prometheus.enabled` (default false) at
 `observability.prometheus.path` (default `/metrics`) in the text
 exposition format 0.0.4 — counters for admitted/completed/failed runs,
-model/tool calls, tokens, denials, reloads, and output-queue
-cancellations, an active-runs gauge, and run-latency histograms, all
+model/tool calls, tokens, denials, reloads, output-queue
+cancellations, and the cost counter
+`agentbase_cost_usd_total{model}` (COST-01, present only when a run
+recorded a cost), an active-runs gauge, and run-latency histograms, all
 low-cardinality. The scrape path is exempt from the replica-local rate
 limiter; the registry is process-local and shared across live reloads.
 Scrape `/metrics` from the same listener (the endpoint is served by the
 app, no sidecar or extra port).
+
+## Phase 5 extensions
+
+Phase 5 adds four operator-facing extensions on top of the P1–P4 runtime:
+
+- **P5-1 Prometheus metrics** — the `/metrics` scrape endpoint described
+  under [Observability](#observability) above;
+- **P5-2 WebSocket API** — [streaming runs over `/v1/ws`](#websocket-api-ws-01);
+- **P5-3 Kubernetes CRD / operator** — [AgentConfig custom resources](#kubernetes-crd--operator-k8s-01);
+- **P5-4 Cost accounting** — [per-request USD pricing](#cost-accounting-cost-01).
 
 ### WebSocket API (WS-01)
 
@@ -224,22 +234,51 @@ is regenerated from the config model by `scripts/gen-schemas.py`) is
 reconciled into a ConfigMap `agentstrata-<cr>` (tier-8 overlay in
 `agent.yaml`), a Deployment (image from the required
 `agentstrata.io/image` annotation; non-root, read-only rootfs, probes,
-35 s termination grace), and a Service.
-
-### Cost accounting (COST-01)
-
-`costs.enabled: true` prices every successful run in USD (per 1M tokens:
-`costs.defaultInputPerMillion` / `costs.defaultOutputPerMillion`, with
-per-model overrides in `costs.models[]`). The cost appears in the
-response `usage.costUsd`, the run record outcome `cost_usd`, and the
-`agentbase_cost_usd_total{model}` metric. Disabled by default — the usage
-object stays byte-identical to the OpenAI shape. The Deployment runs the runtime
+35 s termination grace), and a Service. The Deployment runs the runtime
 in watcher mode (`AGENT_K8S_ENABLED=true`, `AGENT_K8S_NAME` set), so live
 reloads flow CR → ConfigMap → runtime. Status reports observedGeneration
-+ a Ready condition; invalid specs and missing image annotations fail
+
+- a Ready condition; invalid specs and missing image annotations fail
 closed with Ready=False. Deletion is handled by Kubernetes GC via
 ownerReferences. Single-replica Deployments are required for memory/file
 storage (SES-01); use redis/postgres storage for multi-replica.
+
+### Cost accounting (COST-01)
+
+Per-request cost-in-dollars accounting is disabled by default and must be
+opted into via the `costs` config block:
+
+```yaml
+costs:
+  enabled: true
+  defaultInputPerMillion: 1.5      # USD per 1M input tokens
+  defaultOutputPerMillion: 6.0     # USD per 1M output tokens
+  models:                          # per-model overrides (optional)
+    - model: llama-3.3-70b         # must equal the exact `llm.model` string
+      inputPerMillion: 1.0
+      outputPerMillion: 4.0
+```
+
+Prices are non-negative floats (negative values are a validation error)
+and `models[]` entries must be unique by `model` — a duplicate model
+entry is a config error. A `models[]` entry matching the exact
+`llm.model` string wins over the defaults; unknown models fall back to
+the defaults; an empty `models` list uses the defaults for everything.
+
+When enabled, every successful run computes
+`costUsd = (input_tokens*inputPrice + output_tokens*outputPrice) / 1e6`
+rounded to 6 decimals and surfaces it as `usage.costUsd` in non-streaming
+responses and the final streaming usage chunk, as `cost_usd` in the run
+record outcome, and as the `agentbase_cost_usd_total{model}` counter on
+the Prometheus `/metrics` endpoint (scraped from the same listener, per
+the Observability section above). The `model` label is the config-bound
+`llm.model`, so label cardinality is operator-controlled and stays
+low-cardinality (OBS-05). When `costs.enabled` is false no cost is
+computed and no cost field appears anywhere — the usage object stays
+byte-identical to the OpenAI shape (zero surface change).
+
+`GET /health` reports `capabilities.costs: true` when the build includes
+the cost accounting code and its acceptance suite (always after P5-4).
 
 ## Known limitations (operator documentation required)
 
@@ -252,3 +291,7 @@ storage (SES-01); use redis/postgres storage for multi-replica.
   that may cause a new side effect (ENG-09).
 - With `auth.mode: none`, client-chosen sessions are mutually accessible
   (SES-03).
+- Cost accounting prices every run against the root `llm.model`; in a
+  multi-agent run (MA-02), sub-agents that override `llm.model` are not
+  priced per sub-agent model.  Deferred until P2 cost tests are added
+  (tracked in TODO.md).

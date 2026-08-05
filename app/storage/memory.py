@@ -270,7 +270,7 @@ class MemoryBackend(StorageBackend):
         status: str | None = None,
         iteration_count: int | None = None,
         outcome: dict[str, Any] | None = None,
-        usage: dict[str, int] | None = None,
+        usage: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> RunRecord | None:
         now = now or utcnow()

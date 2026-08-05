@@ -646,7 +646,7 @@ class TestMockModelHook:
             )
             assert run is not None and run.terminal
         finally:
-            components["mcp"].close()
+            await components["mcp"].close()
 
         monkeypatch.delenv("AGENT_MOCK_MODEL")
         config2 = _rag_config(enabled=False)
@@ -654,7 +654,7 @@ class TestMockModelHook:
         try:
             assert isinstance(components2["runner"], AgentRunner)
         finally:
-            components2["mcp"].close()
+            await components2["mcp"].close()
 
 
 class TestAuditAndReloadCleanup:

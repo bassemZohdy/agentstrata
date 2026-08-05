@@ -1,6 +1,10 @@
 # Changelog
 
-Phase 1 (core runtime) is implemented and passing its host-based test suite (336 tests). This file records what landed, milestone by milestone, against [REQUIREMENTS.md](REQUIREMENTS.md). The §18 ACC-01 acceptance and NFR-08 zero-downtime reload checks now pass inside the shipped image; the only remaining M8 exit check is NFR-00. See [TODO.md](TODO.md) for the few remaining items.
+This file records what landed, milestone by milestone, against
+[REQUIREMENTS.md](REQUIREMENTS.md). P1–P5 are implemented and passing the
+host-based test suite; the image-based release gates (NFR-00 benchmark,
+§18 ACC-01 acceptance, multi-arch acceptance) are run at release time per
+docs/release.md.
 
 ## [Unreleased]
 
@@ -20,10 +24,58 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   the project); API-14 amended; COST-01/02 added; OBS-05 metric list
   extended; traceability + schemas regenerated; deployment.md costs
   section; PLAN.md P5-4.
-- TODO.md: every `[ ]` item is now resolved — no open items remain
-  anywhere in the backlog.
 
+### P5-4 finish line (2026-08-06) — consistency, tests, docs, hygiene
 
+The 2026-08-05 deep review found the P5-4 surface inconsistent with its
+spec and the surrounding code; the finish line closed every gap in
+TODO.md:
+
+- **Usage shape consistency (API-07/08, COST-01):** `_normalize_usage()`
+  in `app/protocol/routes/chat.py` maps the internal
+  `input_tokens`/`output_tokens`/`cost_usd` record to the
+  OpenAI-compatible `prompt_tokens`/`completion_tokens`/`total_tokens`
+  (+ `costUsd` when computed) and is shared by non-streaming responses
+  and the final SSE usage chunk; the committed run usage now carries
+  `cost_usd` (session usage stays token-only for the ENG-08 budget).
+- **API-14:** the SSE usage chunk is emitted only when the client sends
+  `stream_options: {"include_usage": true}` (usage is still persisted
+  when not sent).
+- **Type hints:** `Done.usage`, `_non_streaming_body.usage`,
+  `_stream.usage`, `RunRecord.usage`, and the `update_run` usage
+  parameter (contract + all backends) are `dict[str, Any]` so a float
+  `cost_usd` is honest; `SessionRecord.usage` stays `dict[str, int]`.
+- **Reload (REL-02):** `costs` is classified `component_rebuild` (the
+  runner holds an immutable `AppliedConfig`); mock runner stores the
+  internal usage shape (NFR-00/02).
+- **Tests (COST-02):** streaming costUsd chunk (enabled/disabled),
+  nonzero-token cost calculation through a real run (TokenLlm reports
+  1000/2000 tokens → `costUsd == 0.011`), model-lookup fallback/empty
+  list, disabled-cost metric absence, failed-run records no cost metric
+  (OBS-05), negative-price validation extended to per-model entries,
+  and the NFR-06 openai-SDK `costUsd` extra-field compatibility test.
+- **Docs:** REQUIREMENTS.md COST-01/02 verified against implementation
+  (typo fixed), traceability COST rows extended, deployment.md cost
+  section rewritten (price table, matching rules, scraping, disabled
+  default, label cardinality, `/health` reporting) + operator paragraph
+  restored + `## Human-in-the-loop` and `## Phase 5 extensions` headings
+  - cost counter in Observability + multi-agent pricing limitation;
+  README.md status/phase table/What's in the image/Deploy it; PLAN.md
+  P5 milestone order; release.md P5 evidence section + checklist;
+  `/health` reports `capabilities.costs: true` (not phase-gated).
+- **Hygiene:** unawaited coroutine fixed in test_rag.py; line endings
+  normalized (`.gitattributes` LF, `git add --renormalize`, 0 CRLF
+  warnings); `mypy tests` enabled (42 files clean) + CI step;
+  `_FakeRequest` pyright errors fixed via a `_StreamRequest` Protocol;
+  google.adk MCPTool deprecation confirmed to be upstream (2.6.1/2.6.2)
+  — our code already uses `McpToolset`; deferral documented.
+- Host suite: **525 passed**; ruff + mypy (app, scripts, tests) clean;
+  schemas zero-diff; manifest sync OK.
+
+Open deferrals (documented, not release-blocking): google.adk upstream
+MCPTool replacement; multi-agent per-sub-agent cost pricing (until P2
+cost tests); stdio pre-parse byte cap; ACC-01 real-instance storage
+proofs; NFR-00 image-based release gates.
 
 ### P5-3: Kubernetes CRD / operator (K8S-11/12) — DONE
 
@@ -51,11 +103,11 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ### TODO.md cleanup (final)
 
-- Every `[ ]` item in TODO.md is now resolved: the three deferred-scope
-  items shipped in P5-1/P5-2/P5-3; the only remaining deferral is
-  per-request cost-in-dollars accounting (REQUIREMENTS §1.4).
-
-
+- Every `[ ]` item in TODO.md is now resolved.  The 2026-08-05 review
+  had reopened the backlog for the P5-4 consistency/test/docs gaps; the
+  2026-08-06 finish line closed all of them (see the P5-4 finish line
+  entry above).  The only remaining deferrals are documented in
+  TODO.md's Deferred scope section.
 
 ### P5-2: WebSocket API (WS-01) — DONE
 
@@ -83,8 +135,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   default) — verified against a REAL uvicorn server + websockets client
   as well as the TestClient suite.
 
-
-
 ### P5-1: Prometheus /metrics endpoint (OBS-05) — DONE
 
 - User decision 2026-08-05: implement all three deferred-scope items;
@@ -107,8 +157,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 - Tests: registry unit tests + end-to-end route tests
   (tests/test_protocol/test_metrics.py, 8 tests) + config validation.
 
-
-
 ### TODO.md cleanup round 3 (2026-08-05)
 
 - The completed-task records in TODO.md were removed (they have been in
@@ -118,8 +166,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   (for the record) and the three deferred-scope items (WebSocket API,
   Kubernetes CRD, Prometheus /metrics — each with its recorded "don't
   reopen speculatively" justification).
-
-
 
 ### Product name decision RESOLVED (2026-08-05)
 
@@ -131,8 +177,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   stays on record in TODO.md — if the project ever turns commercial, the
   registry-clear fallback is `agent-strata` (free on PyPI, npm, Docker
   Hub, and GitHub).
-
-
 
 ### Product-name clearance research (recorded 2026-08-05)
 
@@ -150,8 +194,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   public release is strongly advised (the repo is already `agentstrata` and
   `agent-strata` is clear on PyPI). The keep-vs-rename DECISION itself
   remains a human call.
-
-
 
 ### Deferred-review items completed (TODO.md -> CHANGELOG.md, round 2)
 
@@ -187,8 +229,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   now DONE records; TODO.md's only remaining `[ ]` items are the
   product-name human decision and the explicitly-deferred scope
   (WebSocket / CRD / metrics).
-
-
 
 ### Review-item cleanup (TODO.md -> CHANGELOG.md)
 
@@ -251,8 +291,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   name human decision, and the explicitly-deferred scope (WebSocket/CRD/
   metrics).
 
-
-
 ### P4 — RAG / long-term memory (RAG-01..06, §15, complete)
 
 - **RAG-01/02 (complete):** `rag` field contract with all constraints;
@@ -283,8 +321,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   IDs); **450/450 acceptance inside the image on linux/amd64 AND
   linux/arm64** (`docs/acceptance-{amd64,arm64}.{log,json}`, staleness pass).
 
-
-
 ### P3 — human-in-the-loop approvals (HITL-01..05, §14, complete)
 
 - **HITL-05 (complete):** the restart/config-change reconciler — startup
@@ -297,7 +333,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 - **Capability flip (CAP-02):** phase `P3`, `approval` true in `/health`;
   P1 fail-closed tests re-baselined; traceability regenerated (164 IDs);
   **417/417 acceptance inside the image on linux/amd64 AND linux/arm64**.
-
 
 - **HITL-01/02 (complete):** `ApprovalConfig` (enabled/tools/timeoutSeconds/
   onTimeout deny|allow) with fail-closed cross-field rules (approval requires
@@ -320,8 +355,6 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
   conflict → 409, expired → 410), `GET /v1/approvals?session_id=`
   (pending-only, public metadata), `GET/DELETE /v1/runs/{id}` (owner-scoped
   state + idempotent cancellation that cancels the pending approval).
-
-
 
 Phase 1 milestones 0–8 are complete; the §18 ACC-01 acceptance run now passes
 inside the shipped image on both architectures (336/336 each) and the NFR-08

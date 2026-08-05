@@ -87,6 +87,10 @@ def classify_change(changed_paths: list[str]) -> str:
         "agents",
         "approval",
         "rag",
+        # REL-02: the runner holds an immutable AppliedConfig built at
+        # component-build time, so a live cost-table change would not affect
+        # new runs until an unrelated rebuild — classify it as a rebuild.
+        "costs",
     }
     if any(p.startswith(t) for t in rebuild for p in changed_paths):
         return "component_rebuild"

@@ -46,7 +46,7 @@ def make_config(server: dict | None = None, observability: dict | None = None) -
     return AgentConfig.model_validate(doc)
 
 
-def build_components(config: AgentConfig, observability: Any = None) -> dict:
+def build_components(config: AgentConfig, observability: Any = None, model: Any = None) -> dict:
     backend = MemoryBackend()
     applied = AppliedConfig.from_config(config)
     metrics = None
@@ -54,7 +54,7 @@ def build_components(config: AgentConfig, observability: Any = None) -> dict:
         from app.observability.metrics import MetricBundle
 
         metrics = MetricBundle(observability)
-    model = EchoLlm()
+    model = model if model is not None else EchoLlm()
     agent = LlmAgent(name=config.name, instruction=config.engine.systemInstruction, model=model)
     service = AdkSessionService(backend)
     adk_runner = AdkRunner(agent=agent, app_name=APP_NAME, session_service=service)

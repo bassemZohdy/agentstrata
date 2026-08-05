@@ -47,13 +47,29 @@ dependency-lock hash, and test results that verified it.
 | Supply chain | `docs/supplychain/` — CycloneDX + SPDX SBOMs, trivy scan (23 OS HIGH/CRIT with no fix yet — release-blocking per CNT-12 until Debian ships; 0 fixable python findings), buildx SLSA v1 provenance, keyless-signing workflow, canary scan passed |
 | Compose smoke | PASS (runtime healthy, MCP sample connected, redis/postgres healthy, auth 401/200) |
 
+## Recorded evidence — P5 acceptance (P5-1 … P5-4)
+
+P5 shipped in four milestones; P5-1/P5-2/P5-3 acceptance passed before
+P5-4 (cost accounting) started:
+
+| Field | Value |
+| --- | --- |
+| P5-1 Prometheus `/metrics` (OBS-05) | `be03e89` — metrics + `/metrics` endpoint shipped |
+| P5-2 WebSocket API (WS-01) | `1bf4f26` — `/v1/ws` shipped |
+| P5-3 Kubernetes CRD / operator (K8S-11/12) | `f11ae43` — CRD + operator shipped, phase flipped to P5 |
+| P5-4 cost accounting (COST-01/02) | `d90bc26` + P5-4 finish-line commit (recorded at release) |
+| Host suite | **527 passed** (2026-08-06 finish line), ruff + mypy clean (app, scripts, and tests), schemas zero-diff |
+| Capabilities | phase `P5`; `multiAgent`/`acp`/`approval`/`rag`/`costs` all true (CAP-02, COST-01) |
+
 ## Release checklist
 
 1. `git rev-parse HEAD` — record the commit.
 2. `sha256sum requirements.lock requirements-dev.lock schemas/*.json` — record hashes.
 3. `uv pip install --python .venv -r requirements-dev.lock --require-hashes` then
-   `pytest tests/ -q` — all green.
-4. `.venv/bin/python scripts/gen-schemas.py && git diff --exit-code -- schemas/` — zero diff.
+   `pytest tests/ -q` — all green (the COST-01/02 suite is
+   `tests/test_protocol/test_cost.py` + `tests/test_config/test_validation.py`).
+4. `.venv/bin/python scripts/gen-schemas.py && git diff --exit-code -- schemas/` — zero diff
+   (re-run after any config-model change, e.g. the `costs` models).
 5. `.venv/bin/python scripts/gen-traceability.py` — all requirement IDs mapped.
 6. `.venv/bin/python scripts/benchmark.py` — record `docs/nfr-report.json`.
 7. Build: `docker build -t agentbase:<commit-short> .` — record the digest.

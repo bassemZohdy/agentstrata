@@ -236,13 +236,13 @@ class AgentRunner:
                     await self._commit_failure(
                         request, sid, run_id, state.state, transfers=transfers
                     )
-                done_usage: dict[str, int] = {
+                done_usage: dict[str, Any] = {
                     "input_tokens": limiter.account.input_tokens,
                     "output_tokens": limiter.account.output_tokens,
                 }
                 done_cost = self._cost_usd(done_usage)
                 if done_cost is not None:
-                    done_usage["cost_usd"] = done_cost  # type: ignore[assignment]
+                    done_usage["cost_usd"] = done_cost
                 yield Done(
                     finish_reason=finish,
                     x_agent_status=status,
@@ -280,7 +280,7 @@ class AgentRunner:
 
     # -- admission (ENG-03 order; auth/rate-limit stubbed until M5) -----------------
 
-    def _cost_usd(self, usage: dict[str, int]) -> float | None:
+    def _cost_usd(self, usage: dict[str, Any]) -> float | None:
         """COST-01: per-request cost in USD from the token counts.
 
         Returns None when costs are disabled (the caller then omits the
@@ -826,7 +826,7 @@ class AgentRunner:
         session_id: str,
         run_id: str,
         text_parts: list[str],
-        usage: dict[str, int],
+        usage: dict[str, Any],
         transfers: list[dict[str, str]],
     ) -> None:
         """ENG-06: one revision-checked transaction commits pruning + the
@@ -844,9 +844,13 @@ class AgentRunner:
             usage=usage,
             now=utcnow(),
         )
-        # COST-01: the per-request cost rides in the committed usage and
-        # the run outcome (when costs.enabled; otherwise absent).
+        # COST-01: the per-request cost rides in the committed run usage and
+        # the run outcome (when costs.enabled; otherwise absent). Session
+        # usage stays token-only (it feeds the ENG-08 budget accumulator).
         cost_usd = self._cost_usd(usage)
+        run_usage = usage
+        if cost_usd is not None:
+            run_usage = {**usage, "cost_usd": cost_usd}
         outcome: dict[str, Any] = {"text": "".join(text_parts), "transfers": transfers}
         if cost_usd is not None:
             outcome["cost_usd"] = cost_usd
@@ -857,7 +861,7 @@ class AgentRunner:
             run_id=run_id,
             status="succeeded",
             outcome=outcome,
-            usage=usage,
+            usage=run_usage,
             now=utcnow(),
         )
         if self._metrics is not None:

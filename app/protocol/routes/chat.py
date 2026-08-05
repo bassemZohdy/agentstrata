@@ -14,7 +14,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -37,6 +37,7 @@ _ALLOWED_FIELDS = {
     "model",
     "messages",
     "stream",
+    "stream_options",
     "temperature",
     "max_tokens",
     "max_completion_tokens",
@@ -98,6 +99,12 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
         runner = components["runner"]
 
         streaming = bool(body.get("stream", False))
+        # API-14: the final SSE usage chunk is emitted only when the client
+        # opts in via stream_options.include_usage (OpenAI contract).
+        stream_options = body.get("stream_options")
+        include_usage = bool(
+            isinstance(stream_options, dict) and stream_options.get("include_usage", False)
+        )
         principal = getattr(request.state, "principal", "anonymous")
         # HITL-01: while approval is enabled every chat request MUST be
         # stateful; reject a stateless request BEFORE any model work.
@@ -193,6 +200,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                     principal,
                     agent_name,
                     slots,
+                    include_usage=include_usage,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -323,13 +331,32 @@ def _cost_usage_fields(usage: dict[str, Any]) -> dict[str, Any]:
     return {"costUsd": usage["cost_usd"]}
 
 
+def _normalize_usage(usage: dict[str, Any]) -> dict[str, Any]:
+    """API-07/08 + COST-01: OpenAI-compatible usage shape.
+
+    Maps the internal ``input_tokens``/``output_tokens``/``cost_usd``
+    record to ``prompt_tokens``/``completion_tokens``/``total_tokens``
+    plus ``costUsd`` (only when costs.enabled computed a cost). Streaming
+    and non-streaming share this shape so the two modes stay consistent.
+    """
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+    normalized: dict[str, Any] = {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+    normalized.update(_cost_usage_fields(usage))
+    return normalized
+
+
 def _non_streaming_body(
     *,
     text: str,
     model: str,
     finish_reason: str,
     x_agent_status: str | None,
-    usage: dict[str, int],
+    usage: dict[str, Any],
     request_id: str,
 ) -> dict[str, Any]:
     return {
@@ -345,12 +372,7 @@ def _non_streaming_body(
                 "x_agent_status": x_agent_status,
             }
         ],
-        "usage": {
-            "prompt_tokens": usage.get("input_tokens", 0),
-            "completion_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-            **_cost_usage_fields(usage),
-        },
+        "usage": _normalize_usage(usage),
         "request_id": request_id,
     }
 
@@ -375,10 +397,20 @@ def _non_streaming_from_replay(replay, request_id: str) -> dict[str, Any]:
     }
 
 
+class _StreamRequest(Protocol):
+    """The minimal request surface ``_stream`` consumes.
+
+    FastAPI's ``Request`` satisfies it structurally; tests pass a small
+    stand-in exposing only ``is_disconnected``.
+    """
+
+    async def is_disconnected(self) -> bool: ...
+
+
 async def _stream(
     runner,
     run_request: RunRequest,
-    request: Request,
+    request: _StreamRequest,
     request_id: str,
     config: Any,
     idem_key: str | None,
@@ -386,6 +418,7 @@ async def _stream(
     principal: str,
     agent_name: str,
     slots: Any = None,
+    include_usage: bool = False,
 ) -> AsyncIterator[str]:
     """API-08 + API-08a: SSE delta -> text/extension chunks -> finish -> [DONE].
 
@@ -434,7 +467,7 @@ async def _stream(
     assistant_text: list[str] = []
     finish_reason = "stop"
     x_status: str | None = None
-    usage: dict[str, int] = {}
+    usage: dict[str, Any] = {}
     mid_stream_cancel: str | None = None
     try:
         while True:
@@ -633,8 +666,11 @@ async def _stream(
             "choices": [final_choice],
         }
     )
+    # API-14: the final usage chunk is emitted only when the client sent
+    # stream_options: {"include_usage": true}; usage is still persisted
+    # even when not sent (the idempotency body below always carries it).
     # A disconnected stream may not receive its usage chunk (API-08a).
-    if usage and not mid_stream_cancel:
+    if include_usage and usage and not mid_stream_cancel:
         yield _sse_data(
             {
                 "id": request_id,
@@ -642,7 +678,7 @@ async def _stream(
                 "created": _now(),
                 "model": config.llm.model,
                 "choices": [],
-                "usage": usage,
+                "usage": _normalize_usage(usage),
             }
         )
     yield "data: [DONE]\n\n"

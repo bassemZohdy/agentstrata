@@ -63,7 +63,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | CNT-11 | Dockerfile USER 10001:0 + read-only rootfs notes; docs/deployment.md |
 | CNT-12 | TODO.md Decisions made (severity policy); TODO M8 scan gate |
 | CNT-13 | .dockerignore; Dockerfile secrets hygiene |
-| COST-01 | app/engine/runner.py (_cost_usd) + config/models.py::Costs; tests/test_protocol/test_cost.py |
+| COST-01 | app/engine/runner.py (_cost_usd) + config/models.py::Costs + observability/metrics.py (agentbase_cost_usd_total) + config/capabilities.py (health `costs`); tests/test_protocol/test_cost.py |
 | COST-02 | tests/test_protocol/test_cost.py + tests/test_config/test_validation.py |
 | DEL-01 | app/ layout; docs/deployment.md; Dockerfile |
 | DEL-02 | scripts/gen-schemas.py; schemas/; CI zero-diff |
@@ -85,6 +85,16 @@ verified by the Milestone 8 acceptance/chaos run.
 | HITL-04 | app/engine/runner.py::resume_approval; tests/test_engine/test_approval_gate.py |
 | HITL-05 | app/engine/runner.py::reconcile_pending; tests/test_engine/test_approval_gate.py |
 | HITL-06 | tests/test_engine/test_approval_gate.py + tests/test_protocol/test_approval_api.py |
+| K8S-01 | app/watcher/watcher.py |
+| K8S-02 | app/watcher/watcher.py (watch loop) |
+| K8S-03 | app/watcher/reload.py::_resolve_with_overlay; schemas/agent-overlay.schema.json |
+| K8S-04 | app/watcher/reload.py::apply_tier8 |
+| K8S-05 | app/watcher/watcher.py (_throttled) |
+| K8S-07 | app/watcher/watcher.py (per-replica) |
+| K8S-08 | manifests/rbac.yaml, deployment.yaml |
+| K8S-09 | app/watcher/watcher.py::_extract_overlay |
+| K8S-11 | k8s_operator/reconcile.py + kube.py + loop.py; tests/test_operator/test_operator.py |
+| K8S-12 | tests/test_operator/test_operator.py |
 | LLM-01 | app/engine/connectors.py::build_llm |
 | LLM-02 | app/engine/connectors.py (CredentialHealth/SecretResolver) |
 | LLM-03 | app/engine/connectors.py::RetryableLlm |

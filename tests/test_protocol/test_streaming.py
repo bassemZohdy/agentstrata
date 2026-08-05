@@ -66,7 +66,18 @@ class TestNormalStreaming:
             [TextDelta(text="hello"), Done(usage={"input_tokens": 3, "output_tokens": 4})]
         )
         body = await _drain(
-            _stream(runner, _request(), _FakeRequest(), "rid", config, None, {}, "anon", "agent")
+            _stream(
+                runner,
+                _request(),
+                _FakeRequest(),
+                "rid",
+                config,
+                None,
+                {},
+                "anon",
+                "agent",
+                include_usage=True,
+            )
         )
         assert "hello" in body
         assert "chat.completion.chunk" in body
@@ -74,6 +85,21 @@ class TestNormalStreaming:
         assert "data: [DONE]\n\n" in body
         # no cancellation on a clean run
         assert "x_agent_event" not in body
+
+    async def test_omits_usage_chunk_without_include_usage(self):
+        # API-14: the final usage chunk appears only when the client sends
+        # stream_options: {"include_usage": true}; usage is still persisted
+        # server-side (the idempotency body always carries it).
+        config = make_config()
+        runner = _runner(
+            [TextDelta(text="hello"), Done(usage={"input_tokens": 3, "output_tokens": 4})]
+        )
+        body = await _drain(
+            _stream(runner, _request(), _FakeRequest(), "rid", config, None, {}, "anon", "agent")
+        )
+        assert "hello" in body
+        assert '"usage"' not in body
+        assert "data: [DONE]\n\n" in body
 
     async def test_run_error_emits_error_chunk(self):
         config = make_config()

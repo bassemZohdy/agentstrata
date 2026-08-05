@@ -65,6 +65,10 @@ class TestClassification:
         assert classify_change(["rag.embedding.model"]) == "component_rebuild"
         assert classify_change(["rag.chunkChars"]) == "component_rebuild"
         assert classify_change(["rag.topK"]) == "component_rebuild"
+        # REL-02: the cost table is baked into the immutable AppliedConfig,
+        # so a costs change must rebuild components.
+        assert classify_change(["costs.enabled"]) == "component_rebuild"
+        assert classify_change(["costs.models"]) == "component_rebuild"
 
     def test_restart_required_wins(self):
         assert classify_change(["llm.model", "server.port"]) == "restart_required"
@@ -479,6 +483,7 @@ class TestReloadWithInFlightRunsMA05:
         # release: the in-flight run completes against the OLD generation
         # (the rebuild swapped components["agent"]; the held model reference
         # belongs to the retired generation's agent)
+        assert held_model.gate is not None
         held_model.gate.set()
         events = await in_flight
         from app.engine.events import Done

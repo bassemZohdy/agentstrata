@@ -72,6 +72,6 @@ class MockAgentRunner:
             run_id=run_id,
             status="succeeded",
             outcome={"text": "ok"},
-            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            usage={"input_tokens": 0, "output_tokens": 0},
             now=utcnow(),
         )
