@@ -299,7 +299,7 @@ class TestCapability:
             "rag": True,
         }
         status = capability_status()
-        assert status["phase"] == "P4"
+        assert status["phase"] == "P5"
         assert status["multiAgent"] is True
         assert status["acp"] is True
         assert status["approval"] is True

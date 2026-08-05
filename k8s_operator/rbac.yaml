@@ -1,0 +1,38 @@
+# Least-privilege RBAC for the AgentConfig operator (K8S-01).
+# Apply with: kubectl apply -f k8s_operator/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentstrata-operator
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentstrata-operator
+rules:
+  - apiGroups: ["agentstrata.io"]
+    resources: ["agentconfigs"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["agentstrata.io"]
+    resources: ["agentconfigs/status"]
+    verbs: ["patch", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps", "services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentstrata-operator
+subjects:
+  - kind: ServiceAccount
+    name: agentstrata-operator
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: agentstrata-operator
+  apiGroup: rbac.authorization.k8s.io

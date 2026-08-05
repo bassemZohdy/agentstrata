@@ -116,7 +116,6 @@ Specifically, a P1 build MUST reject non-empty `agents`, `server.protocols.acp: 
 - A graphical UI of any kind.
 - Fine-tuning, training, or model hosting.
 - Acting as an MCP *server* (the runtime is an MCP *client* only).
-- A Kubernetes Custom Resource / operator. Config reload watches a plain ConfigMap; a CRD adds an API-group/RBAC/status-subresource surface for the same job and is deferred.
 - Prometheus `/metrics` endpoint and per-request cost-in-dollars accounting
   (deferred; token counts are reported per API-14).
 - Zed's Agent Client Protocol (stdio JSON-RPC) and Google A2A. “ACP” in this document means only the phase-2 REST **Agent Communication Protocol** surface in API-16.
@@ -859,6 +858,38 @@ emits an `auth_failure` audit event. One active run per connection:
 auth (reject + `?token=` accept), a full run round trip (start → delta →
 done), ping/pong, cancel semantics, oversize-message close, sequential
 runs on one connection, and unknown-approval errors.
+
+## 15b. Kubernetes CRD / operator (Phase 5)
+
+**K8S-11 (operator)** — A CRD `agentconfigs.agentstrata.io` (group
+`agentstrata.io`, v1, Namespaced, status subresource) whose `spec` IS the
+Agent Definition document (the CRD validation schema is generated from the
+same model as `schemas/agent.schema.json` — `scripts/gen-schemas.py`
+regenerates `k8s_operator/crd/`). The `k8s_operator` package reconciles
+each AgentConfig into:
+- a ConfigMap `agentstrata-<cr>` holding the tier-8 overlay in key
+  `agent.yaml` (the runtime's ConfigMap watcher consumes it via
+  `AGENT_K8S_NAME`),
+- a Deployment `agentstrata-<cr>` (image from the required
+  `agentstrata.io/image` annotation; non-root, read-only rootfs, drop ALL,
+  /healthz + /readyz probes, 35 s termination grace; single replica —
+  multi-replica requires redis/postgres storage per SES-01),
+- a Service `agentstrata-<cr>` (ClusterIP :8080),
+- status: `observedGeneration`, a Ready condition, and the applied
+  ConfigMap + resourceVersion.
+All managed objects carry `app.kubernetes.io/managed-by:
+agentstrata-operator` labels and an ownerReference to the CR (cluster GC
+cleans up on delete). The operator runs in-cluster with
+`k8s_operator/rbac.yaml` (least privilege), lists on start, then streams
+watch events with a resync timeout; invalid specs and missing image
+annotations fail closed with a Ready=False condition. The operator itself
+is excluded from the runtime image and the NFR gates.
+
+**K8S-12 (acceptance)** — P5 operator capability requires tests covering
+create/update reconcile (ConfigMap overlay content, Deployment env/owner
+refs, Service), fail-closed status (invalid spec, missing image),
+observedGeneration tracking, the reconcile-all loop, and manifest
+validity (CRD + RBAC parse).
 
 ## 16. Container and runtime packaging
 

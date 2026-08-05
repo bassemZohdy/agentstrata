@@ -201,6 +201,8 @@ MAPPINGS: dict[str, str] = {
     "OBS-06": "tests/test_observability/test_obs.py (zero-cost subprocess)",
     "WS-01": "app/protocol/routes/websocket.py; tests/test_protocol/test_websocket.py",
     "WS-02": "tests/test_protocol/test_websocket.py",
+    "K8S-11": "k8s_operator/reconcile.py + kube.py + loop.py; tests/test_operator/test_operator.py",
+    "K8S-12": "tests/test_operator/test_operator.py",
 }
 
 

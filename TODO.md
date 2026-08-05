@@ -1,12 +1,13 @@
 # Backlog — remaining work
 
-All four phases (P1 core runtime, P2 multi-agent/ACP, P3 approvals, P4 RAG)
-are implemented and accepted; the completed work — including every review
-item (redis `KEYS` elimination, atomic admission, live-reload caps, the real
-Redis 7 + Postgres 16 matrix, shutdown audit, unknown-event warning, product-
-name clearance research + decision) — is recorded in
-[CHANGELOG.md](CHANGELOG.md). This file tracks only what is **not yet done**:
-resolved decisions (for the record) and explicitly deferred scope.
+All phases (P1 core runtime, P2 multi-agent/ACP, P3 approvals, P4 RAG,
+P5 extensions — Prometheus /metrics, WebSocket API, Kubernetes CRD/
+operator) are implemented and accepted; every completed item — including
+the review round (redis `KEYS` elimination, atomic admission, live-reload
+caps, the real Redis 7 + Postgres 16 matrix, shutdown audit, unknown-event
+warning, product-name clearance) — is recorded in [CHANGELOG.md](CHANGELOG.md).
+This file tracks only resolved decisions (for the record) and the single
+remaining deferral (per-request cost-in-dollars accounting).
 
 Requirement IDs in parentheses trace each task back to
 [REQUIREMENTS.md](REQUIREMENTS.md); the build order is
@@ -70,22 +71,25 @@ key facts on record there:
       through the substitutes. Revisit when a real multi-replica deployment
       needs proof.
 
-## Deferred scope — revisit only if a concrete need shows up
+## Deferred scope — RESOLVED (P5, 2026-08-05)
 
-Cut in the v2.2 scope pass. Don't reopen speculatively; reopen when an actual
-caller or deployment needs one.
+All three items cut in the v2.2 scope pass (WebSocket API, Kubernetes
+CRD/operator, Prometheus /metrics) were implemented by user decision on
+2026-08-05 (P5-1/P5-2/P5-3) — see CHANGELOG.md. The only remaining
+deferral is per-request cost-in-dollars accounting (REQUIREMENTS §1.4;
+token counts are reported per API-14).
 
-- [ ] **WebSocket API.** IN PROGRESS (P5, user decision 2026-08-05): the
-      `/v1/ws` surface ships in P5-2 (WS-01: auth, one active run per
-      connection, run.start/cancel + approval.decide + ping, SSE-vocabulary
-      push; WS-02 acceptance tests).
-- [ ] **Kubernetes CRD / operator.** Revisit once the product name/API-group
-      is settled (DONE 2026-08-05 — the name stays as-is) and there's a real
-      need for `kubectl get agentconfigs`, CRD-native status, or
-      admission-webhook validation.
-- [ ] **Prometheus `/metrics` endpoint and per-request dollar-cost accounting.**
-      IN PROGRESS (P5, user decision 2026-08-05): the endpoint ships in
-      P5-1 (OBS-05 rewritten; `observability.prometheus.{enabled,path}`;
-      in-process registry + route + runner/route/reload recording). The
-      per-request cost-in-dollars accounting half stays deferred (token
-      counts are reported per API-14).
+- [x] **WebSocket API — DONE (P5-2, WS-01/02):** `/v1/ws` with the same
+      auth as REST, one active run per connection, run.start/cancel +
+      approval.decide + ping/pong, SSE-vocabulary push; 9 tests. Recorded
+      in CHANGELOG.md.
+- [x] **Kubernetes CRD / operator — DONE (P5-3, K8S-11/12):** the
+      `agentconfigs.agentstrata.io` CRD (schema generated from the config
+      model) + the `k8s_operator` reconciler (ConfigMap/Deployment/Service/
+      status, fail-closed on invalid spec or missing image annotation);
+      10 tests. Recorded in CHANGELOG.md.
+- [x] **Prometheus `/metrics` endpoint — DONE (P5-1, OBS-05):**
+      `observability.prometheus.{enabled,path}` + in-process registry +
+      route + runner/route/reload recording; 8 tests. The per-request
+      cost-in-dollars accounting half remains deferred (token counts are
+      reported per API-14). Recorded in CHANGELOG.md.

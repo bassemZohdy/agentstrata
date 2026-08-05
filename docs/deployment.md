@@ -210,6 +210,28 @@ the REST API). Messages are JSON and bounded by `server.maxMessageBytes`.
 Behind a reverse proxy, enable WebSocket upgrade passthrough (HTTP/1.1
 Upgrade) for `/v1/ws`.
 
+### Kubernetes CRD / operator (K8S-01)
+
+The optional operator turns AgentConfig custom resources into running
+runtimes:
+
+    kubectl apply -f k8s_operator/crd/agentconfigs.agentstrata.io.yaml
+    kubectl apply -f k8s_operator/rbac.yaml
+    kubectl run agentstrata-operator --image <operator-image> -- python -m k8s_operator.main --namespace default
+
+Each `AgentConfig` (spec = the Agent Definition document; the CRD schema
+is regenerated from the config model by `scripts/gen-schemas.py`) is
+reconciled into a ConfigMap `agentstrata-<cr>` (tier-8 overlay in
+`agent.yaml`), a Deployment (image from the required
+`agentstrata.io/image` annotation; non-root, read-only rootfs, probes,
+35 s termination grace), and a Service. The Deployment runs the runtime
+in watcher mode (`AGENT_K8S_ENABLED=true`, `AGENT_K8S_NAME` set), so live
+reloads flow CR → ConfigMap → runtime. Status reports observedGeneration
++ a Ready condition; invalid specs and missing image annotations fail
+closed with Ready=False. Deletion is handled by Kubernetes GC via
+ownerReferences. Single-replica Deployments are required for memory/file
+storage (SES-01); use redis/postgres storage for multi-replica.
+
 ## Known limitations (operator documentation required)
 
 - `maxTransportMessageBytes` is enforced on HTTP/SSE MCP transports; the

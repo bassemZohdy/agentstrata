@@ -4,6 +4,38 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### P5-3: Kubernetes CRD / operator (K8S-11/12) — DONE
+
+- `scripts/gen-schemas.py` now also emits the CRD
+  `k8s_operator/crd/agentconfigs.agentstrata.io.yaml` — group
+  `agentstrata.io`, v1, Namespaced, status subresource, validation schema
+  generated from the SAME pydantic model as schemas/agent.schema.json
+  (a config-schema change fails the gen-schemas zero-diff gate).
+- New `k8s_operator` package (named to avoid shadowing the stdlib
+  `operator` module): `reconcile.py` (pure: ConfigMap with the tier-8
+  `agent.yaml` overlay, Deployment with the required
+  `agentstrata.io/image` annotation + non-root/read-only-rootfs/drop-ALL
+  security context + probes + 35 s termination grace + AGENT_K8S_* env,
+  ClusterIP Service, ownerReferences for GC cleanup, fail-closed
+  Ready=False status on invalid spec or missing image),
+  `kube.py` (in-cluster client + FakeKubeClient substitute),
+  `loop.py` (reconcile-all + streaming watch with resync fallback),
+  `main.py` (CLI), and `rbac.yaml` (least-privilege ClusterRole).
+- REQUIREMENTS: K8S-11/K8S-12 added, the §1.4 CRD deferral removed;
+  traceability regenerated; deployment.md operator section; phase
+  flipped P4 → P5 (capabilities.py + health/CLI tests).
+- Tests: 10 operator tests (create/update reconcile, fail-closed status,
+  observedGeneration, reconcile-all loop, manifest validity); 508 host
+  tests; ruff/mypy/manifest clean.
+
+### TODO.md cleanup (final)
+
+- Every `[ ]` item in TODO.md is now resolved: the three deferred-scope
+  items shipped in P5-1/P5-2/P5-3; the only remaining deferral is
+  per-request cost-in-dollars accounting (REQUIREMENTS §1.4).
+
+
+
 ### P5-2: WebSocket API (WS-01) — DONE
 
 - `server.protocols.websocket` (default false) enables `/v1/ws` — the

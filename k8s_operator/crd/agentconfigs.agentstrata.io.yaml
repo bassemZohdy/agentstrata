@@ -1,0 +1,952 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentconfigs.agentstrata.io
+  labels:
+    app.kubernetes.io/managed-by: agentstrata-operator
+spec:
+  group: agentstrata.io
+  scope: Namespaced
+  names:
+    plural: agentconfigs
+    singular: agentconfig
+    kind: AgentConfig
+    shortNames:
+    - agc
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: Ready
+      type: string
+      jsonPath: .status.conditions[?(@.type=="Ready")].status
+    - name: ConfigMap
+      type: string
+      jsonPath: .status.appliedConfigMap
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            $defs:
+              AgentDef:
+                additionalProperties: false
+                description: "MA-01: one root-owned sub-agent (P2). One flat level\
+                  \ \u2014 AgentDef has\nno agents field, so nested/cyclic definitions\
+                  \ are structurally impossible\n(extra=\"forbid\" rejects unknown\
+                  \ fields)."
+                properties:
+                  name:
+                    pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                    title: Name
+                    type: string
+                  systemInstruction:
+                    minLength: 1
+                    title: Systeminstruction
+                    type: string
+                  description:
+                    default: ''
+                    maxLength: 2000
+                    title: Description
+                    type: string
+                  llm:
+                    anyOf:
+                    - $ref: '#/$defs/Llm'
+                    - type: 'null'
+                    default: null
+                  toolServers:
+                    anyOf:
+                    - items:
+                        type: string
+                      type: array
+                    - type: 'null'
+                    default: null
+                    title: Toolservers
+                required:
+                - name
+                - systemInstruction
+                title: AgentDef
+                type: object
+              ApprovalConfig:
+                additionalProperties: false
+                description: 'HITL-01: human-in-the-loop tool approval (P3).'
+                properties:
+                  enabled:
+                    default: false
+                    title: Enabled
+                    type: boolean
+                  tools:
+                    items:
+                      type: string
+                    title: Tools
+                    type: array
+                  timeoutSeconds:
+                    default: 300
+                    maximum: 86400
+                    minimum: 1
+                    title: Timeoutseconds
+                    type: integer
+                  onTimeout:
+                    $ref: '#/$defs/ApprovalTimeout'
+                    default: deny
+                title: ApprovalConfig
+                type: object
+              ApprovalTimeout:
+                enum:
+                - deny
+                - allow
+                title: ApprovalTimeout
+                type: string
+              Auth:
+                additionalProperties: false
+                properties:
+                  mode:
+                    $ref: '#/$defs/AuthMode'
+                    default: none
+                  apiKeyEnv:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Apikeyenv
+                  apiKeyFile:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Apikeyfile
+                  jwt:
+                    $ref: '#/$defs/JwtAuth'
+                title: Auth
+                type: object
+              AuthMode:
+                enum:
+                - none
+                - apiKey
+                - jwt
+                title: AuthMode
+                type: string
+              Engine:
+                additionalProperties: false
+                properties:
+                  systemInstruction:
+                    minLength: 1
+                    title: Systeminstruction
+                    type: string
+                  temperature:
+                    default: 0.7
+                    maximum: 2.0
+                    minimum: 0.0
+                    title: Temperature
+                    type: number
+                  topP:
+                    default: 1.0
+                    exclusiveMinimum: 0.0
+                    maximum: 1.0
+                    title: Topp
+                    type: number
+                  maxTokens:
+                    default: 4096
+                    maximum: 1000000
+                    minimum: 1
+                    title: Maxtokens
+                    type: integer
+                  maxOutputBytes:
+                    default: 1048576
+                    maximum: 16777216
+                    minimum: 1
+                    title: Maxoutputbytes
+                    type: integer
+                  timeoutSeconds:
+                    default: 300
+                    maximum: 3600
+                    minimum: 1
+                    title: Timeoutseconds
+                    type: integer
+                  maxIterations:
+                    default: 10
+                    maximum: 1000
+                    minimum: 1
+                    title: Maxiterations
+                    type: integer
+                  historyMaxMessages:
+                    default: 200
+                    maximum: 10000
+                    minimum: 1
+                    title: Historymaxmessages
+                    type: integer
+                  historyMaxBytes:
+                    default: 4194304
+                    maximum: 67108864
+                    minimum: 1024
+                    title: Historymaxbytes
+                    type: integer
+                  streaming:
+                    $ref: '#/$defs/StreamingMode'
+                    default: text
+                  overrides:
+                    $ref: '#/$defs/EngineOverrides'
+                  tokenBudget:
+                    $ref: '#/$defs/TokenBudget'
+                required:
+                - systemInstruction
+                title: Engine
+                type: object
+              EngineOverrides:
+                additionalProperties: false
+                properties:
+                  allowTemperature:
+                    default: true
+                    title: Allowtemperature
+                    type: boolean
+                  allowMaxTokens:
+                    default: true
+                    title: Allowmaxtokens
+                    type: boolean
+                  temperatureMax:
+                    default: 2.0
+                    maximum: 2.0
+                    minimum: 0.0
+                    title: Temperaturemax
+                    type: number
+                  maxTokensMax:
+                    default: 8192
+                    maximum: 1000000
+                    minimum: 1
+                    title: Maxtokensmax
+                    type: integer
+                title: EngineOverrides
+                type: object
+              JwtAuth:
+                additionalProperties: false
+                properties:
+                  issuer:
+                    default: ''
+                    title: Issuer
+                    type: string
+                  audience:
+                    default: ''
+                    title: Audience
+                    type: string
+                  jwksUrl:
+                    default: ''
+                    title: Jwksurl
+                    type: string
+                  principalClaim:
+                    default: sub
+                    title: Principalclaim
+                    type: string
+                  refreshSeconds:
+                    default: 3600
+                    minimum: 60
+                    title: Refreshseconds
+                    type: integer
+                  timeoutSeconds:
+                    default: 5
+                    exclusiveMinimum: 0
+                    title: Timeoutseconds
+                    type: integer
+                title: JwtAuth
+                type: object
+              K8s:
+                additionalProperties: false
+                properties:
+                  enabled:
+                    default: false
+                    title: Enabled
+                    type: boolean
+                  required:
+                    default: false
+                    title: Required
+                    type: boolean
+                  namespace:
+                    default: default
+                    title: Namespace
+                    type: string
+                  name:
+                    default: ''
+                    title: Name
+                    type: string
+                  resyncSeconds:
+                    default: 300
+                    minimum: 30
+                    title: Resyncseconds
+                    type: integer
+                title: K8s
+                type: object
+              Llm:
+                additionalProperties: false
+                properties:
+                  provider:
+                    $ref: '#/$defs/Provider'
+                    default: gemini
+                  model:
+                    maxLength: 256
+                    minLength: 1
+                    title: Model
+                    type: string
+                  apiKeyEnv:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Apikeyenv
+                  apiKeyFile:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Apikeyfile
+                  baseUrl:
+                    default: ''
+                    title: Baseurl
+                    type: string
+                  contextWindowTokens:
+                    default: 0
+                    minimum: 0
+                    title: Contextwindowtokens
+                    type: integer
+                  vertex:
+                    $ref: '#/$defs/VertexConfig'
+                  extra:
+                    additionalProperties: true
+                    title: Extra
+                    type: object
+                required:
+                - model
+                title: Llm
+                type: object
+              LogFormat:
+                enum:
+                - json
+                - text
+                title: LogFormat
+                type: string
+              LogLevel:
+                enum:
+                - DEBUG
+                - INFO
+                - WARNING
+                - ERROR
+                title: LogLevel
+                type: string
+              McpServer:
+                additionalProperties: false
+                properties:
+                  name:
+                    pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                    title: Name
+                    type: string
+                  transport:
+                    $ref: '#/$defs/McpTransport'
+                  url:
+                    default: ''
+                    title: Url
+                    type: string
+                  command:
+                    default: ''
+                    title: Command
+                    type: string
+                  args:
+                    items:
+                      type: string
+                    title: Args
+                    type: array
+                  env:
+                    additionalProperties:
+                      type: string
+                    title: Env
+                    type: object
+                  headers:
+                    additionalProperties:
+                      type: string
+                    title: Headers
+                    type: object
+                  secretHeaders:
+                    additionalProperties:
+                      $ref: '#/$defs/SecretHeaderRef'
+                    title: Secretheaders
+                    type: object
+                  authTokenEnv:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Authtokenenv
+                  authTokenFile:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Authtokenfile
+                  required:
+                    default: false
+                    title: Required
+                    type: boolean
+                  toolFilter:
+                    $ref: '#/$defs/ToolFilter'
+                  connectTimeoutSeconds:
+                    default: 10
+                    exclusiveMinimum: 0
+                    title: Connecttimeoutseconds
+                    type: integer
+                  timeoutSeconds:
+                    default: 30
+                    exclusiveMinimum: 0
+                    title: Timeoutseconds
+                    type: integer
+                  maxTools:
+                    default: 128
+                    maximum: 1000
+                    minimum: 1
+                    title: Maxtools
+                    type: integer
+                  maxTransportMessageBytes:
+                    default: 1048576
+                    maximum: 16777216
+                    minimum: 4096
+                    title: Maxtransportmessagebytes
+                    type: integer
+                  maxResultBytes:
+                    default: 100000
+                    maximum: 4194304
+                    minimum: 1
+                    title: Maxresultbytes
+                    type: integer
+                required:
+                - name
+                - transport
+                title: McpServer
+                type: object
+              McpTransport:
+                enum:
+                - stdio
+                - sse
+                - streamable-http
+                - http
+                title: McpTransport
+                type: string
+              Observability:
+                additionalProperties: false
+                properties:
+                  logLevel:
+                    $ref: '#/$defs/LogLevel'
+                    default: INFO
+                  logFormat:
+                    $ref: '#/$defs/LogFormat'
+                    default: json
+                  includeToolArguments:
+                    default: false
+                    title: Includetoolarguments
+                    type: boolean
+                  otel:
+                    $ref: '#/$defs/Otel'
+                  prometheus:
+                    $ref: '#/$defs/Prometheus'
+                title: Observability
+                type: object
+              Otel:
+                additionalProperties: false
+                properties:
+                  enabled:
+                    default: false
+                    title: Enabled
+                    type: boolean
+                  serviceName:
+                    default: ''
+                    title: Servicename
+                    type: string
+                title: Otel
+                type: object
+              Prometheus:
+                additionalProperties: false
+                properties:
+                  enabled:
+                    default: false
+                    title: Enabled
+                    type: boolean
+                  path:
+                    default: /metrics
+                    maxLength: 128
+                    minLength: 1
+                    title: Path
+                    type: string
+                title: Prometheus
+                type: object
+              Protocols:
+                additionalProperties: false
+                properties:
+                  openaiCompat:
+                    default: true
+                    title: Openaicompat
+                    type: boolean
+                  acp:
+                    default: false
+                    title: Acp
+                    type: boolean
+                  websocket:
+                    default: false
+                    title: Websocket
+                    type: boolean
+                title: Protocols
+                type: object
+              Provider:
+                enum:
+                - gemini
+                - openai
+                - anthropic
+                - ollama
+                - litellm
+                title: Provider
+                type: string
+              RagConfig:
+                additionalProperties: false
+                description: "RAG-01: retrieval-augmented generation (P4, \xA715)."
+                properties:
+                  enabled:
+                    default: false
+                    title: Enabled
+                    type: boolean
+                  required:
+                    default: false
+                    title: Required
+                    type: boolean
+                  store:
+                    $ref: '#/$defs/RagStore'
+                  embedding:
+                    $ref: '#/$defs/RagEmbedding'
+                  topK:
+                    default: 5
+                    maximum: 100
+                    minimum: 1
+                    title: Topk
+                    type: integer
+                  minScore:
+                    default: 0.0
+                    maximum: 1.0
+                    minimum: 0.0
+                    title: Minscore
+                    type: number
+                  chunkChars:
+                    default: 1000
+                    minimum: 1
+                    title: Chunkchars
+                    type: integer
+                  chunkOverlapChars:
+                    default: 200
+                    minimum: 0
+                    title: Chunkoverlapchars
+                    type: integer
+                  maxDocumentBytes:
+                    default: 10485760
+                    minimum: 1
+                    title: Maxdocumentbytes
+                    type: integer
+                title: RagConfig
+                type: object
+              RagEmbedding:
+                additionalProperties: false
+                description: 'RAG-01: the embedding provider; apiKey follows SEC-04
+                  Env/File.'
+                properties:
+                  provider:
+                    $ref: '#/$defs/RagEmbeddingProvider'
+                    default: gemini
+                  model:
+                    default: text-embedding-004
+                    maxLength: 200
+                    minLength: 1
+                    title: Model
+                    type: string
+                  apiKeyEnv:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Apikeyenv
+                  apiKeyFile:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Apikeyfile
+                title: RagEmbedding
+                type: object
+              RagEmbeddingProvider:
+                enum:
+                - gemini
+                - openai
+                title: RagEmbeddingProvider
+                type: string
+              RagStore:
+                additionalProperties: false
+                description: 'RAG-01: the vector store; connectionString follows SEC-04
+                  Env/File.'
+                properties:
+                  type:
+                    $ref: '#/$defs/RagStoreType'
+                    default: chroma
+                  connectionStringEnv:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Connectionstringenv
+                  connectionStringFile:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Connectionstringfile
+                  collection:
+                    default: agentbase
+                    pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                    title: Collection
+                    type: string
+                  options:
+                    additionalProperties: true
+                    title: Options
+                    type: object
+                title: RagStore
+                type: object
+              RagStoreType:
+                enum:
+                - chroma
+                - pgvector
+                title: RagStoreType
+                type: string
+              RateLimit:
+                additionalProperties: false
+                properties:
+                  enabled:
+                    default: false
+                    title: Enabled
+                    type: boolean
+                  requestsPerMinute:
+                    default: 60
+                    exclusiveMinimum: 0
+                    title: Requestsperminute
+                    type: integer
+                title: RateLimit
+                type: object
+              SecretHeaderRef:
+                additionalProperties: false
+                properties:
+                  env:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Env
+                  file:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: File
+                  prefix:
+                    default: ''
+                    title: Prefix
+                    type: string
+                title: SecretHeaderRef
+                type: object
+              Server:
+                additionalProperties: false
+                properties:
+                  host:
+                    default: 0.0.0.0
+                    title: Host
+                    type: string
+                  port:
+                    default: 8080
+                    maximum: 65535
+                    minimum: 1
+                    title: Port
+                    type: integer
+                  protocols:
+                    $ref: '#/$defs/Protocols'
+                  corsOrigins:
+                    items:
+                      type: string
+                    title: Corsorigins
+                    type: array
+                  corsAllowCredentials:
+                    default: false
+                    title: Corsallowcredentials
+                    type: boolean
+                  auth:
+                    $ref: '#/$defs/Auth'
+                  rateLimit:
+                    $ref: '#/$defs/RateLimit'
+                  trustedProxyCidrs:
+                    items:
+                      type: string
+                    title: Trustedproxycidrs
+                    type: array
+                  maxConcurrentRequests:
+                    default: 100
+                    maximum: 10000
+                    minimum: 1
+                    title: Maxconcurrentrequests
+                    type: integer
+                  maxRequestLineBytes:
+                    default: 8192
+                    maximum: 16384
+                    minimum: 1024
+                    title: Maxrequestlinebytes
+                    type: integer
+                  maxHeaderBytes:
+                    default: 32768
+                    maximum: 131072
+                    minimum: 4096
+                    title: Maxheaderbytes
+                    type: integer
+                  maxHeaderCount:
+                    default: 100
+                    maximum: 200
+                    minimum: 1
+                    title: Maxheadercount
+                    type: integer
+                  maxRequestBytes:
+                    default: 1048576
+                    maximum: 16777216
+                    minimum: 1024
+                    title: Maxrequestbytes
+                    type: integer
+                  maxMessageBytes:
+                    default: 262144
+                    maximum: 4194304
+                    minimum: 1
+                    title: Maxmessagebytes
+                    type: integer
+                  streamQueueEvents:
+                    default: 64
+                    maximum: 1024
+                    minimum: 1
+                    title: Streamqueueevents
+                    type: integer
+                  slowConsumerSeconds:
+                    default: 10
+                    maximum: 300
+                    minimum: 1
+                    title: Slowconsumerseconds
+                    type: integer
+                  exposeSystemInstruction:
+                    default: false
+                    title: Exposesysteminstruction
+                    type: boolean
+                  shutdownGraceSeconds:
+                    default: 25
+                    maximum: 300
+                    minimum: 1
+                    title: Shutdowngraceseconds
+                    type: integer
+                title: Server
+                type: object
+              Storage:
+                additionalProperties: false
+                properties:
+                  type:
+                    $ref: '#/$defs/StorageType'
+                    default: memory
+                  path:
+                    default: ''
+                    title: Path
+                    type: string
+                  connectionStringEnv:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Connectionstringenv
+                  connectionStringFile:
+                    anyOf:
+                    - minLength: 1
+                      type: string
+                    - type: 'null'
+                    default: null
+                    title: Connectionstringfile
+                  sessionTtlSeconds:
+                    default: 86400
+                    minimum: 0
+                    title: Sessionttlseconds
+                    type: integer
+                  runTtlSeconds:
+                    default: 604800
+                    minimum: 60
+                    title: Runttlseconds
+                    type: integer
+                  maxSessions:
+                    default: 10000
+                    exclusiveMinimum: 0
+                    title: Maxsessions
+                    type: integer
+                  maxRunsPerSession:
+                    default: 1000
+                    exclusiveMinimum: 0
+                    title: Maxrunspersession
+                    type: integer
+                  maxIdempotencyRecordsPerSession:
+                    default: 1000
+                    exclusiveMinimum: 0
+                    title: Maxidempotencyrecordspersession
+                    type: integer
+                  lockAcquireSeconds:
+                    default: 0.0
+                    maximum: 5.0
+                    minimum: 0.0
+                    title: Lockacquireseconds
+                    type: number
+                  idempotencyTtlSeconds:
+                    default: 86400
+                    minimum: 60
+                    title: Idempotencyttlseconds
+                    type: integer
+                title: Storage
+                type: object
+              StorageType:
+                enum:
+                - memory
+                - file
+                - redis
+                - postgres
+                title: StorageType
+                type: string
+              StreamingMode:
+                enum:
+                - text
+                - events
+                - debug
+                title: StreamingMode
+                type: string
+              TokenBudget:
+                additionalProperties: false
+                properties:
+                  perRequest:
+                    default: 0
+                    maximum: 1000000000000
+                    minimum: 0
+                    title: Perrequest
+                    type: integer
+                  perSession:
+                    default: 0
+                    maximum: 1000000000000
+                    minimum: 0
+                    title: Persession
+                    type: integer
+                title: TokenBudget
+                type: object
+              ToolFilter:
+                additionalProperties: false
+                properties:
+                  allow:
+                    items:
+                      type: string
+                    title: Allow
+                    type: array
+                  deny:
+                    items:
+                      type: string
+                    title: Deny
+                    type: array
+                title: ToolFilter
+                type: object
+              Tools:
+                additionalProperties: false
+                properties:
+                  mcpServers:
+                    items:
+                      $ref: '#/$defs/McpServer'
+                    title: Mcpservers
+                    type: array
+                title: Tools
+                type: object
+              VertexConfig:
+                additionalProperties: false
+                properties:
+                  enabled:
+                    default: false
+                    title: Enabled
+                    type: boolean
+                  project:
+                    default: ''
+                    title: Project
+                    type: string
+                  location:
+                    default: us-central1
+                    title: Location
+                    type: string
+                title: VertexConfig
+                type: object
+            additionalProperties: false
+            description: The complete Agent Definition document (camelCase, external
+              format).
+            properties:
+              $schema:
+                default: ''
+                title: $Schema
+                type: string
+              schemaVersion:
+                default: 1
+                title: Schemaversion
+                type: integer
+              name:
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                title: Name
+                type: string
+              description:
+                default: ''
+                maxLength: 2000
+                title: Description
+                type: string
+              profile:
+                default: ''
+                title: Profile
+                type: string
+              engine:
+                $ref: '#/$defs/Engine'
+              llm:
+                $ref: '#/$defs/Llm'
+              tools:
+                $ref: '#/$defs/Tools'
+              storage:
+                $ref: '#/$defs/Storage'
+              server:
+                $ref: '#/$defs/Server'
+              k8s:
+                $ref: '#/$defs/K8s'
+              observability:
+                $ref: '#/$defs/Observability'
+              agents:
+                items:
+                  $ref: '#/$defs/AgentDef'
+                title: Agents
+                type: array
+              approval:
+                $ref: '#/$defs/ApprovalConfig'
+              rag:
+                $ref: '#/$defs/RagConfig'
+            required:
+            - name
+            - engine
+            - llm
+            type: object
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true

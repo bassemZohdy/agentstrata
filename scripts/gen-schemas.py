@@ -102,6 +102,70 @@ def build_openapi() -> dict:
     return app.openapi()
 
 
+def build_crd() -> dict:
+    """K8S-01: the AgentConfig CRD with the FULL agent schema embedded as
+    the validation schema (spec == the Agent Definition document). The CRD
+    is regenerated with the schema, so a config-schema change shows up as a
+    gen-schemas zero-diff failure."""
+    spec_schema = build_agent_schema()
+    # CRD structural schemas cannot carry the $id/$schema document headers.
+    spec_schema.pop("$id", None)
+    spec_schema.pop("$schema", None)
+    spec_schema.pop("title", None)
+    return {
+        "apiVersion": "apiextensions.k8s.io/v1",
+        "kind": "CustomResourceDefinition",
+        "metadata": {
+            "name": "agentconfigs.agentstrata.io",
+            "labels": {
+                "app.kubernetes.io/managed-by": "agentstrata-operator",
+            },
+        },
+        "spec": {
+            "group": "agentstrata.io",
+            "scope": "Namespaced",
+            "names": {
+                "plural": "agentconfigs",
+                "singular": "agentconfig",
+                "kind": "AgentConfig",
+                "shortNames": ["agc"],
+            },
+            "versions": [
+                {
+                    "name": "v1",
+                    "served": True,
+                    "storage": True,
+                    "subresources": {"status": {}},
+                    "additionalPrinterColumns": [
+                        {
+                            "name": "Ready",
+                            "type": "string",
+                            "jsonPath": '.status.conditions[?(@.type=="Ready")].status',
+                        },
+                        {
+                            "name": "ConfigMap",
+                            "type": "string",
+                            "jsonPath": ".status.appliedConfigMap",
+                        },
+                    ],
+                    "schema": {
+                        "openAPIV3Schema": {
+                            "type": "object",
+                            "properties": {
+                                "spec": spec_schema,
+                                "status": {
+                                    "type": "object",
+                                    "x-kubernetes-preserve-unknown-fields": True,
+                                },
+                            },
+                        }
+                    },
+                }
+            ],
+        },
+    }
+
+
 def main() -> int:
     agent = ROOT / "schemas" / "agent.schema.json"
     agent.write_text(
@@ -121,9 +185,20 @@ def main() -> int:
         encoding="utf-8",
         newline="\n",
     )
+    crd_dir = ROOT / "k8s_operator" / "crd"
+    crd_dir.mkdir(parents=True, exist_ok=True)
+    crd = crd_dir / "agentconfigs.agentstrata.io.yaml"
+    import yaml as _yaml
+
+    crd.write_text(
+        _yaml.safe_dump(build_crd(), sort_keys=False, default_flow_style=False),
+        encoding="utf-8",
+        newline="\n",
+    )
     print(f"wrote {agent}")
     print(f"wrote {openapi}")
     print(f"wrote {overlay}")
+    print(f"wrote {crd}")
     return 0
 
 

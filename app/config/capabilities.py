@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .resolver import ConfigError
 
-PHASE = "P4"
+PHASE = "P5"
 
 # CAP-01: all four capabilities are implemented (fail closed,
 # never warn-and-continue); multi-agent and ACP are implemented and gated on
