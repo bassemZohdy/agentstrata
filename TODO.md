@@ -4,8 +4,7 @@ All four phases (P1 core runtime, P2 multi-agent/ACP, P3 approvals, P4 RAG)
 are implemented and accepted; the completed work is recorded
 milestone-by-milestone in [CHANGELOG.md](CHANGELOG.md). This file tracks only
 what is **not yet done**: the deferred improvements found by the code review,
-resolved decisions (for the record), the one open human-call decision, and
-explicitly deferred scope.
+resolved decisions (for the record), and explicitly deferred scope.
 
 Requirement IDs in parentheses trace each task back to
 [REQUIREMENTS.md](REQUIREMENTS.md); the build order is
@@ -155,10 +154,12 @@ ACC-01 storage-deviation proofs.
       **Verdict: keep "Agentbase" only as a provisional internal name; a
       rename before any public release is strongly advised.** The GitHub
       repo is already `agentstrata`, and `agent-strata` is clear on PyPI.
-- [ ] **Product name DECISION (human call, informed by the clearance above):**
-      keep the provisional "Agentbase" and accept the collision risk, or
-      rename to "AgentStrata" / `agent-strata` (registry-clear) before any
-      public release, trademark filing, or registry publication.
+- [x] **Product name DECISION — RESOLVED (user decision 2026-08-05):** the
+      project is open-source and non-commercial, so trademark/domain
+      clearance is not required; the name stays as-is ("Agentbase" /
+      "AgentStrata", repo `agentstrata`). The clearance research above
+      remains on record (useful if the project ever turns commercial —
+      then rename to `agent-strata`, which is registry-clear).
 
 ## Deferred scope — revisit only if a concrete need shows up
 

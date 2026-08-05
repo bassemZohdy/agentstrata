@@ -4,6 +4,19 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### Product name decision RESOLVED (2026-08-05)
+
+- The open human-call item is closed: the project is open-source and
+  non-commercial, so trademark/domain/registry clearance is not required
+  and the name stays as-is ("Agentbase" / "AgentStrata"). The clearance
+  research (2026-08-05, PyPI/Docker Hub/GitHub/npm/domains/USPTO-EUIPO
+  surfaces + the ParamAgent/BaseAgent/Agenter/AgentImage candidate check)
+  stays on record in TODO.md — if the project ever turns commercial, the
+  registry-clear fallback is `agent-strata` (free on PyPI, npm, Docker
+  Hub, and GitHub).
+
+
+
 ### Product-name clearance research (recorded 2026-08-05)
 
 - The TODO.md clearance item's checkable part is DONE: every registry was
