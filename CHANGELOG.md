@@ -69,7 +69,7 @@ TODO.md:
   `_FakeRequest` pyright errors fixed via a `_StreamRequest` Protocol;
   google.adk MCPTool deprecation confirmed to be upstream (2.6.1/2.6.2)
   — our code already uses `McpToolset`; deferral documented.
-- Host suite: **525 passed**; ruff + mypy (app, scripts, tests) clean;
+- Host suite: **527 passed**; ruff + mypy (app, scripts, tests) clean;
   schemas zero-diff; manifest sync OK.
 
 Open deferrals (documented, not release-blocking): google.adk upstream
