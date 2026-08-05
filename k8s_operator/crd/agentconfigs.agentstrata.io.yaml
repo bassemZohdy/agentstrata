@@ -131,6 +131,40 @@ spec:
                 - jwt
                 title: AuthMode
                 type: string
+              Costs:
+                additionalProperties: false
+                description: 'COST-01: per-request cost-in-dollars accounting (P5-4).
+
+
+                  Prices are USD per 1M tokens. ``models`` entries override the defaults
+
+                  for a specific model name (the exact ``llm.model`` string); when
+
+                  ``enabled`` is false no cost is computed anywhere (zero API surface
+
+                  change).'
+                properties:
+                  enabled:
+                    default: false
+                    title: Enabled
+                    type: boolean
+                  defaultInputPerMillion:
+                    default: 0.0
+                    minimum: 0.0
+                    title: Defaultinputpermillion
+                    type: number
+                  defaultOutputPerMillion:
+                    default: 0.0
+                    minimum: 0.0
+                    title: Defaultoutputpermillion
+                    type: number
+                  models:
+                    items:
+                      $ref: '#/$defs/ModelCost'
+                    title: Models
+                    type: array
+                title: Costs
+                type: object
               Engine:
                 additionalProperties: false
                 properties:
@@ -435,6 +469,28 @@ spec:
                 - http
                 title: McpTransport
                 type: string
+              ModelCost:
+                additionalProperties: false
+                properties:
+                  model:
+                    maxLength: 256
+                    minLength: 1
+                    title: Model
+                    type: string
+                  inputPerMillion:
+                    default: 0.0
+                    minimum: 0.0
+                    title: Inputpermillion
+                    type: number
+                  outputPerMillion:
+                    default: 0.0
+                    minimum: 0.0
+                    title: Outputpermillion
+                    type: number
+                required:
+                - model
+                title: ModelCost
+                type: object
               Observability:
                 additionalProperties: false
                 properties:
@@ -942,6 +998,8 @@ spec:
                 $ref: '#/$defs/ApprovalConfig'
               rag:
                 $ref: '#/$defs/RagConfig'
+              costs:
+                $ref: '#/$defs/Costs'
             required:
             - name
             - engine

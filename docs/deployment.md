@@ -224,7 +224,16 @@ is regenerated from the config model by `scripts/gen-schemas.py`) is
 reconciled into a ConfigMap `agentstrata-<cr>` (tier-8 overlay in
 `agent.yaml`), a Deployment (image from the required
 `agentstrata.io/image` annotation; non-root, read-only rootfs, probes,
-35 s termination grace), and a Service. The Deployment runs the runtime
+35 s termination grace), and a Service.
+
+### Cost accounting (COST-01)
+
+`costs.enabled: true` prices every successful run in USD (per 1M tokens:
+`costs.defaultInputPerMillion` / `costs.defaultOutputPerMillion`, with
+per-model overrides in `costs.models[]`). The cost appears in the
+response `usage.costUsd`, the run record outcome `cost_usd`, and the
+`agentbase_cost_usd_total{model}` metric. Disabled by default — the usage
+object stays byte-identical to the OpenAI shape. The Deployment runs the runtime
 in watcher mode (`AGENT_K8S_ENABLED=true`, `AGENT_K8S_NAME` set), so live
 reloads flow CR → ConfigMap → runtime. Status reports observedGeneration
 + a Ready condition; invalid specs and missing image annotations fail

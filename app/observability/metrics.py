@@ -218,6 +218,9 @@ class MetricBundle:
         self.reloads = observability.counter(
             "agentbase_reloads_total", "Live-reload attempts, by outcome"
         )
+        self.cost_usd = observability.counter(
+            "agentbase_cost_usd_total", "Accumulated USD cost, by model (COST-01)"
+        )
         self.queue_cancellations = observability.counter(
             "agentbase_output_queue_cancellations_total",
             "Runs cancelled for a full output queue (slow consumer)",

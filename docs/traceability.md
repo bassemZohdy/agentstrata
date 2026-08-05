@@ -63,6 +63,8 @@ verified by the Milestone 8 acceptance/chaos run.
 | CNT-11 | Dockerfile USER 10001:0 + read-only rootfs notes; docs/deployment.md |
 | CNT-12 | TODO.md Decisions made (severity policy); TODO M8 scan gate |
 | CNT-13 | .dockerignore; Dockerfile secrets hygiene |
+| COST-01 | app/engine/runner.py (_cost_usd) + config/models.py::Costs; tests/test_protocol/test_cost.py |
+| COST-02 | tests/test_protocol/test_cost.py + tests/test_config/test_validation.py |
 | DEL-01 | app/ layout; docs/deployment.md; Dockerfile |
 | DEL-02 | scripts/gen-schemas.py; schemas/; CI zero-diff |
 | DOC-01 | REQUIREMENTS.md (document contract) |

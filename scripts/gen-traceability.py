@@ -203,6 +203,9 @@ MAPPINGS: dict[str, str] = {
     "WS-02": "tests/test_protocol/test_websocket.py",
     "K8S-11": "k8s_operator/reconcile.py + kube.py + loop.py; tests/test_operator/test_operator.py",
     "K8S-12": "tests/test_operator/test_operator.py",
+    "COST-01": "app/engine/runner.py (_cost_usd) + config/models.py::Costs; "
+    "tests/test_protocol/test_cost.py",
+    "COST-02": "tests/test_protocol/test_cost.py + tests/test_config/test_validation.py",
 }
 
 

@@ -74,7 +74,8 @@ class Iteration:
 class Done:
     finish_reason: str = "stop"
     x_agent_status: str | None = None
-    usage: dict[str, int] = field(default_factory=dict)
+    # dict[str, int] token counts plus optional "cost_usd" (COST-01).
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

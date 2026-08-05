@@ -8,7 +8,7 @@ half of two generations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk.agents import LlmAgent
@@ -42,6 +42,10 @@ class AppliedConfig:
     overrides_max_tokens_max: int
     llm_provider: str
     llm_model: str
+    costs_enabled: bool = False
+    costs_default_input: float = 0.0
+    costs_default_output: float = 0.0
+    costs_models: dict[str, tuple[float, float]] = field(default_factory=dict)
     config: Any = None  # the validated AgentConfig (for connectors/toolsets)
 
     @classmethod
@@ -69,6 +73,13 @@ class AppliedConfig:
             overrides_max_tokens_max=engine.overrides.maxTokensMax,
             llm_provider=llm.provider.value,
             llm_model=llm.model,
+            costs_enabled=bool(config.costs.enabled),
+            costs_default_input=config.costs.defaultInputPerMillion,
+            costs_default_output=config.costs.defaultOutputPerMillion,
+            costs_models={
+                entry.model: (entry.inputPerMillion, entry.outputPerMillion)
+                for entry in config.costs.models
+            },
             config=config,
         )
 

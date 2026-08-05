@@ -142,6 +142,38 @@
       "title": "AuthMode",
       "type": "string"
     },
+    "Costs": {
+      "additionalProperties": false,
+      "description": "COST-01: per-request cost-in-dollars accounting (P5-4).\n\nPrices are USD per 1M tokens. ``models`` entries override the defaults\nfor a specific model name (the exact ``llm.model`` string); when\n``enabled`` is false no cost is computed anywhere (zero API surface\nchange).",
+      "properties": {
+        "defaultInputPerMillion": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Defaultinputpermillion",
+          "type": "number"
+        },
+        "defaultOutputPerMillion": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Defaultoutputpermillion",
+          "type": "number"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/ModelCost"
+          },
+          "title": "Models",
+          "type": "array"
+        }
+      },
+      "title": "Costs",
+      "type": "object"
+    },
     "Engine": {
       "additionalProperties": false,
       "properties": {
@@ -542,6 +574,34 @@
       ],
       "title": "McpTransport",
       "type": "string"
+    },
+    "ModelCost": {
+      "additionalProperties": false,
+      "properties": {
+        "inputPerMillion": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Inputpermillion",
+          "type": "number"
+        },
+        "model": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "outputPerMillion": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Outputpermillion",
+          "type": "number"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "ModelCost",
+      "type": "object"
     },
     "Observability": {
       "additionalProperties": false,
@@ -1177,6 +1237,9 @@
     },
     "approval": {
       "$ref": "#/$defs/ApprovalConfig"
+    },
+    "costs": {
+      "$ref": "#/$defs/Costs"
     },
     "description": {
       "default": "",

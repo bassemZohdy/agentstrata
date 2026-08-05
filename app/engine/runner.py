@@ -236,13 +236,17 @@ class AgentRunner:
                     await self._commit_failure(
                         request, sid, run_id, state.state, transfers=transfers
                     )
+                done_usage: dict[str, int] = {
+                    "input_tokens": limiter.account.input_tokens,
+                    "output_tokens": limiter.account.output_tokens,
+                }
+                done_cost = self._cost_usd(done_usage)
+                if done_cost is not None:
+                    done_usage["cost_usd"] = done_cost  # type: ignore[assignment]
                 yield Done(
                     finish_reason=finish,
                     x_agent_status=status,
-                    usage={
-                        "input_tokens": limiter.account.input_tokens,
-                        "output_tokens": limiter.account.output_tokens,
-                    },
+                    usage=done_usage,
                 )
         except CancelledError:
             self._mark_cancelled(state)
@@ -275,6 +279,24 @@ class AgentRunner:
             yield Done(finish_reason="error", x_agent_status=public.code)
 
     # -- admission (ENG-03 order; auth/rate-limit stubbed until M5) -----------------
+
+    def _cost_usd(self, usage: dict[str, int]) -> float | None:
+        """COST-01: per-request cost in USD from the token counts.
+
+        Returns None when costs are disabled (the caller then omits the
+        field entirely — zero surface change). Prices are USD per 1M
+        tokens; the exact ``llm.model`` entry wins, else the defaults.
+        """
+        if not self._applied.costs_enabled:
+            return None
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        input_price, output_price = self._applied.costs_models.get(
+            self._applied.llm_model,
+            (self._applied.costs_default_input, self._applied.costs_default_output),
+        )
+        cost = (input_tokens * input_price + output_tokens * output_price) / 1_000_000.0
+        return round(cost, 6)
 
     def _record_admitted(self) -> None:
         """OBS-05: admitted-run + LLM-call counters (low-cardinality labels)."""
@@ -822,13 +844,19 @@ class AgentRunner:
             usage=usage,
             now=utcnow(),
         )
+        # COST-01: the per-request cost rides in the committed usage and
+        # the run outcome (when costs.enabled; otherwise absent).
+        cost_usd = self._cost_usd(usage)
+        outcome: dict[str, Any] = {"text": "".join(text_parts), "transfers": transfers}
+        if cost_usd is not None:
+            outcome["cost_usd"] = cost_usd
         await self._backend.update_run(
             agent_name=self._app_name,
             principal_id=request.principal_id,
             session_id=session_id,
             run_id=run_id,
             status="succeeded",
-            outcome={"text": "".join(text_parts), "transfers": transfers},
+            outcome=outcome,
             usage=usage,
             now=utcnow(),
         )
@@ -836,6 +864,8 @@ class AgentRunner:
             self._metrics.runs_completed.add(1, {"status": "succeeded"})
             self._metrics.tokens.add(usage.get("input_tokens", 0), {"kind": "input"})
             self._metrics.tokens.add(usage.get("output_tokens", 0), {"kind": "output"})
+            if cost_usd is not None:
+                self._metrics.cost_usd.add(cost_usd, {"model": self._applied.llm_model})
             if self._run_started is not None:
                 self._metrics.run_duration.record(
                     time.monotonic() - self._run_started, {"status": "succeeded"}

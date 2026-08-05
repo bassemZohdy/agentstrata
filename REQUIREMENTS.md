@@ -116,8 +116,6 @@ Specifically, a P1 build MUST reject non-empty `agents`, `server.protocols.acp: 
 - A graphical UI of any kind.
 - Fine-tuning, training, or model hosting.
 - Acting as an MCP *server* (the runtime is an MCP *client* only).
-- Prometheus `/metrics` endpoint and per-request cost-in-dollars accounting
-  (deferred; token counts are reported per API-14).
 - Zed's Agent Client Protocol (stdio JSON-RPC) and Google A2A. “ACP” in this document means only the phase-2 REST **Agent Communication Protocol** surface in API-16.
 
 ### 1.5 Personas and trust boundaries
@@ -618,7 +616,7 @@ Unknown, expired, and foreign IDs return identical 404 responses.
 
 **API-12** — Per-request overrides are limited to `temperature` and `max_tokens`, gated by `engine.overrides.allow*`. Values MUST satisfy the base schema and configured override maximum; invalid, above-cap, or disabled overrides return 400 `override_not_allowed` rather than being silently clamped. Model/provider/tool/root-instruction selection remains config-only; the required request `model` is routing validation, not an override.
 **API-13** — `engine.streaming` values: `text` = text deltas only; `events` = + tool_call/tool_result; `debug` = + iteration events.
-**API-14** — Non-streaming success always contains usage. Streaming returns a final usage chunk only when `stream_options.include_usage` is true, matching the OpenAI contract; actual usage is still persisted even when not sent. Estimated usage includes extension `usage.estimated: true`. Token counting is the extent of P1 cost accounting.
+**API-14** — Non-streaming success always contains usage. Streaming returns a final usage chunk only when `stream_options.include_usage` is true, matching the OpenAI contract; actual usage is still persisted even when not sent. Estimated usage includes extension `usage.estimated: true`. Token counting is the extent of P1 cost accounting. When `costs.enabled` (P5-4, COST-01), the usage object additionally carries `usage.costUsd` (USD, rounded to 6 decimals) computed from the costs table; when disabled the usage object is byte-identical to the OpenAI shape.
 **API-15 (errors)** — Endpoints under `/v1/` MUST use the OpenAI error envelope: `{"error":{"message":"...","type":"<code>","code":"<code>"}}`. Non-`/v1/` endpoints use `{"status":"error","code":"...","message":"..."}`. Defined codes and HTTP statuses:
 
 | code | HTTP |
@@ -705,7 +703,8 @@ the Prometheus text exposition (format version 0.0.4) at the configured
 `observability.prometheus.path` (default `/metrics`). The endpoint exports
 counters/histograms for admitted/completed/failed runs, an active-runs gauge,
 run latency, model/tool calls, tokens, rate/concurrency denials, reload
-outcomes, and output-queue cancellations. Labels MUST be low-cardinality;
+outcomes, output-queue cancellations, and (when COST-01 is enabled) the
+accumulated USD cost by model. Labels MUST be low-cardinality;
 request/session/run/principal IDs are prohibited labels; each metric caps its
 distinct label sets (default 128) and drops beyond the cap with a warning. The
 scrape path is exempt from the replica-local rate limiter. When OTel is also
@@ -890,6 +889,26 @@ create/update reconcile (ConfigMap overlay content, Deployment env/owner
 refs, Service), fail-closed status (invalid spec, missing image),
 observedGeneration tracking, the reconcile-all loop, and manifest
 validity (CRD + RBAC parse).
+
+## 15c. Cost accounting (Phase 5)
+
+**COST-01 (costs)** — The `costs` config section (default disabled) prices
+tokens per model in USD per 1M tokens: `defaultInputPerMillion` /
+`defaultOutputPerMillion` plus per-model overrides (`models[].model` must
+match the exact `llm.model` string; duplicate model entries are a config
+error). When `costs.enabled`, every successful run computes
+`costUsd = (input_tokens*inputPrice + output_tokens*outputPrice) / 1e6`
+and: records it in the run outcome (`cost_usd`) and the committed usage,
+reports it as `usage.costUsd` in non-streaming responses and the final
+streaming usage chunk, and records it in the OBS-05 cost counter
+(`agentbase_cost_usd_total{model}`). When disabled, no cost field appears
+anywhere and no cost is computed (zero surface change).
+
+**COST-02 (acceptance)** — P5 cost capability requires tests covering the
+price lookup (exact model entry wins over defaults), the disabled-no-field
+invariant, the response `usage.costUsd` field, the run-outcome `cost_usd`,
+the OBS-05 cost counter, and the config validation (duplicates, negative
+prices).
 
 ## 16. Container and runtime packaging
 

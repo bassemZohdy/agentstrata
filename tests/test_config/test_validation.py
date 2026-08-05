@@ -58,6 +58,27 @@ class TestCrossField:
             {"observability": {"prometheus": {"path": "/v1/models"}}}
         )
 
+    def test_costs_duplicate_model_rejected(self):
+        assert ("costs.models", "cross_field") in issues_for(
+            {
+                "costs": {
+                    "enabled": True,
+                    "models": [
+                        {"model": "m1", "inputPerMillion": 1.0, "outputPerMillion": 2.0},
+                        {"model": "m1", "inputPerMillion": 3.0, "outputPerMillion": 4.0},
+                    ],
+                }
+            }
+        )
+
+    def test_costs_negative_price_rejected(self):
+        assert ("costs.defaultInputPerMillion", "greater_than_equal") in issues_for(
+            {"costs": {"enabled": True, "defaultInputPerMillion": -1.0}}
+        )
+
+    def test_costs_valid(self):
+        assert valid({"costs": {"enabled": True, "models": [{"model": "m1"}]}})
+
     def test_prometheus_path_ok(self):
         assert valid({"observability": {"prometheus": {"enabled": True}}})
         assert valid({"observability": {"prometheus": {"path": "/custom-metrics"}}})

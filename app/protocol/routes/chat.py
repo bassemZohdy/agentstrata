@@ -316,6 +316,13 @@ async def _collect_non_streaming(
     return "".join(text_parts), done, paused
 
 
+def _cost_usage_fields(usage: dict[str, Any]) -> dict[str, Any]:
+    """COST-01: usage.costUsd appears only when costs.enabled computed it."""
+    if "cost_usd" not in usage:
+        return {}
+    return {"costUsd": usage["cost_usd"]}
+
+
 def _non_streaming_body(
     *,
     text: str,
@@ -342,6 +349,7 @@ def _non_streaming_body(
             "prompt_tokens": usage.get("input_tokens", 0),
             "completion_tokens": usage.get("output_tokens", 0),
             "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+            **_cost_usage_fields(usage),
         },
         "request_id": request_id,
     }

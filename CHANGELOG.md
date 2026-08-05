@@ -4,6 +4,27 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### P5-4: Per-request cost-in-dollars accounting (COST-01/02) — DONE
+
+- New `costs` config section (default disabled): USD per 1M tokens with
+  `defaultInputPerMillion`/`defaultOutputPerMillion` + per-model
+  overrides; duplicate model entries and negative prices are config
+  errors.
+- The runner computes `costUsd = (in*inPrice + out*outPrice)/1e6` when
+  enabled (exact `llm.model` entry wins, else defaults), records it in
+  the run outcome (`cost_usd`) + committed usage, reports it as
+  `usage.costUsd` in non-streaming responses and the final streaming
+  usage chunk, and records the OBS-05 `agentbase_cost_usd_total{model}`
+  counter. Disabled = byte-identical OpenAI usage shape (tested).
+- REQUIREMENTS: the §1.4 deferral is REMOVED (the last open deferral in
+  the project); API-14 amended; COST-01/02 added; OBS-05 metric list
+  extended; traceability + schemas regenerated; deployment.md costs
+  section; PLAN.md P5-4.
+- TODO.md: every `[ ]` item is now resolved — no open items remain
+  anywhere in the backlog.
+
+
+
 ### P5-3: Kubernetes CRD / operator (K8S-11/12) — DONE
 
 - `scripts/gen-schemas.py` now also emits the CRD

@@ -6,8 +6,7 @@ operator) are implemented and accepted; every completed item — including
 the review round (redis `KEYS` elimination, atomic admission, live-reload
 caps, the real Redis 7 + Postgres 16 matrix, shutdown audit, unknown-event
 warning, product-name clearance) — is recorded in [CHANGELOG.md](CHANGELOG.md).
-This file tracks only resolved decisions (for the record) and the single
-remaining deferral (per-request cost-in-dollars accounting).
+This file tracks only resolved decisions (for the record).
 
 Requirement IDs in parentheses trace each task back to
 [REQUIREMENTS.md](REQUIREMENTS.md); the build order is
@@ -73,11 +72,10 @@ key facts on record there:
 
 ## Deferred scope — RESOLVED (P5, 2026-08-05)
 
-All three items cut in the v2.2 scope pass (WebSocket API, Kubernetes
-CRD/operator, Prometheus /metrics) were implemented by user decision on
-2026-08-05 (P5-1/P5-2/P5-3) — see CHANGELOG.md. The only remaining
-deferral is per-request cost-in-dollars accounting (REQUIREMENTS §1.4;
-token counts are reported per API-14).
+All items cut in the v2.2 scope pass are implemented by user decision on
+2026-08-05 — P5-1 Prometheus /metrics, P5-2 WebSocket API, P5-3
+Kubernetes CRD/operator, P5-4 per-request cost-in-dollars accounting
+(COST-01) — see CHANGELOG.md. There are no remaining open items.
 
 - [x] **WebSocket API — DONE (P5-2, WS-01/02):** `/v1/ws` with the same
       auth as REST, one active run per connection, run.start/cancel +

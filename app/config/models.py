@@ -395,6 +395,31 @@ class RagConfig(BaseModel):
         return self
 
 
+class ModelCost(BaseModel):
+    model_config = BASE_CONFIG
+
+    model: str = Field(min_length=1, max_length=256)
+    inputPerMillion: float = Field(default=0.0, ge=0.0)
+    outputPerMillion: float = Field(default=0.0, ge=0.0)
+
+
+class Costs(BaseModel):
+    """COST-01: per-request cost-in-dollars accounting (P5-4).
+
+    Prices are USD per 1M tokens. ``models`` entries override the defaults
+    for a specific model name (the exact ``llm.model`` string); when
+    ``enabled`` is false no cost is computed anywhere (zero API surface
+    change).
+    """
+
+    model_config = BASE_CONFIG
+
+    enabled: bool = False
+    defaultInputPerMillion: float = Field(default=0.0, ge=0.0)
+    defaultOutputPerMillion: float = Field(default=0.0, ge=0.0)
+    models: list[ModelCost] = Field(default_factory=list)
+
+
 class AgentDefinition(BaseModel):
     """The complete Agent Definition document (camelCase, external format)."""
 
@@ -415,6 +440,7 @@ class AgentDefinition(BaseModel):
     agents: list[AgentDef] = Field(default_factory=list)  # P2 (MA-01)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)  # P3
     rag: RagConfig = Field(default_factory=RagConfig)  # P4
+    costs: Costs = Field(default_factory=Costs)  # P5-4 (COST-01)
 
     @field_validator("schemaVersion")
     @classmethod

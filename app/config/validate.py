@@ -194,6 +194,16 @@ def _cross_field(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
             "storage.connectionStringEnv",
             "redis/postgres storage requires connectionStringEnv or connectionStringFile",
         )
+    # COST-01: duplicate model entries in the costs table are ambiguous.
+    cost_models = doc.get("costs.models")
+    if isinstance(cost_models, list):
+        seen_models: set[str] = set()
+        for entry in cost_models:
+            name = entry.get("model") if isinstance(entry, dict) else None
+            if name in seen_models:
+                issue("costs.models", f"duplicate costs entry for model {name!r}")
+            if name is not None:
+                seen_models.add(name)
     # OBS-05: the prometheus path must not collide with built-in routes.
     prom_path = doc.get("observability.prometheus.path")
     if prom_path and (
