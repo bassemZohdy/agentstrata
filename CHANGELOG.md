@@ -4,6 +4,18 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### TODO.md cleanup round 3 (2026-08-05)
+
+- The completed-task records in TODO.md were removed (they have been in
+  CHANGELOG since their respective rounds): the review section is now a
+  pointer, and the product-name research + decision are condensed to their
+  on-record facts. TODO.md now contains only the five resolved decisions
+  (for the record) and the three deferred-scope items (WebSocket API,
+  Kubernetes CRD, Prometheus /metrics — each with its recorded "don't
+  reopen speculatively" justification).
+
+
+
 ### Product name decision RESOLVED (2026-08-05)
 
 - The open human-call item is closed: the project is open-source and

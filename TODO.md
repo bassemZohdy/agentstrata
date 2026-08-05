@@ -1,105 +1,41 @@
 # Backlog — remaining work
 
 All four phases (P1 core runtime, P2 multi-agent/ACP, P3 approvals, P4 RAG)
-are implemented and accepted; the completed work is recorded
-milestone-by-milestone in [CHANGELOG.md](CHANGELOG.md). This file tracks only
-what is **not yet done**: the deferred improvements found by the code review,
-resolved decisions (for the record), and explicitly deferred scope.
+are implemented and accepted; the completed work — including every review
+item (redis `KEYS` elimination, atomic admission, live-reload caps, the real
+Redis 7 + Postgres 16 matrix, shutdown audit, unknown-event warning, product-
+name clearance research + decision) — is recorded in
+[CHANGELOG.md](CHANGELOG.md). This file tracks only what is **not yet done**:
+resolved decisions (for the record) and explicitly deferred scope.
 
 Requirement IDs in parentheses trace each task back to
 [REQUIREMENTS.md](REQUIREMENTS.md); the build order is
-[PLAN.md](PLAN.md). "Deferred scope" and "Open decisions" at the bottom are
-not part of any phase's critical path.
+[PLAN.md](PLAN.md). "Deferred scope" is not part of any phase's critical
+path and must not be reopened speculatively.
 
 ---
 
-## Issues & improvements (from a full code review)
+## Completed work (pointer)
 
-Found by a read-only review pass over the whole project. The critical/high items
-and most medium items are already fixed (see CHANGELOG.md); what remains is
-deferred (low priority or needs a concrete scale/deployment trigger).
+The full review round is resolved and the product-name decision is closed —
+see CHANGELOG.md ("Review-item cleanup", "Deferred-review items completed",
+"Product-name clearance research", "Product name decision RESOLVED"). The
+key facts on record there:
 
-### Medium — correctness & robustness
-
-- [x] **Redis `KEYS` in Lua** — DONE: every blocking `KEYS` scan is gone
-      from the Lua scripts. Runs and idempotency records now live in
-      per-session ZSET indexes (`agentbase:{tag}:runidx:{agent}:{sid}` /
-      `...:idemidx:...`; member = full key, score = timestamp), so
-      capacity, terminal-prune, delete-cascade, and list are exact
-      ZRANGE/ZCARD ops; the retention sweep enumerates the indexes with a
-      non-blocking SCAN (`redis.replicate_commands()` makes the
-      DEL/ZREM/ZADD writes legal after the random SCAN). Verified
-      137/137 on the real Redis 7 matrix. (`app/storage/redis_backend.py`,
-      `app/storage/fakes.py`)
-- [x] **Postgres `mutate_session` read-then-CAS TOCTOU** — DONE: the
-      read-merge-CAS is now a bounded retry (up to 3 attempts) that
-      re-reads the fresh revision and re-applies the delta only when the
-      CAS itself lost the race (a genuinely stale caller baseline still
-      raises immediately); the race is exercised by
-      `TestPostgresCasRetry::test_cas_race_retries_and_commits` against
-      the substitute AND the real matrix. (`app/storage/postgres_backend.py`)
-- [x] **Pre-admission cancellation loses the run record** — DONE via atomic
-      admission: the session and the run record now appear as ONE storage
-      step (`admit_run`), so a cancel mid-admission either finds the run
-      record (terminal `cancelled` commit) or leaves nothing at all — the
-      orphaned-session-until-TTL residual is closed. `_commit_failure`
-      still suppresses `SessionNotFound` for the pre-record window.
-      (`app/engine/runner.py::_admit`)
-- [x] **Non-atomic admission** — DONE: the storage contract gained
-      `StorageBackend.admit_run` (ensure-session + create-run in one atomic
-      step, returning `(session_id, admit_revision)`) on all four backends:
-      redis via ONE Lua script (`ADMIT_RUN`), postgres via one transaction,
-      memory/file via a single lock hold. The runner's `_admit` uses it;
-      24 shared contract tests (`TestAdmitRun`) pass on the substitutes AND
-      the real Redis 7 + Postgres 16 matrix. (`app/storage/contract.py`,
-      `app/storage/{redis_backend,postgres_backend,memory,file_backend}.py`,
-      `app/engine/runner.py`, `tests/test_storage/test_contract.py`)
-- [x] **Live-reload no-op on `server.maxConcurrentRequests` /
-      `server.rateLimit`** — DONE: the live-snapshot apply branch now
-      re-applies both to the shared objects — `RunSlotGate.set_limit` and
-      `FixedWindowLimiter.set_requests_per_minute` (the limiter is stored in
-      `components["rate_limiter"]` so the reload can reach it) — so a live
-      change takes effect immediately, no rebuild or restart needed.
-      (`app/protocol/app.py`, `app/watcher/reload.py`,
-      `tests/test_engine/test_rag.py::TestAuditAndReloadCleanup`)
-
-### Test coverage gaps
-
-- [x] **Real-backend CI matrix (ACC-01 deviation)** — DONE: the
-      `storage-contract-real` CI job runs the shared contract suite against
-      real Redis 7 + Postgres 16 services; the fixtures switch on
-      `AGENT_TEST_REAL_REDIS_URL` / `AGENT_TEST_REAL_POSTGRES_DSN` (with
-      per-test isolation + connection cleanup). Verified locally:
-      **137/137 pass against fresh real services**. The matrix surfaced and
-      fixed real production bugs: the redis `eval` call shape (list-numkeys
-      is a DataError on redis-py), bytes Lua returns (prefix checks missed),
-      the broken `idem:`/`run:` KEYS patterns, wall-clock vs `updated_at`-
-      anchored `PEXPIREAT` expiry semantics, fence expiry persistence +
-      session-reentrant advisory locks, psycopg JSONB dict rows vs
-      `json.loads`, and the uncommitted-implicit-transaction poisoning.
-      (`tests/test_storage/conftest.py`, `.github/workflows/ci.yml`)
-
-### Improvements (non-bug)
-
-- [x] **Structured shutdown audit** — DONE: `close_components` returns
-      `(ok, failed_component_labels)` and `_drain_after_grace` logs ONE
-      `shutdown_summary` line with exit code, duration_ms, and the failed
-      components. (`app/lifecycle.py`,
-      `tests/test_protocol/test_shutdown.py::TestShutdownSummaryAudit`)
-- [x] **Warn on unknown audit events** — DONE: `audit()` logs a
-      `audit_unknown_event` warning with the offending name + fields and
-      still emits the remapped `audit_unknown` record (nothing is lost).
-      (`app/security/audit.py`, `tests/test_engine/test_rag.py::TestAuditAndReloadCleanup`)
-
----
-
-## Completed phases
-
-P2 (multi-agent + ACP), P3 (approvals), and P4 (RAG) are implemented,
-accepted in-image on both architectures, and recorded in
-[CHANGELOG.md](CHANGELOG.md) — including the capability flips
-(`multiAgent`/`acp`/`approval`/`rag` true in `/health`, phase P4) and the
-ACC-01 storage-deviation proofs.
+- **Redis `KEYS` in Lua** — eliminated (per-session ZSET indexes +
+  non-blocking SCAN sweep); verified 137/137 on real Redis 7.
+- **Atomic admission** — `StorageBackend.admit_run` on all four backends
+  (single Lua script / single txn / single lock hold); the pre-admission
+  cancellation residual is closed; 24 shared `TestAdmitRun` tests pass on
+  substitutes AND the real matrix (161/161).
+- **Postgres CAS retry, live-reload cap/limiter re-application, structured
+  shutdown summary, unknown-audit-event warning, real-backend CI matrix**
+  — all DONE (details + test names in CHANGELOG).
+- **Product name** — open-source, non-commercial (user decision 2026-08-05):
+  no trademark/domain clearance required; name stays "Agentbase"/
+  "AgentStrata". Clearance research + candidate check remain on record;
+  `agent-strata` is the registry-clear fallback if the project ever turns
+  commercial.
 
 ## Decisions made (resolved, for the record)
 
@@ -134,33 +70,6 @@ ACC-01 storage-deviation proofs.
       through the substitutes. Revisit when a real multi-replica deployment
       needs proof.
 
-## Open decisions (need a human call, not an engineering call)
-
-- [x] **Product-name clearance RESEARCH (recorded 2026-08-05).** Every
-      checkable registry was probed; the provisional name is encumbered
-      across the board:
-      - PyPI `agentbase` — taken (unrelated "OmniAgents Framework" package);
-        PyPI `agent-strata` — free; npm `agentbase` — free.
-      - Docker Hub `agentbase` namespace — taken (unrelated `abi-image-v2`).
-      - GitHub `agentbase` login — taken (existing user "AgentBase").
-      - Domains: `agentbase.com` registered since ~2005 (AgentBase UK, a
-        sales-agent register, acquired by Sales Agents Ltd 2026-01);
-        `agentbase.io` (AgentBase LLC, staffing); `agentbase.sh` — a
-        serverless AI-agent platform (SF, founded 2025) IN THE SAME SPACE.
-      - Trademarks: no exact AGENTBASE registration surfaced in USPTO/
-        Justia/EUIPO, but the mark is actively used in commerce — including
-        Demandbase's "Agentbase" AI-agent product line (PRNewswire 2025-05)
-        — so classes 9/42 carry high confusion/opposition risk.
-      **Verdict: keep "Agentbase" only as a provisional internal name; a
-      rename before any public release is strongly advised.** The GitHub
-      repo is already `agentstrata`, and `agent-strata` is clear on PyPI.
-- [x] **Product name DECISION — RESOLVED (user decision 2026-08-05):** the
-      project is open-source and non-commercial, so trademark/domain
-      clearance is not required; the name stays as-is ("Agentbase" /
-      "AgentStrata", repo `agentstrata`). The clearance research above
-      remains on record (useful if the project ever turns commercial —
-      then rename to `agent-strata`, which is registry-clear).
-
 ## Deferred scope — revisit only if a concrete need shows up
 
 Cut in the v2.2 scope pass. Don't reopen speculatively; reopen when an actual
@@ -170,8 +79,9 @@ caller or deployment needs one.
       server-initiated cancellation notices, multiplexed tool-approval UI) that
       SSE can't express.
 - [ ] **Kubernetes CRD / operator.** Revisit once the product name/API-group
-      (above) is settled and there's a real need for `kubectl get agentconfigs`,
-      CRD-native status, or admission-webhook validation.
+      is settled (DONE 2026-08-05 — the name stays as-is) and there's a real
+      need for `kubectl get agentconfigs`, CRD-native status, or
+      admission-webhook validation.
 - [ ] **Prometheus `/metrics` endpoint and per-request dollar-cost accounting.**
-      Explicitly deferred (REQUIREMENTS.md §1.4) — OTel metrics cover the
-      interim need.
+      Explicitly deferred (REQUIREMENTS.md §1.4 / OBS-05 — "No Prometheus
+      `/metrics` route is in scope") — OTel metrics cover the interim need.
