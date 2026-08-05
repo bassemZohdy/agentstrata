@@ -57,7 +57,7 @@ P5-4 (cost accounting) started:
 | P5-1 Prometheus `/metrics` (OBS-05) | `be03e89` — metrics + `/metrics` endpoint shipped |
 | P5-2 WebSocket API (WS-01) | `1bf4f26` — `/v1/ws` shipped |
 | P5-3 Kubernetes CRD / operator (K8S-11/12) | `f11ae43` — CRD + operator shipped, phase flipped to P5 |
-| P5-4 cost accounting (COST-01/02) | `d90bc26` + P5-4 finish-line commit (recorded at release) |
+| P5-4 cost accounting (COST-01/02) | `d90bc26` + P5-4 finish-line commit `8259f30` |
 | Host suite | **527 passed** (2026-08-06 finish line), ruff + mypy clean (app, scripts, and tests), schemas zero-diff |
 | Capabilities | phase `P5`; `multiAgent`/`acp`/`approval`/`rag`/`costs` all true (CAP-02, COST-01) |
 
