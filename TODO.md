@@ -137,11 +137,28 @@ ACC-01 storage-deviation proofs.
 
 ## Open decisions (need a human call, not an engineering call)
 
-- [ ] **Product name / trademark / domain / package-registry clearance.**
-      **Agentbase** is the chosen name (repo-wide rename applied); it still
-      needs clearing (USPTO/EUIPO trademark in classes 9/42, `agentbase` domain,
-      PyPI/Docker Hub/GitHub namespace) before a public release. Until cleared,
-      the name should be treated as provisional.
+- [x] **Product-name clearance RESEARCH (recorded 2026-08-05).** Every
+      checkable registry was probed; the provisional name is encumbered
+      across the board:
+      - PyPI `agentbase` — taken (unrelated "OmniAgents Framework" package);
+        PyPI `agent-strata` — free; npm `agentbase` — free.
+      - Docker Hub `agentbase` namespace — taken (unrelated `abi-image-v2`).
+      - GitHub `agentbase` login — taken (existing user "AgentBase").
+      - Domains: `agentbase.com` registered since ~2005 (AgentBase UK, a
+        sales-agent register, acquired by Sales Agents Ltd 2026-01);
+        `agentbase.io` (AgentBase LLC, staffing); `agentbase.sh` — a
+        serverless AI-agent platform (SF, founded 2025) IN THE SAME SPACE.
+      - Trademarks: no exact AGENTBASE registration surfaced in USPTO/
+        Justia/EUIPO, but the mark is actively used in commerce — including
+        Demandbase's "Agentbase" AI-agent product line (PRNewswire 2025-05)
+        — so classes 9/42 carry high confusion/opposition risk.
+      **Verdict: keep "Agentbase" only as a provisional internal name; a
+      rename before any public release is strongly advised.** The GitHub
+      repo is already `agentstrata`, and `agent-strata` is clear on PyPI.
+- [ ] **Product name DECISION (human call, informed by the clearance above):**
+      keep the provisional "Agentbase" and accept the collision risk, or
+      rename to "AgentStrata" / `agent-strata` (registry-clear) before any
+      public release, trademark filing, or registry publication.
 
 ## Deferred scope — revisit only if a concrete need shows up
 

@@ -4,6 +4,25 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### Product-name clearance research (recorded 2026-08-05)
+
+- The TODO.md clearance item's checkable part is DONE: every registry was
+  probed and the provisional "Agentbase" name is encumbered everywhere:
+  PyPI `agentbase` taken (unrelated OmniAgents package; `agent-strata` is
+  free), Docker Hub namespace taken (`abi-image-v2`), GitHub login taken
+  (user "AgentBase"), npm free, and `agentbase.com` (AgentBase UK, since
+  ~2005), `agentbase.io` (AgentBase LLC), and `agentbase.sh` (a serverless
+  AI-agent platform in the SAME product space) are all registered. No exact
+  AGENTBASE USPTO/EUIPO registration surfaced, but the mark is in active
+  commercial use — including Demandbase's "Agentbase" AI-agent product line
+  (PRNewswire 2025-05) — so classes 9/42 carry high confusion/opposition
+  risk. Verdict recorded in TODO.md: provisional-only; a rename before any
+  public release is strongly advised (the repo is already `agentstrata` and
+  `agent-strata` is clear on PyPI). The keep-vs-rename DECISION itself
+  remains a human call.
+
+
+
 ### Deferred-review items completed (TODO.md -> CHANGELOG.md, round 2)
 
 - **Redis `KEYS` in Lua (DONE):** every blocking `KEYS` scan is gone from
