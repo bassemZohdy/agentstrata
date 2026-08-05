@@ -261,38 +261,15 @@ class AgentRunner:
     ) -> tuple[str, int]:
         # ENG-03 steps 1-4 (request id, auth, capability, rate-limit) are
         # enforced by the M5 adapter; the ordering contract is preserved here.
-        # Step 5: resolve/atomically create the session + lease.
-        if request.session_id is None:
-            record = await self._backend.create_session(
-                agent_name=self._app_name,
-                principal_id=request.principal_id,
-            )
-            request.session_id = record.session_id
-        else:
-            existing = await self._backend.get_session(
-                agent_name=self._app_name,
-                principal_id=request.principal_id,
-                session_id=request.session_id,
-            )
-            if existing is None:
-                existing = await self._backend.create_session(
-                    agent_name=self._app_name,
-                    principal_id=request.principal_id,
-                    session_id=request.session_id,
-                )
-        # distributed lease (SES-05) — best effort until M6 wiring
-        # Step 6: budget eligibility.
+        # Step 5: budget eligibility (a pure config check; no state written).
         if self._session_budget_remaining is not None and self._session_budget_remaining <= 0:
             raise PublicError("budget_exceeded", "The session token budget was exceeded.")
-        # Step 7: run record (ENG-06: admit without appending history).
-        assert request.session_id is not None
-        admit_record = await self._backend.get_session(
-            agent_name=self._app_name,
-            principal_id=request.principal_id,
-            session_id=request.session_id,
-        )
-        admit_revision = admit_record.revision if admit_record is not None else 1
-        await self._backend.create_run(
+        # Step 6-7: ATOMIC admission — the session (minted when absent) and
+        # the run record are created as ONE storage step on every backend
+        # (single Lua script / single transaction / single lock hold), so a
+        # crash or cancellation between the two cannot orphan a session and
+        # a pre-admission cancel never finds a session without its run.
+        sid, admit_revision = await self._backend.admit_run(
             agent_name=self._app_name,
             principal_id=request.principal_id,
             session_id=request.session_id,
@@ -300,8 +277,9 @@ class AgentRunner:
             run_input={"user_message": request.user_message, "request_id": request.request_id},
             now=utcnow(),
         )
+        request.session_id = sid
         # Step 8: iteration/token controls are enforced in the loop.
-        return request.session_id, admit_revision
+        return sid, admit_revision
 
     def _budget_for_request(self, request: RunRequest) -> int:
         budget = self._applied.token_budget_per_request

@@ -354,6 +354,58 @@ class FileBackend(StorageBackend):
             await asyncio.to_thread(self._atomic_write, path, record.to_json())
             return record
 
+    async def admit_run(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str | None,
+        run_id: str,
+        run_input: dict[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[str, int]:
+        """Atomic admission under ONE lock hold: ensure the session (file
+        create when absent) and create the run record together."""
+        if not self._ready:
+            raise BackendUnavailableError("file storage not ready")
+        from .model import new_session_id, validate_session_id
+
+        now = now or utcnow()
+        sid = session_id if session_id is not None else new_session_id()
+        if not validate_session_id(sid):
+            raise InvalidSessionId(f"invalid session_id {sid!r} (SES-02)")
+        directory = self._session_dir(agent_name, principal_id)
+        session_path = directory / f"{sid}.json"
+        run_path = directory / f"{sid}.run-{run_id}.json"
+        async with self._lock:
+            session = await asyncio.to_thread(
+                self._read_record, session_path, SessionRecord.from_json
+            )
+            if session is None:
+                session = SessionRecord(
+                    agent_name=agent_name,
+                    principal_id=principal_id,
+                    session_id=sid,
+                    created_at=now,
+                    updated_at=now,
+                )
+                await asyncio.to_thread(self._atomic_write, session_path, session.to_json())
+            run = await asyncio.to_thread(self._read_record, run_path, RunRecord.from_json)
+            if run is not None:
+                return sid, session.revision
+            self._enforce_run_capacity(directory, sid)
+            record = RunRecord(
+                agent_name=agent_name,
+                principal_id=principal_id,
+                session_id=sid,
+                run_id=run_id,
+                input=dict(run_input),
+                created_at=now,
+                updated_at=now,
+            )
+            await asyncio.to_thread(self._atomic_write, run_path, record.to_json())
+            return sid, session.revision
+
     async def get_run(
         self, *, agent_name: str, principal_id: str, session_id: str, run_id: str
     ) -> RunRecord | None:

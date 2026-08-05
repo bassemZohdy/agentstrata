@@ -112,6 +112,10 @@ class FakeRedis:
         zset = self._sorted_sets.get(zkey, {})
         return [m for m, _ in sorted(zset.items(), key=lambda kv: kv[1])]
 
+    def _zrangebyscore(self, zkey: str, min_: float, max_: float) -> list[str]:
+        zset = self._sorted_sets.get(zkey, {})
+        return [m for m, s in sorted(zset.items(), key=lambda kv: kv[1]) if min_ <= s <= max_]
+
     def _zrem(self, zkey: str, member: str) -> int:
         zset = self._sorted_sets.get(zkey)
         if zset and member in zset:
@@ -208,16 +212,23 @@ def _t_mutate_session(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
 
 
 def _t_delete_session(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
-    sess_key, run_pat, idem_pat, fence_key, fcount_key, idx_key = keys
+    sess_key, runidx, idemidx, fence_key, fcount_key, idx_key = keys
+    sid = args[0]
     if fake._store.get(sess_key) is None:
         return 0
-    for k in fake._keys(run_pat):
+    run_members = fake._zrange(runidx)
+    idem_members = fake._zrange(idemidx)
+    for k in run_members:
         r = fake._get_decoded(k)
         if r and r.get("status") not in ("succeeded", "failed", "cancelled"):
             return f"busy:{r.get('run_id')}"
-    for k in [sess_key, *fake._keys(run_pat), *fake._keys(idem_pat), fence_key, fcount_key]:
+    for k in [sess_key, *run_members, *idem_members, fence_key, fcount_key]:
         fake._put(k, None)
-    fake._zrem(idx_key, args[0])
+    for k in run_members:
+        fake._zrem(runidx, k)
+    for k in idem_members:
+        fake._zrem(idemidx, k)
+    fake._zrem(idx_key, sid)
     return 1
 
 
@@ -227,17 +238,24 @@ def _t_list_sessions(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
 
 
 def _t_create_run(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
-    sess_key, run_key = keys
-    payload, cap = args[0], _i(args[1])
+    sess_key, run_key, runidx = keys
+    payload, cap, updated_ts = args[0], _i(args[1]), _i(args[2])
     if fake._store.get(sess_key) is None:
         return f"missing:{sess_key}"
     if fake._store.get(run_key) is not None:
         return "ok"
-    pattern = run_key.rsplit("run:", 1)[0] + "run:*"
-    existing = fake._keys(pattern)
+
+    def session_runs():
+        members = fake._zrange(runidx)
+        live = [k for k in members if fake._store.get(k) is not None]
+        for k in set(members) - set(live):
+            fake._zrem(runidx, k)
+        return live
+
+    existing = session_runs()
     terminal = sorted(
         [
-            (k, r.get("updated_at", ""))
+            (k, _i((r or {}).get("updated_at_ts") or 0))
             for k in existing
             if (r := fake._get_decoded(k)) is not None
             and r.get("status") in ("succeeded", "failed", "cancelled")
@@ -246,33 +264,109 @@ def _t_create_run(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
     )
     while len(existing) >= cap and terminal:
         fake._put(terminal[0][0], None)
+        fake._zrem(runidx, terminal[0][0])
         terminal.pop(0)
-        existing = fake._keys(pattern)
+        existing = session_runs()
     if len(existing) >= cap:
         return "capacity:maxRunsPerSession"
     fake._set_json(run_key, _j(payload))
+    fake._zadd(runidx, float(updated_ts), run_key)
     return "ok"
 
 
 def _t_create_idem(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
-    (idem_key,) = keys
+    idem_key, idemidx = keys
     payload, cap, ttl = args[0], _i(args[1]), _i(args[2])
+    ts = _i(args[3]) if len(args) > 3 else 0
+    expires_ts = _i(args[4]) if len(args) > 4 else ts + ttl
     if fake._store.get(idem_key) is not None:
         return "ok"
-    pattern = idem_key.rsplit("idem:", 1)[0] + "idem:*"
-    if len(fake._keys(pattern)) >= cap:
+    count = 0
+    for k in fake._zrange(idemidx):
+        if fake._store.get(k) is not None:
+            count += 1
+        else:
+            fake._zrem(idemidx, k)
+    if count >= cap:
         return "capacity:maxIdempotencyRecordsPerSession"
-    ts = _i(args[3]) if len(args) > 3 else 0
     if ttl > 0 and ts > 0:
         fake._set_json(idem_key, _j(payload), expires_at=datetime.fromtimestamp(ts + ttl, tz=UTC))
     else:
         fake._set_json(idem_key, _j(payload))
+    fake._zadd(idemidx, float(expires_ts), idem_key)
     return "ok"
 
 
 def _t_list_runs(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
-    (pattern,) = keys
-    return fake._keys(pattern)
+    (runidx,) = keys
+    return fake._zrange(runidx)
+
+
+def _t_admit_run(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
+    """ADMIT_RUN twin: ensure the session (creating it when absent) and
+    create the run record in one call — no orphan window."""
+    sess_key, idx_key, run_key, runidx = keys
+    payload, run_payload = args[0], args[1]
+    max_sessions, ttl = _i(args[2]), _i(args[3])
+    now_ts, run_cap = _i(args[4]), _i(args[5])
+    updated_ts, sid = _i(args[6]), args[7]
+    sess = fake._get_decoded(sess_key)
+    revision = 1
+    if sess is None:
+        fake._zremrangebyscore(idx_key, float("-inf"), float(now_ts - ttl))
+        if fake._zcard(idx_key) >= max_sessions:
+            return "capacity:maxSessions"
+        if ttl > 0:
+            fake._set_json(
+                sess_key,
+                _j(payload),
+                expires_at=datetime.fromtimestamp(now_ts + ttl, tz=UTC),
+            )
+        else:
+            fake._set_json(sess_key, _j(payload))
+        fake._zadd(idx_key, float(now_ts), sid)
+    else:
+        revision = _i(sess.get("revision") or 1)
+    if fake._store.get(run_key) is not None:
+        return f"ok:{revision}"
+    prefix_cap = run_cap
+
+    def session_runs():
+        members = fake._zrange(runidx)
+        live = [k for k in members if fake._store.get(k) is not None]
+        for k in set(members) - set(live):
+            fake._zrem(runidx, k)
+        return live
+
+    existing = session_runs()
+    terminal = sorted(
+        [
+            (k, _i((r or {}).get("updated_at_ts") or 0))
+            for k in existing
+            if (r := fake._get_decoded(k)) is not None
+            and r.get("status") in ("succeeded", "failed", "cancelled")
+        ],
+        key=lambda kv: kv[1],
+    )
+    while len(existing) >= prefix_cap and terminal:
+        fake._put(terminal[0][0], None)
+        fake._zrem(runidx, terminal[0][0])
+        terminal.pop(0)
+        existing = session_runs()
+    if len(existing) >= prefix_cap:
+        return "capacity:maxRunsPerSession"
+    fake._set_json(run_key, _j(run_payload))
+    fake._zadd(runidx, float(updated_ts), run_key)
+    return f"ok:{revision}"
+
+
+def _t_expire_idem(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
+    idem_key, idemidx = keys
+    if fake._store.get(idem_key) is None:
+        return 0
+    fake._put(idem_key, None)
+    fake._zrem(idemidx, idem_key)
+    return 1
 
 
 def _t_acquire_fence(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
@@ -331,14 +425,24 @@ def _t_truncate_session(fake: FakeRedis, keys: list[str], args: list[str]) -> An
 
 def _t_sweep_runs(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
     now_ts, ttl = _i(args[0]), _i(args[1])
+    cutoff = now_ts - ttl
     deleted = 0
-    for k in fake._keys("agentbase:*:run:*"):
-        r = fake._get_decoded(k)
-        if r and r.get("status") in ("succeeded", "failed", "cancelled"):
-            updated = _i(r.get("updated_at_ts") or r.get("updated_at") or 0)
-            if now_ts - updated > ttl:
-                fake._put(k, None)
-                deleted += 1
+    for runidx in list(fake._sorted_sets):
+        if not runidx.startswith("agentbase:") or ":runidx:" not in runidx:
+            continue
+        for k in fake._zrangebyscore(runidx, float("-inf"), float(cutoff)):
+            r = fake._get_decoded(k)
+            if r:
+                terminal = r.get("status") in ("succeeded", "failed", "cancelled")
+                updated = _i(r.get("updated_at_ts") or 0)
+                if terminal and updated <= cutoff:
+                    fake._put(k, None)
+                    fake._zrem(runidx, k)
+                    deleted += 1
+                elif not terminal and updated > 0:
+                    fake._zadd(runidx, float(updated), k)
+            else:
+                fake._zrem(runidx, k)
     return deleted
 
 
@@ -387,8 +491,10 @@ _TWINS: dict[str, Callable[[FakeRedis, list[str], list[str]], Any]] = {
     rb.DELETE_SESSION: _t_delete_session,
     rb.LIST_SESSIONS: _t_list_sessions,
     rb.CREATE_RUN: _t_create_run,
+    rb.ADMIT_RUN: _t_admit_run,
     rb.CREATE_IDEM: _t_create_idem,
     rb.LIST_RUNS: _t_list_runs,
+    rb.EXPIRE_IDEM: _t_expire_idem,
     rb.ACQUIRE_FENCE: _t_acquire_fence,
     rb.RENEW_FENCE: _t_renew_fence,
     rb.RELEASE_FENCE: _t_release_fence,

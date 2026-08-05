@@ -181,6 +181,26 @@ class StorageBackend(ABC):
         terminal records first (SES-07), else CapacityError."""
 
     @abstractmethod
+    async def admit_run(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str | None,
+        run_id: str,
+        run_input: dict[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[str, int]:
+        """Atomic admission (ENG-03 step 7): ensure the session exists
+        (minting an id when ``session_id`` is None, enforcing maxSessions)
+        and create the run record (enforcing maxRunsPerSession) as ONE
+        atomic step — a crash between the two cannot orphan a session.
+        Returns ``(session_id, admit_revision)``; the revision is the
+        session's revision at admission (used to truncate history on
+        failure). Idempotent on ``run_id``: an existing run record returns
+        the same session + current revision."""
+
+    @abstractmethod
     async def get_run(
         self, *, agent_name: str, principal_id: str, session_id: str, run_id: str
     ) -> RunRecord | None: ...

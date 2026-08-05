@@ -14,6 +14,7 @@ import pytest
 
 from app.storage.contract import (
     CapacityError,
+    InvalidSessionId,
     RevisionConflict,
     SessionBusy,
     SessionNotFound,
@@ -227,6 +228,131 @@ class TestDelete:
             agent_name=AGENT, principal_id=PRINCIPAL, session_id="nope"
         )
         assert not result
+
+
+class TestAdmitRun:
+    """ENG-03 step 7: atomic session-ensure + run-create admission."""
+
+    async def test_admit_run_creates_session_and_run(self, backend):
+        await _open(backend)
+        sid, revision = await backend.admit_run(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id=None,
+            run_id="r1",
+            run_input={"prompt": "p"},
+        )
+        assert sid and revision == 1
+        session = await backend.get_session(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id=sid
+        )
+        assert session is not None and session.revision == 1
+        run = await backend.get_run(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id=sid, run_id="r1"
+        )
+        assert run is not None and run.input == {"prompt": "p"}
+
+    async def test_admit_run_reuses_existing_session(self, backend):
+        await _open(backend)
+        created = await backend.create_session(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid"
+        )
+        await backend.mutate_session(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id="sid",
+            expected_revision=1,
+            events=[{"id": "e1"}],
+        )
+        sid, revision = await backend.admit_run(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id="sid",
+            run_id="r1",
+            run_input={},
+        )
+        assert sid == created.session_id and revision == 2
+        assert (
+            await backend.get_run(
+                agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", run_id="r1"
+            )
+            is not None
+        )
+
+    async def test_admit_run_explicit_session_id_created(self, backend):
+        await _open(backend)
+        sid, revision = await backend.admit_run(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id="explicit",
+            run_id="r1",
+            run_input={},
+        )
+        assert sid == "explicit" and revision == 1
+        assert (
+            await backend.get_session(
+                agent_name=AGENT, principal_id=PRINCIPAL, session_id="explicit"
+            )
+            is not None
+        )
+
+    async def test_admit_run_idempotent_same_run(self, backend):
+        await _open(backend)
+        sid1, rev1 = await backend.admit_run(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id=None,
+            run_id="r1",
+            run_input={"prompt": "p"},
+        )
+        sid2, rev2 = await backend.admit_run(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id=sid1,
+            run_id="r1",
+            run_input={"prompt": "p"},
+        )
+        assert sid2 == sid1 and rev2 == rev1
+        runs = await backend.list_runs(agent_name=AGENT, principal_id=PRINCIPAL, session_id=sid1)
+        assert len(runs) == 1
+
+    async def test_admit_run_run_capacity(self, backend, settings):
+        await _open(backend)
+        await backend.admit_run(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id=None,
+            run_id="r1",
+            run_input={},
+        )
+        sid = (await backend.list_sessions(agent_name=AGENT, principal_id=PRINCIPAL))[0]
+        for i in range(settings.max_runs_per_session - 1):
+            await backend.create_run(
+                agent_name=AGENT,
+                principal_id=PRINCIPAL,
+                session_id=sid.session_id,
+                run_id=f"fill-{i}",
+                run_input={},
+            )
+        with pytest.raises(CapacityError):
+            await backend.admit_run(
+                agent_name=AGENT,
+                principal_id=PRINCIPAL,
+                session_id=sid.session_id,
+                run_id="overflow",
+                run_input={},
+            )
+
+    async def test_admit_run_invalid_session_id(self, backend):
+        await _open(backend)
+        with pytest.raises(InvalidSessionId):
+            await backend.admit_run(
+                agent_name=AGENT,
+                principal_id=PRINCIPAL,
+                session_id="BAD ID!",
+                run_id="r1",
+                run_input={},
+            )
 
 
 class TestRuns:

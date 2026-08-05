@@ -4,6 +4,43 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### Deferred-review items completed (TODO.md -> CHANGELOG.md, round 2)
+
+- **Redis `KEYS` in Lua (DONE):** every blocking `KEYS` scan is gone from
+  the Lua scripts. Runs and idempotency records live in per-session ZSET
+  indexes (`agentbase:{tag}:runidx:{agent}:{sid}` / `...:idemidx:...`,
+  member = full key, score = epoch timestamp), so capacity checks, the
+  terminal-run prune, the delete-session cascade, and `list_runs` are
+  exact ZRANGE/ZCARD ops; the retention sweep enumerates the indexes with
+  a non-blocking SCAN (`redis.replicate_commands()` makes the
+  DEL/ZREM/ZADD writes legal after the random SCAN). `expire_idempotency`
+  is now an atomic DEL+ZREM script. Verified 137/137 on the real Redis 7
+  matrix (Lua actually executes there, so the SCAN-in-script path is
+  proven).
+- **Atomic admission (`admit_run`, DONE):** the storage contract gained
+  `StorageBackend.admit_run` — ensure-session (minting when absent,
+  enforcing maxSessions) + create-run (enforcing maxRunsPerSession) as
+  ONE atomic step returning `(session_id, admit_revision)`; idempotent on
+  `run_id`. Implementations: redis = single `ADMIT_RUN` Lua script,
+  postgres = single transaction, memory/file = single lock hold. The
+  runner's `_admit` now calls it (budget check moved before, so a
+  budget-exceeded admission writes nothing). 24 shared `TestAdmitRun`
+  contract tests pass on the substitutes AND the real Redis 7 + Postgres
+  16 matrix (161/161).
+- **Pre-admission cancellation residual (DONE via atomic admission):** a
+  cancel before `_admit` returned previously left an orphaned session
+  until TTL (the run record didn't exist yet). With `admit_run` the
+  session and run record appear together: a mid-admission cancel either
+  finds the run record (terminal `cancelled` commit) or leaves nothing.
+  `_commit_failure` still suppresses `SessionNotFound` for the
+  pre-record window.
+- **TODO.md cleanup round 2:** the last three deferred review items are
+  now DONE records; TODO.md's only remaining `[ ]` items are the
+  product-name human decision and the explicitly-deferred scope
+  (WebSocket / CRD / metrics).
+
+
+
 ### Review-item cleanup (TODO.md -> CHANGELOG.md)
 
 - **Real-backend CI matrix (ACC-01 deviation, DONE):** the

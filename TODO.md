@@ -20,11 +20,18 @@ Found by a read-only review pass over the whole project. The critical/high items
 and most medium items are already fixed (see CHANGELOG.md); what remains is
 deferred (low priority or needs a concrete scale/deployment trigger).
 
-### Medium — correctness & robustness (deferred)
+### Medium — correctness & robustness
 
-- [ ] **Redis `KEYS` in Lua** — deferred (storage design change; the hashed
-      keyspace is bounded by the configured session/run/idempotency caps;
-      revisit with a concrete scale requirement). (`app/storage/redis_backend.py`)
+- [x] **Redis `KEYS` in Lua** — DONE: every blocking `KEYS` scan is gone
+      from the Lua scripts. Runs and idempotency records now live in
+      per-session ZSET indexes (`agentbase:{tag}:runidx:{agent}:{sid}` /
+      `...:idemidx:...`; member = full key, score = timestamp), so
+      capacity, terminal-prune, delete-cascade, and list are exact
+      ZRANGE/ZCARD ops; the retention sweep enumerates the indexes with a
+      non-blocking SCAN (`redis.replicate_commands()` makes the
+      DEL/ZREM/ZADD writes legal after the random SCAN). Verified
+      137/137 on the real Redis 7 matrix. (`app/storage/redis_backend.py`,
+      `app/storage/fakes.py`)
 - [x] **Postgres `mutate_session` read-then-CAS TOCTOU** — DONE: the
       read-merge-CAS is now a bounded retry (up to 3 attempts) that
       re-reads the fresh revision and re-applies the delta only when the
@@ -32,15 +39,22 @@ deferred (low priority or needs a concrete scale/deployment trigger).
       raises immediately); the race is exercised by
       `TestPostgresCasRetry::test_cas_race_retries_and_commits` against
       the substitute AND the real matrix. (`app/storage/postgres_backend.py`)
-- [ ] **Pre-admission cancellation loses the run record** — deferred: a cancel
-      before `_admit` returns has no run record yet; `_commit_failure` already
-      suppresses `SessionNotFound`, and the storage sweep reconciles
-      nonterminal runs. Residual: an orphaned session until TTL (bounded).
-      (`app/engine/runner.py:114,175`)
-- [ ] **Non-atomic admission** — deferred: session creation + run-record
-      creation are two steps; a `create_run` failure orphans the session until
-      TTL. Wrapping as one transaction across backends is a storage-contract
-      change; revisit with the real-backend matrix. (`app/engine/runner.py::_admit`)
+- [x] **Pre-admission cancellation loses the run record** — DONE via atomic
+      admission: the session and the run record now appear as ONE storage
+      step (`admit_run`), so a cancel mid-admission either finds the run
+      record (terminal `cancelled` commit) or leaves nothing at all — the
+      orphaned-session-until-TTL residual is closed. `_commit_failure`
+      still suppresses `SessionNotFound` for the pre-record window.
+      (`app/engine/runner.py::_admit`)
+- [x] **Non-atomic admission** — DONE: the storage contract gained
+      `StorageBackend.admit_run` (ensure-session + create-run in one atomic
+      step, returning `(session_id, admit_revision)`) on all four backends:
+      redis via ONE Lua script (`ADMIT_RUN`), postgres via one transaction,
+      memory/file via a single lock hold. The runner's `_admit` uses it;
+      24 shared contract tests (`TestAdmitRun`) pass on the substitutes AND
+      the real Redis 7 + Postgres 16 matrix. (`app/storage/contract.py`,
+      `app/storage/{redis_backend,postgres_backend,memory,file_backend}.py`,
+      `app/engine/runner.py`, `tests/test_storage/test_contract.py`)
 - [x] **Live-reload no-op on `server.maxConcurrentRequests` /
       `server.rateLimit`** — DONE: the live-snapshot apply branch now
       re-applies both to the shared objects — `RunSlotGate.set_limit` and

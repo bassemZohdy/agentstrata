@@ -25,6 +25,7 @@ from .contract import (
     SessionBusy,
     SessionNotFound,
     StorageBackend,
+    StorageError,
     StorageSettings,
 )
 from .model import (
@@ -148,6 +149,16 @@ class RedisBackend(StorageBackend):
     def _idx(self, agent: str, tag: str) -> str:
         return _k(tag, "idx", agent)
 
+    def _run_idx(self, agent: str, tag: str, sid: str) -> str:
+        # Per-session run index: member = the full run key, score =
+        # updated_at epoch seconds. Capacity/prune/delete/list are ZRANGE/
+        # ZCARD ops (no blocking KEYS scan); the retention sweep enumerates
+        # the index keys with a non-blocking SCAN.
+        return _k(tag, "runidx", agent, sid)
+
+    def _idem_idx(self, agent: str, tag: str, sid: str) -> str:
+        return _k(tag, "idemidx", agent, sid)
+
     def _fence(self, agent: str, tag: str, sid: str) -> str:
         return _k(tag, "fence", agent, sid)
 
@@ -267,13 +278,17 @@ class RedisBackend(StorageBackend):
             DELETE_SESSION,
             [
                 self._sess(agent_name, tag, session_id),
-                self._run(agent_name, tag, session_id, "*"),
-                self._idem(agent_name, tag, session_id, "*"),
+                self._run_idx(agent_name, tag, session_id),
+                self._idem_idx(agent_name, tag, session_id),
                 self._fence(agent_name, tag, session_id),
                 self._fcount(agent_name, tag, session_id),
                 self._idx(agent_name, tag),
             ],
-            [session_id],
+            [
+                session_id,
+                self._run(agent_name, tag, session_id, ""),
+                self._idem(agent_name, tag, session_id, ""),
+            ],
         )
         if isinstance(result, bytes):
             result = result.decode("utf-8", errors="replace")
@@ -326,8 +341,13 @@ class RedisBackend(StorageBackend):
             [
                 self._sess(agent_name, tag, session_id),
                 self._run(agent_name, tag, session_id, run_id),
+                self._run_idx(agent_name, tag, session_id),
             ],
-            [self._run_json(record), str(self._settings.max_runs_per_session)],
+            [
+                self._run_json(record),
+                str(self._settings.max_runs_per_session),
+                str(_to_int(now.timestamp())),
+            ],
         )
         if isinstance(result, bytes):
             result = result.decode("utf-8", errors="replace")
@@ -338,6 +358,69 @@ class RedisBackend(StorageBackend):
         if isinstance(result, str) and result.startswith("capacity:"):
             raise CapacityError(result)
         return record
+
+    async def admit_run(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str | None,
+        run_id: str,
+        run_input: dict[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[str, int]:
+        """Atomic admission: ensure the session (minting when None) and
+        create the run record in ONE Lua script (no orphan window)."""
+        from .model import new_session_id, validate_session_id
+
+        now = now or utcnow()
+        tag = self._tag(principal_id)
+        sid = session_id if session_id is not None else new_session_id()
+        if not validate_session_id(sid):
+            raise InvalidSessionId(f"invalid session_id {sid!r} (SES-02)")
+        session = SessionRecord(
+            agent_name=agent_name,
+            principal_id=principal_id,
+            session_id=sid,
+            created_at=now,
+            updated_at=now,
+        )
+        run = RunRecord(
+            agent_name=agent_name,
+            principal_id=principal_id,
+            session_id=sid,
+            run_id=run_id,
+            input=dict(run_input),
+            created_at=now,
+            updated_at=now,
+        )
+        result = await self._eval(
+            ADMIT_RUN,
+            [
+                self._sess(agent_name, tag, sid),
+                self._idx(agent_name, tag),
+                self._run(agent_name, tag, sid, run_id),
+                self._run_idx(agent_name, tag, sid),
+            ],
+            [
+                session.to_json(),
+                self._run_json(run),
+                str(self._settings.max_sessions),
+                str(self._settings.session_ttl_seconds),
+                str(_to_int(now.timestamp())),
+                str(self._settings.max_runs_per_session),
+                str(_to_int(now.timestamp())),
+                sid,
+            ],
+        )
+        if isinstance(result, bytes):
+            result = result.decode("utf-8", errors="replace")
+        if isinstance(result, str) and result.startswith("capacity:"):
+            raise CapacityError(result)
+        if not (isinstance(result, str) and result.startswith("ok:")):
+            raise StorageError(f"admit_run failed: {result!r}")
+        revision = _to_int(result.split(":", 1)[1], 1) or 1
+        return sid, revision
 
     async def get_run(
         self, *, agent_name: str, principal_id: str, session_id: str, run_id: str
@@ -395,7 +478,11 @@ class RedisBackend(StorageBackend):
         self, *, agent_name: str, principal_id: str, session_id: str
     ) -> list[RunRecord]:
         tag = self._tag(principal_id)
-        keys = await self._eval(LIST_RUNS, [self._run(agent_name, tag, session_id, "*")], [])
+        keys = await self._eval(
+            LIST_RUNS,
+            [self._run_idx(agent_name, tag, session_id)],
+            [],
+        )
         out: list[RunRecord] = []
         for k in keys:
             raw = await self._client.get(k)
@@ -430,12 +517,16 @@ class RedisBackend(StorageBackend):
         )
         result = await self._eval(
             CREATE_IDEM,
-            [self._idem(agent_name, tag, session_id, key)],
+            [
+                self._idem(agent_name, tag, session_id, key),
+                self._idem_idx(agent_name, tag, session_id),
+            ],
             [
                 record.to_json(),
                 str(self._settings.max_idempotency_records_per_session),
                 str(ttl_seconds),
                 str(_to_int(now.timestamp())),
+                str(_to_int((record.expires_at or now).timestamp())),
             ],
         )
         if isinstance(result, bytes):
@@ -484,10 +575,16 @@ class RedisBackend(StorageBackend):
     async def expire_idempotency(
         self, *, agent_name: str, principal_id: str, session_id: str, key: str
     ) -> bool:
-        n = await self._client.delete(
-            self._idem(agent_name, self._tag(principal_id), session_id, key)
+        tag = self._tag(principal_id)
+        n = await self._eval(
+            EXPIRE_IDEM,
+            [
+                self._idem(agent_name, tag, session_id, key),
+                self._idem_idx(agent_name, tag, session_id),
+            ],
+            [],
         )
-        return n > 0
+        return _to_int(n) > 0
 
     # -- retention & capacity ---------------------------------------------------------------
 
@@ -833,17 +930,76 @@ end
 return cjson.encode(rec)
 """
 
+ADMIT_RUN = """
+-- Atomic admission (ENG-03 step 7): ensure the session (creating it when
+-- absent, enforcing maxSessions) and create the run record in ONE script,
+-- so a crash between the two steps cannot orphan a session.
+-- KEYS: sess_key, sess_idx, run_key, runidx_key
+-- ARGV: session_payload, run_payload, max_sessions, session_ttl, now,
+--       run_cap, updated_ts, sid
+local sess = redis.call('GET', KEYS[1])
+local revision = 1
+if not sess then
+  local now = tonumber(ARGV[5])
+  local cutoff = now - tonumber(ARGV[4])
+  redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', cutoff)
+  if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[3]) then
+    return 'capacity:maxSessions'
+  end
+  redis.call('SET', KEYS[1], ARGV[1])
+  redis.call('ZADD', KEYS[2], now, ARGV[8])
+  if tonumber(ARGV[4]) > 0 then
+    redis.call('PEXPIREAT', KEYS[1], (now + tonumber(ARGV[4])) * 1000)
+  end
+else
+  revision = cjson.decode(sess).revision
+end
+if redis.call('EXISTS', KEYS[3]) == 1 then return 'ok:' .. tostring(revision) end
+local cap = tonumber(ARGV[6])
+local function session_runs()
+  local out = {}
+  for _, k in ipairs(redis.call('ZRANGE', KEYS[4], 0, -1)) do
+    if redis.call('GET', k) then table.insert(out, k) else redis.call('ZREM', KEYS[4], k) end
+  end
+  return out
+end
+local existing = session_runs()
+local terminal = {}
+for _, k in ipairs(existing) do
+  local r = cjson.decode(redis.call('GET', k))
+  if r.status == 'succeeded' or r.status == 'failed' or r.status == 'cancelled' then
+    table.insert(terminal, {k, tonumber(r.updated_at_ts or 0)})
+  end
+end
+table.sort(terminal, function(a, b) return a[2] < b[2] end)
+while #existing >= cap and #terminal > 0 do
+  redis.call('DEL', terminal[1][1])
+  redis.call('ZREM', KEYS[4], terminal[1][1])
+  table.remove(terminal, 1)
+  existing = session_runs()
+end
+if #existing >= cap then return 'capacity:maxRunsPerSession' end
+redis.call('SET', KEYS[3], ARGV[2])
+redis.call('ZADD', KEYS[4], tonumber(ARGV[7]), KEYS[3])
+return 'ok:' .. tostring(revision)
+"""
+
 DELETE_SESSION = """
 if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
-for _, k in ipairs(redis.call('KEYS', KEYS[2])) do
-  local r = cjson.decode(redis.call('GET', k))
-  if r.status ~= 'succeeded' and r.status ~= 'failed' and r.status ~= 'cancelled' then
-    return 'busy:' .. r.run_id
+for _, k in ipairs(redis.call('ZRANGE', KEYS[2], 0, -1)) do
+  local raw = redis.call('GET', k)
+  if raw then
+    local r = cjson.decode(raw)
+    if r.status ~= 'succeeded' and r.status ~= 'failed' and r.status ~= 'cancelled' then
+      return 'busy:' .. r.run_id
+    end
   end
 end
 redis.call('DEL', KEYS[1])
-for _, k in ipairs(redis.call('KEYS', KEYS[2])) do redis.call('DEL', k) end
-for _, k in ipairs(redis.call('KEYS', KEYS[3])) do redis.call('DEL', k) end
+for _, k in ipairs(redis.call('ZRANGE', KEYS[2], 0, -1)) do redis.call('DEL', k) end
+for _, k in ipairs(redis.call('ZRANGE', KEYS[3], 0, -1)) do redis.call('DEL', k) end
+for _, k in ipairs(redis.call('ZRANGE', KEYS[2], 0, -1)) do redis.call('ZREM', KEYS[2], k) end
+for _, k in ipairs(redis.call('ZRANGE', KEYS[3], 0, -1)) do redis.call('ZREM', KEYS[3], k) end
 redis.call('DEL', KEYS[4], KEYS[5])
 redis.call('ZREM', KEYS[6], ARGV[1])
 return 1
@@ -857,42 +1013,58 @@ CREATE_RUN = """
 if redis.call('EXISTS', KEYS[1]) == 0 then return 'missing:' .. KEYS[1] end
 if redis.call('EXISTS', KEYS[2]) == 1 then return 'ok' end
 local cap = tonumber(ARGV[2])
-local pattern = string.gsub(KEYS[2], ':[^:]*$', ':*')
-local existing = redis.call('KEYS', pattern)
+local function session_runs()
+  local out = {}
+  for _, k in ipairs(redis.call('ZRANGE', KEYS[3], 0, -1)) do
+    if redis.call('GET', k) then table.insert(out, k) else redis.call('ZREM', KEYS[3], k) end
+  end
+  return out
+end
+local existing = session_runs()
 local terminal = {}
 for _, k in ipairs(existing) do
   local r = cjson.decode(redis.call('GET', k))
   if r.status == 'succeeded' or r.status == 'failed' or r.status == 'cancelled' then
-    table.insert(terminal, {k, r.updated_at})
+    table.insert(terminal, {k, tonumber(r.updated_at_ts or 0)})
   end
 end
 table.sort(terminal, function(a, b) return a[2] < b[2] end)
 while #existing >= cap and #terminal > 0 do
   redis.call('DEL', terminal[1][1])
+  redis.call('ZREM', KEYS[3], terminal[1][1])
   table.remove(terminal, 1)
-  existing = redis.call('KEYS', pattern)
+  existing = session_runs()
 end
 if #existing >= cap then return 'capacity:maxRunsPerSession' end
 redis.call('SET', KEYS[2], ARGV[1])
+redis.call('ZADD', KEYS[3], tonumber(ARGV[3]), KEYS[2])
 return 'ok'
 """
 
 CREATE_IDEM = """
 if redis.call('EXISTS', KEYS[1]) == 1 then return 'ok' end
--- replace the LAST key segment (the idempotency key) with '*' so the
--- capacity count spans the session's idempotency keyspace
-local pattern = string.gsub(KEYS[1], ':[^:]*$', ':*')
-local count = #redis.call('KEYS', pattern)
+local count = 0
+for _, k in ipairs(redis.call('ZRANGE', KEYS[2], 0, -1)) do
+  if redis.call('GET', k) then count = count + 1 else redis.call('ZREM', KEYS[2], k) end
+end
 if count >= tonumber(ARGV[2]) then return 'capacity:maxIdempotencyRecordsPerSession' end
 redis.call('SET', KEYS[1], ARGV[1])
+redis.call('ZADD', KEYS[2], tonumber(ARGV[5]), KEYS[1])
 if tonumber(ARGV[3]) > 0 then
   redis.call('PEXPIREAT', KEYS[1], (tonumber(ARGV[4]) + tonumber(ARGV[3])) * 1000)
 end
 return 'ok'
 """
 
+EXPIRE_IDEM = """
+if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], KEYS[1])
+return 1
+"""
+
 LIST_RUNS = """
-return redis.call('KEYS', KEYS[1])
+return redis.call('ZRANGE', KEYS[1], 0, -1)
 """
 
 ACQUIRE_FENCE = """
@@ -931,22 +1103,42 @@ return 1
 
 
 SWEEP_RUNS = """
+-- Non-blocking retention sweep: enumerate the per-session run indexes
+-- with SCAN (no blocking KEYS), then expire each index's stale terminal
+-- runs by score. SCAN is a random command, so replicate_commands() is
+-- required before the DEL/ZREM/ZADD writes.
+redis.replicate_commands()
 local now = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
+local cutoff = now - ttl
 local deleted = 0
-for _, k in ipairs(redis.call('KEYS', 'agentbase:*:run:*')) do
-  local raw = redis.call('GET', k)
-  if raw then
-    local r = cjson.decode(raw)
-    local terminal = r.status == 'succeeded' or r.status == 'failed' or r.status == 'cancelled'
-    local updated = tonumber(r.updated_at_ts or 0)
-    if updated == nil then updated = 0 end
-    if terminal and (now - updated) > ttl then
-      redis.call('DEL', k)
-      deleted = deleted + 1
+local cursor = '0'
+repeat
+  local scan = redis.call('SCAN', cursor, 'MATCH', 'agentbase:*:runidx:*', 'COUNT', 200)
+  cursor = scan[1]
+  for _, runidx in ipairs(scan[2]) do
+    for _, k in ipairs(redis.call('ZRANGEBYSCORE', runidx, '-inf', cutoff)) do
+      local raw = redis.call('GET', k)
+      if raw then
+        local r = cjson.decode(raw)
+        local terminal = r.status == 'succeeded' or r.status == 'failed' or r.status == 'cancelled'
+        local updated = tonumber(r.updated_at_ts or 0)
+        if updated == nil then updated = 0 end
+        if terminal and updated <= cutoff then
+          redis.call('DEL', k)
+          redis.call('ZREM', runidx, k)
+          deleted = deleted + 1
+        elseif not terminal and updated > 0 then
+          -- self-heal: update_run advanced the record without reindexing
+          redis.call('ZADD', runidx, updated, k)
+        end
+      else
+        -- the key is gone (session deleted): drop the stale index member
+        redis.call('ZREM', runidx, k)
+      end
     end
   end
-end
+until cursor == '0'
 return deleted
 """
 

@@ -578,6 +578,75 @@ class PostgresBackend(StorageBackend):
             )
         return record
 
+    async def admit_run(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str | None,
+        run_id: str,
+        run_input: dict[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[str, int]:
+        """Atomic admission in ONE transaction: ensure the session (insert
+        when absent, enforcing maxSessions) and create the run record
+        (enforcing maxRunsPerSession) — no orphan window between the two."""
+        from .model import new_session_id, validate_session_id
+
+        now = now or utcnow()
+        sid = session_id if session_id is not None else new_session_id()
+        if not validate_session_id(sid):
+            raise InvalidSessionId(f"invalid session_id {sid!r} (SES-02)")
+        record = RunRecord(
+            agent_name=agent_name,
+            principal_id=principal_id,
+            session_id=sid,
+            run_id=run_id,
+            input=dict(run_input),
+            created_at=now,
+            updated_at=now,
+        )
+        async with self._db.transaction():
+            await self._purge_expired_sessions(now)
+            rows = await self._db.query(SQL["get_session"], (agent_name, principal_id, sid))
+            session = self._parse_row(SessionRecord.from_json, rows)
+            if session is None:
+                count = await self._db.query(SQL["count_sessions"], (agent_name, principal_id))
+                if count and count[0]["n"] >= self._settings.max_sessions:
+                    raise CapacityError("maxSessions reached; cannot free capacity")
+                session = SessionRecord(
+                    agent_name=agent_name,
+                    principal_id=principal_id,
+                    session_id=sid,
+                    created_at=now,
+                    updated_at=now,
+                )
+                await self._db.execute(
+                    SQL["insert_session"],
+                    (agent_name, principal_id, sid, 1, session.to_json(), now, now),
+                )
+            revision = session.revision
+            rows = await self._db.query(SQL["get_run"], (agent_name, principal_id, sid, run_id))
+            if self._parse_row(RunRecord.from_json, rows) is not None:
+                return sid, revision
+            count = await self._db.query(SQL["count_runs"], (agent_name, principal_id, sid))
+            n = count[0]["n"] if count else 0
+            while n >= self._settings.max_runs_per_session:
+                await self._db.execute(
+                    SQL["delete_oldest_terminal_run"],
+                    (agent_name, principal_id, sid),
+                )
+                count = await self._db.query(SQL["count_runs"], (agent_name, principal_id, sid))
+                n2 = count[0]["n"] if count else 0
+                if n2 >= n:
+                    raise CapacityError("maxRunsPerSession reached; cannot free capacity")
+                n = n2
+            await self._db.execute(
+                SQL["insert_run"],
+                (agent_name, principal_id, sid, run_id, record.to_json(), now, now),
+            )
+        return sid, revision
+
     async def get_run(
         self, *, agent_name: str, principal_id: str, session_id: str, run_id: str
     ) -> RunRecord | None:

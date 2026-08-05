@@ -207,6 +207,54 @@ class MemoryBackend(StorageBackend):
             self._runs[rkey] = record
             return record
 
+    async def admit_run(
+        self,
+        *,
+        agent_name: str,
+        principal_id: str,
+        session_id: str | None,
+        run_id: str,
+        run_input: dict[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[str, int]:
+        """Atomic admission under ONE lock hold: ensure the session and
+        create the run record — no window where either exists alone."""
+        if self._closed:
+            raise BackendUnavailableError("memory storage closed")
+        from .model import new_session_id, validate_session_id
+
+        now = now or utcnow()
+        sid = session_id if session_id is not None else new_session_id()
+        if not validate_session_id(sid):
+            raise InvalidSessionId(f"invalid session_id {sid!r} (SES-02)")
+        skey = (agent_name, principal_id, sid)
+        rkey = (agent_name, principal_id, sid, run_id)
+        async with self._lock:
+            session = self._sessions.get(skey)
+            if session is None:
+                session = SessionRecord(
+                    agent_name=agent_name,
+                    principal_id=principal_id,
+                    session_id=sid,
+                    created_at=now,
+                    updated_at=now,
+                )
+                self._sessions[skey] = session
+            if rkey in self._runs:
+                return sid, session.revision
+            self._enforce_run_capacity(skey, now)
+            record = RunRecord(
+                agent_name=agent_name,
+                principal_id=principal_id,
+                session_id=sid,
+                run_id=run_id,
+                input=dict(run_input),
+                created_at=now,
+                updated_at=now,
+            )
+            self._runs[rkey] = record
+            return sid, session.revision
+
     async def get_run(
         self, *, agent_name: str, principal_id: str, session_id: str, run_id: str
     ) -> RunRecord | None:
