@@ -344,6 +344,58 @@ runner and the HTTP surface.
 
 **Exit check:** rebuild classification + redaction tests pass.
 
+## Phase 5 — Extensions (P5, 2026-08 scope decision)
+
+User decision 2026-08-05: implement the three deferred-scope items —
+Prometheus /metrics, a WebSocket API, and a Kubernetes CRD/operator.
+Each lands as its own milestone with its own acceptance criteria and a
+commit; the phase flips CAP-02 reporting to P5 once all three ship.
+
+## Milestone P5-1 — Prometheus /metrics (OBS-05)
+
+- In-process registry (counters/gauges/histograms, text exposition
+  0.0.4, per-metric label-set cap 128) on the Observability facade;
+  instruments recorded by the runner (admit/terminal/tokens/tool calls/
+  active runs), the chat route + rate-limit middleware (denials,
+  output-queue cancellations), and the reload manager (outcomes).
+- Config: `observability.prometheus.{enabled,path}` (default
+  "/metrics"); cross-field validation rejects built-in-route collisions.
+- REQUIREMENTS: OBS-05 rewritten (route is now in scope), §1.4 updated;
+  schemas + traceability regenerated; deployment.md documents scraping.
+
+**Exit check:** registry + route tests pass; a chat run is visible on
+`/metrics`; rate-limit denials recorded; disabled build has no route;
+gates green; commit.
+
+## Milestone P5-2 — WebSocket API (WS-01)
+
+- `server.protocols.websocket` (phase-gated like acp); `/v1/ws` upgrade
+  route with the same auth as the REST surface (token via query or
+  Authorization header).
+- Bidirectional protocol: client `run.start`/`run.cancel`/
+  `approval.decide`/`ping`; server push `run.delta`/`run.done`/
+  `run.cancelled`/`approval.required`/`error`/`pong`. One active run per
+  connection; events identical to the SSE vocabulary.
+- REQUIREMENTS annex WS-01 (protocol + limits); schemas + traceability
+  regenerated; deployment.md documents the endpoint.
+
+**Exit check:** WS tests pass (start/cancel/approve/deny round-trips
+over the mock model); auth enforced; gates green; commit.
+
+## Milestone P5-3 — Kubernetes CRD / operator (K8S-01)
+
+- CRD `agentconfigs.agentstrata.io` (validation schema embedded from the
+  generated config schema); a Python operator watches AgentConfig CRs,
+  reconciles the named ConfigMap the existing watcher consumes +
+  Deployment/Service, writes status (observedGeneration, ready,
+  appliedResourceVersion), and cleans up via ownerReferences.
+- Tests against a fake k8s client (same pattern as the watcher tests);
+  manifests + deployment.md operator section.
+
+**Exit check:** CRD manifest validates; reconcile tests pass
+(create/update/delete + status); gates green; commit.
+
+
 ## Milestone P4-6 — Acceptance (CAP-02)
 
 - Capability flip: `rag` true in `/health`, phase `P4`; earlier

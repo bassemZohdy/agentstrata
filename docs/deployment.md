@@ -186,8 +186,17 @@ generation/hash (REL-04/K8S-07).
 Logs are structured JSON (or text) to stderr with `ts/level/logger/event/msg`
 plus request/run correlation. OpenTelemetry is opt-in via
 `observability.otel.enabled` with standard `OTEL_EXPORTER_OTLP_*` env vars;
-when disabled, no OTel code is imported (zero-cost). No Prometheus `/metrics`
-endpoint is in scope (OTel metrics cover the interim need).
+when disabled, no OTel code is imported (zero-cost). A Prometheus
+`/metrics` endpoint (OBS-05) is available via
+`observability.prometheus.enabled` (default false) at
+`observability.prometheus.path` (default `/metrics`) in the text
+exposition format 0.0.4 — counters for admitted/completed/failed runs,
+model/tool calls, tokens, denials, reloads, and output-queue
+cancellations, an active-runs gauge, and run-latency histograms, all
+low-cardinality. The scrape path is exempt from the replica-local rate
+limiter; the registry is process-local and shared across live reloads.
+Scrape `/metrics` from the same listener (the endpoint is served by the
+app, no sidecar or extra port).
 
 ## Known limitations (operator documentation required)
 

@@ -95,11 +95,14 @@ class AgentRunner:
         token_budget_per_session_remaining: int | None = None,
         mcp: Any | None = None,
         rag: Any | None = None,
+        metrics: Any | None = None,
     ) -> None:
         self._applied = applied
         self._adk_runner = adk_runner
         self._mcp = mcp
         self._rag = rag
+        self._metrics = metrics  # OBS-05: prometheus/OTel instruments (optional)
+        self._run_started: float | None = None
         self._backend = backend
         # The storage namespace must match the ADK Runner's app_name so
         # sessions resolve identically on both sides (SES-09).
@@ -123,10 +126,34 @@ class AgentRunner:
         text_parts: list[str] = []
         transfers: list[dict[str, str]] = []
 
+        # OBS-05: the active-runs gauge spans the whole generator lifetime
+        # (including cancellation/teardown) via the wrapper's finally.
+        try:
+            async for event in self._execute_inner(
+                request, run_id, state, limiter, ledger, text_parts, transfers
+            ):
+                yield event
+        finally:
+            if self._metrics is not None and self._run_started is not None:
+                self._metrics.active_runs.dec()
+
+    async def _execute_inner(
+        self,
+        request: RunRequest,
+        run_id: str,
+        state: RunStateMachine,
+        limiter: RunLimiter,
+        ledger: ToolLedger,
+        text_parts: list[str],
+        transfers: list[dict[str, str]],
+    ) -> AsyncGenerator[AgentEvent, None]:
+        """The run body; the execute() wrapper guarantees the gauge dec."""
         sid = request.session_id or ""
         admit_revision = 1
         try:
             sid, admit_revision = await self._admit(request, run_id, state, ledger)
+            self._run_started = time.monotonic()
+            self._record_admitted()
             state.start()
             yield Iteration(index=0)
 
@@ -174,6 +201,8 @@ class AgentRunner:
                             return
                         if isinstance(agent_event, RunError):
                             errored = True
+                        if isinstance(agent_event, ToolCall) and self._metrics is not None:
+                            self._metrics.tool_calls.add(1, {"tool": agent_event.name})
                         yield agent_event
                     if (
                         limiter.iteration_limit_hit
@@ -246,6 +275,16 @@ class AgentRunner:
             yield Done(finish_reason="error", x_agent_status=public.code)
 
     # -- admission (ENG-03 order; auth/rate-limit stubbed until M5) -----------------
+
+    def _record_admitted(self) -> None:
+        """OBS-05: admitted-run + LLM-call counters (low-cardinality labels)."""
+        if self._metrics is None:
+            return
+        self._metrics.runs_admitted.add(1)
+        self._metrics.active_runs.inc()
+        llm = getattr(self._applied.config, "llm", None)
+        model_name = getattr(llm, "model", "") if llm is not None else ""
+        self._metrics.llm_calls.add(1, {"model": model_name})
 
     def _mark_cancelled(self, state: RunStateMachine) -> None:
         """CAS running→cancelling→cancelled; no-op when already terminal."""
@@ -564,14 +603,14 @@ class AgentRunner:
     async def reconcile_pending(self, *, now: datetime | None = None) -> dict[str, int]:
         """HITL-05: the restart/config-change reconciler.
 
-        - Expired pendings follow the onTimeout policy (deny = the run
-          finishes denied; allow = the tool runs only after the same
+        - Expired pending approvals follow the onTimeout policy (deny = the
+          run finishes denied; allow = the tool runs only after the same
           stale/cancellation checks).
         - Decided-but-not-resumed approvals (decided while the process was
           down) are resumed exactly once (the deterministic resume run
           record guards double execution).
-        - Pendings from a retired config generation terminate stale_approval
-          and the tool never executes.
+        - Pending approvals from a retired config generation terminate
+          stale_approval and the tool never executes.
         Returns the per-outcome counters for the audit.
         """
         from ..config.models import ApprovalTimeout
@@ -793,6 +832,14 @@ class AgentRunner:
             usage=usage,
             now=utcnow(),
         )
+        if self._metrics is not None:
+            self._metrics.runs_completed.add(1, {"status": "succeeded"})
+            self._metrics.tokens.add(usage.get("input_tokens", 0), {"kind": "input"})
+            self._metrics.tokens.add(usage.get("output_tokens", 0), {"kind": "output"})
+            if self._run_started is not None:
+                self._metrics.run_duration.record(
+                    time.monotonic() - self._run_started, {"status": "succeeded"}
+                )
 
     async def _commit_failure(
         self,
@@ -820,6 +867,14 @@ class AgentRunner:
                 },
                 now=utcnow(),
             )
+        if self._metrics is not None:
+            status = run_state.value
+            self._metrics.runs_completed.add(1, {"status": status})
+            self._metrics.runs_failed.add(1, {"code": error_code or status})
+            if self._run_started is not None:
+                self._metrics.run_duration.record(
+                    time.monotonic() - self._run_started, {"status": status}
+                )
 
 
 def _usage(limiter: RunLimiter) -> dict[str, int]:

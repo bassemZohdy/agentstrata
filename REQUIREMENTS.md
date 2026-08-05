@@ -118,7 +118,8 @@ Specifically, a P1 build MUST reject non-empty `agents`, `server.protocols.acp: 
 - Acting as an MCP *server* (the runtime is an MCP *client* only).
 - A WebSocket API. Agent calling conventions in the wild are overwhelmingly request/response or SSE-streamed HTTP (OpenAI-compatible); a second stateful transport is deferred until a concrete caller needs it.
 - A Kubernetes Custom Resource / operator. Config reload watches a plain ConfigMap; a CRD adds an API-group/RBAC/status-subresource surface for the same job and is deferred.
-- Prometheus `/metrics` endpoint and per-request cost-in-dollars accounting (deferred; token counts are reported per API-14).
+- Prometheus `/metrics` endpoint and per-request cost-in-dollars accounting
+  (deferred; token counts are reported per API-14).
 - Zed's Agent Client Protocol (stdio JSON-RPC) and Google A2A. “ACP” in this document means only the phase-2 REST **Agent Communication Protocol** surface in API-16.
 
 ### 1.5 Personas and trust boundaries
@@ -701,7 +702,17 @@ All FastAPI/Pydantic validation failures under `/v1/` MUST be translated from fr
 
 **OBS-04 (traces)** — When OTel is enabled, emit `http.request → agent.execute → llm.call|mcp.tool_call` spans plus config-reload/storage spans. Attributes include route template, status/error code, model, tool/server name, config generation, duration, retry count, and token counts; never message content, tool results, credentials, session IDs, JWT claims, or raw URLs. `includeToolArguments` may add only a redacted 4 KiB span event. Use standard OTEL exporter/sampler/resource env vars, lazy imports, and bounded export queues. Export failure is nonfatal and marks health degraded.
 
-**OBS-05 (metrics)** — No Prometheus `/metrics` route is in scope. When OTel is enabled, export counters/histograms for admitted/completed/failed runs, active runs, latency, model/tool calls, tokens, rate/concurrency denials, dependency state, reload outcomes, and output-queue cancellations. Labels MUST be low-cardinality; request/session/run/principal IDs are prohibited labels.
+**OBS-05 (metrics)** — When `observability.prometheus.enabled` is true, serve
+the Prometheus text exposition (format version 0.0.4) at the configured
+`observability.prometheus.path` (default `/metrics`). The endpoint exports
+counters/histograms for admitted/completed/failed runs, an active-runs gauge,
+run latency, model/tool calls, tokens, rate/concurrency denials, reload
+outcomes, and output-queue cancellations. Labels MUST be low-cardinality;
+request/session/run/principal IDs are prohibited labels; each metric caps its
+distinct label sets (default 128) and drops beyond the cap with a warning. The
+scrape path is exempt from the replica-local rate limiter. When OTel is also
+enabled the same instruments export via OTLP; the Prometheus registry is
+process-local and shared across live reloads.
 
 **OBS-06 (disabled cost)** — With OTel disabled, OTel packages MUST NOT be imported, providers/threads MUST NOT start, and no span/metric objects may be allocated per request. A single configuration branch is acceptable; “zero overhead” does not require literally zero CPU instructions.
 

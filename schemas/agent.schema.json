@@ -561,6 +561,9 @@
         },
         "otel": {
           "$ref": "#/$defs/Otel"
+        },
+        "prometheus": {
+          "$ref": "#/$defs/Prometheus"
         }
       },
       "title": "Observability",
@@ -581,6 +584,25 @@
         }
       },
       "title": "Otel",
+      "type": "object"
+    },
+    "Prometheus": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "path": {
+          "default": "/metrics",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "title": "Prometheus",
       "type": "object"
     },
     "Protocols": {

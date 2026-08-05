@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,24 +34,31 @@ class EchoLlm(BaseLlm):
         )
 
 
-def make_config(server: dict | None = None) -> AgentConfig:
+def make_config(server: dict | None = None, observability: dict | None = None) -> AgentConfig:
     doc = {
         "name": "agent",
         "engine": {"systemInstruction": "You are a test agent."},
         "llm": {"provider": "gemini", "model": "mock"},
         "server": server or {},
     }
+    if observability is not None:
+        doc["observability"] = observability
     return AgentConfig.model_validate(doc)
 
 
-def build_components(config: AgentConfig) -> dict:
+def build_components(config: AgentConfig, observability: Any = None) -> dict:
     backend = MemoryBackend()
     applied = AppliedConfig.from_config(config)
+    metrics = None
+    if observability is not None and getattr(observability, "prometheus_enabled", False):
+        from app.observability.metrics import MetricBundle
+
+        metrics = MetricBundle(observability)
     model = EchoLlm()
     agent = LlmAgent(name=config.name, instruction=config.engine.systemInstruction, model=model)
     service = AdkSessionService(backend)
     adk_runner = AdkRunner(agent=agent, app_name=APP_NAME, session_service=service)
-    runner = AgentRunner(applied, adk_runner, backend, app_name=APP_NAME)
+    runner = AgentRunner(applied, adk_runner, backend, app_name=APP_NAME, metrics=metrics)
     from app.engine.mcp.manager import ServerManager
 
     mcp = ServerManager(applied)
@@ -61,6 +69,8 @@ def build_components(config: AgentConfig) -> dict:
         "mcp": mcp,
         "backend": backend,
         "session_service": service,
+        "metrics": metrics,
+        "observability": observability,
     }
 
 

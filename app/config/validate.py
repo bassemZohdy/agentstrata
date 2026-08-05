@@ -194,6 +194,15 @@ def _cross_field(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
             "storage.connectionStringEnv",
             "redis/postgres storage requires connectionStringEnv or connectionStringFile",
         )
+    # OBS-05: the prometheus path must not collide with built-in routes.
+    prom_path = doc.get("observability.prometheus.path")
+    if prom_path and (
+        prom_path.startswith("/v1/") or prom_path in ("/healthz", "/readyz", "/openapi.json")
+    ):
+        issue(
+            "observability.prometheus.path",
+            f"path {prom_path!r} collides with a built-in route",
+        )
     if storage_type == "file" and not doc.get("storage.path"):
         issue("storage.path", "file storage requires a path")
     session_ttl = doc.get("storage.sessionTtlSeconds")

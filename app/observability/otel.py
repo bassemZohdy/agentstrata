@@ -48,6 +48,9 @@ class NullMeter:
     def create_histogram(self, name: str, **kwargs: Any):
         return _NullCounter()
 
+    def create_up_down_counter(self, name: str, **kwargs: Any):
+        return _NullCounter()
+
 
 class _NullCounter:
     def add(self, amount: int, attributes: dict[str, Any] | None = None) -> None:
@@ -55,6 +58,57 @@ class _NullCounter:
 
     def record(self, amount: float, attributes: dict[str, Any] | None = None) -> None:
         return None
+
+
+class _DualCounter:
+    """Records to OTel (when enabled) AND the Prometheus registry (when
+    enabled); both sinks are optional, so this is a no-op object when
+    neither is active (OBS-06)."""
+
+    def __init__(self, otel_instrument: Any, registry: Any, name: str) -> None:
+        self._otel = otel_instrument
+        self._registry = registry
+        self._name = name
+
+    def add(self, amount: int, attributes: dict[str, Any] | None = None) -> None:
+        if self._registry is not None:
+            self._registry.add(self._name, amount, attributes)
+        if self._otel is not None:
+            self._otel.add(amount, attributes or {})
+
+
+class _DualHistogram:
+    def __init__(self, otel_instrument: Any, registry: Any, name: str) -> None:
+        self._otel = otel_instrument
+        self._registry = registry
+        self._name = name
+
+    def record(self, amount: float, attributes: dict[str, Any] | None = None) -> None:
+        if self._registry is not None:
+            self._registry.record(self._name, amount, attributes)
+        if self._otel is not None:
+            self._otel.record(amount, attributes or {})
+
+
+class _DualGauge:
+    """Active-count style gauge: OTel UpDownCounter + registry gauge."""
+
+    def __init__(self, otel_instrument: Any, registry: Any, name: str) -> None:
+        self._otel = otel_instrument
+        self._registry = registry
+        self._name = name
+
+    def inc(self, attributes: dict[str, Any] | None = None) -> None:
+        if self._registry is not None:
+            self._registry.inc_gauge(self._name, attributes)
+        if self._otel is not None:
+            self._otel.add(1, attributes or {})
+
+    def dec(self, attributes: dict[str, Any] | None = None) -> None:
+        if self._registry is not None:
+            self._registry.dec_gauge(self._name, attributes)
+        if self._otel is not None:
+            self._otel.add(-1, attributes or {})
 
 
 class Observability:
@@ -66,8 +120,28 @@ class Observability:
         self._meter: Any = NullMeter()
         self._provider: Any = None
         self._export_failed = False
+        self._prometheus_enabled = bool(
+            getattr(config.observability, "prometheus", None) is not None
+            and config.observability.prometheus.enabled
+        )
+        self._registry: Any = None
+        if self._prometheus_enabled:
+            from .metrics import MetricsRegistry
+
+            self._registry = MetricsRegistry()
         if self._enabled:
             self._initialize(config)
+
+    @property
+    def prometheus_enabled(self) -> bool:
+        return self._prometheus_enabled
+
+    @property
+    def registry(self) -> Any:
+        return self._registry
+
+    def prometheus_path(self) -> str:
+        return "/metrics"
 
     @property
     def enabled(self) -> bool:
@@ -118,10 +192,16 @@ class Observability:
         return self._tracer.start_as_current_span(name)
 
     def counter(self, name: str, description: str = ""):
-        return self._meter.create_counter(name, description=description)
+        otel_instrument = self._meter.create_counter(name, description=description)
+        return _DualCounter(otel_instrument, self._registry, name)
 
     def histogram(self, name: str, description: str = ""):
-        return self._meter.create_histogram(name, description=description)
+        otel_instrument = self._meter.create_histogram(name, description=description)
+        return _DualHistogram(otel_instrument, self._registry, name)
+
+    def gauge(self, name: str, description: str = ""):
+        otel_instrument = self._meter.create_up_down_counter(name, description=description)
+        return _DualGauge(otel_instrument, self._registry, name)
 
     def shutdown(self) -> None:
         if self._provider is not None:

@@ -130,14 +130,20 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
 
         @app.middleware("http")
         async def rate_limit_middleware(request: Request, call_next):
-            # API-20: health probes are never rate-limited.
-            if request.url.path in ("/healthz", "/readyz"):
+            # API-20: health probes are never rate-limited; the Prometheus
+            # scrape endpoint (OBS-05) is exempt so scrapers cannot be
+            # throttled by the replica-local limiter.
+            exempt = {"/healthz", "/readyz", config.observability.prometheus.path}
+            if request.url.path in exempt:
                 return await call_next(request)
             principal = getattr(request.state, "principal", None)
             allowed, retry_after = limiter.allow(
                 FixedWindowLimiter.key_for_request(request, principal)
             )
             if not allowed:
+                metrics_bundle = components.get("metrics")
+                if metrics_bundle is not None:
+                    metrics_bundle.denials.add(1, {"reason": "rate_limit"})
                 from .errors import PublicErrorResponse, error_body
 
                 err = PublicErrorResponse(
@@ -242,6 +248,12 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
     approvals.register(app, config, components)
     documents.register(app, config, components)
     sessions.register(app, config, components)
+    # OBS-05: the Prometheus exposition endpoint exists only when enabled;
+    # the registry lives on the shared Observability facade.
+    if config.observability.prometheus.enabled:
+        from .routes.metrics import register as register_metrics
+
+        register_metrics(app, config, components)
     sessions.register_models(app, config)
     # API-16: the ACP surface registers only when enabled; otherwise the
     # paths are ordinary 404s (API-00). CAP-01 still gates enabling it until

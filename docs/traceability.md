@@ -118,7 +118,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | OBS-02 | app/observability/logging.py (request id/traceparent) |
 | OBS-03 | app/observability/lifecycle.py |
 | OBS-04 | app/observability/otel.py |
-| OBS-05 | app/observability/otel.py (meter) |
+| OBS-05 | app/observability/metrics.py + otel.py + protocol/routes/metrics.py; tests/test_protocol/test_metrics.py |
 | OBS-06 | tests/test_observability/test_obs.py (zero-cost subprocess) |
 | PHASE-01 | REQUIREMENTS.md §1.3; app/config/capabilities.py (CAP-02) |
 | PROD-01 | REQUIREMENTS.md §1 (product boundary) |

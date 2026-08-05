@@ -244,6 +244,10 @@ class ReloadManager:
     ) -> None:
         """REL-06: resource version, outcome, generations, sorted changed
         paths, duration. Values are omitted; secret paths labeled only."""
+        # OBS-05: reload outcomes feed the prometheus/OTel reload counter.
+        metrics = self._components.get("metrics")
+        if metrics is not None:
+            metrics.reloads.add(1, {"outcome": outcome})
         duration_ms = _ms_since(started)
         new_generation = self._generation + (1 if outcome.startswith("applied") else 0)
         logger.info(

@@ -287,6 +287,20 @@ class Otel(BaseModel):
     serviceName: str = ""  # default = top-level name; filled by the resolver
 
 
+class Prometheus(BaseModel):
+    model_config = BASE_CONFIG
+
+    enabled: bool = False
+    path: str = Field(default="/metrics", min_length=1, max_length=128)
+
+    @field_validator("path")
+    @classmethod
+    def _path_must_be_absolute(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("observability.prometheus.path must start with '/'")
+        return value
+
+
 class Observability(BaseModel):
     model_config = BASE_CONFIG
 
@@ -294,6 +308,7 @@ class Observability(BaseModel):
     logFormat: LogFormat = Field(default=LogFormat.JSON, strict=False)
     includeToolArguments: bool = False
     otel: Otel = Field(default_factory=Otel)
+    prometheus: Prometheus = Field(default_factory=Prometheus)
 
 
 # --- SCH-09 phase-gated stubs (fail closed in a P1 build, CAP-01) -----------

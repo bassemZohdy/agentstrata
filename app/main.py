@@ -144,8 +144,20 @@ class _PsycopgTxn:
             await conn.set_autocommit(True)
 
 
-def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str, Any]:
-    """ENG-01: one immutable agent component per generation + the runner."""
+def build_components(
+    config: Any, backend: Any, generation: int = 1, observability: Any = None
+) -> dict[str, Any]:
+    """ENG-01: one immutable agent component per generation + the runner.
+
+    ``observability`` (created once per process) is reused across rebuilds so
+    the Prometheus registry/OTel provider survive live reloads; the
+    MetricBundle is (re)built per generation and injected into the runner.
+    """
+    metrics = None
+    if observability is not None and getattr(observability, "prometheus_enabled", False):
+        from .observability.metrics import MetricBundle
+
+        metrics = MetricBundle(observability)
     applied = AppliedConfig.from_config(config, generation)
     component = build_agent_component(config, generation)
     service = AdkSessionService(backend)
@@ -167,6 +179,7 @@ def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str
             "backend": backend,
             "session_service": service,
             "rag": None,
+            "metrics": metrics,
         }
     from google.adk.runners import Runner as AdkRunner
 
@@ -191,6 +204,7 @@ def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str
         app_name=config.name,
         mcp=mcp,  # HITL-02: the approval gate resolves raw tool names via the manager
         rag=rag,  # RAG-02: principal-scoped retrieval before the root call
+        metrics=metrics,  # OBS-05: prometheus/OTel instruments
     )
     mcp.configure(config.tools.mcpServers)
     return {
@@ -201,6 +215,7 @@ def build_components(config: Any, backend: Any, generation: int = 1) -> dict[str
         "backend": backend,
         "session_service": service,
         "rag": rag,  # None unless rag.enabled (RAG-03 ingestion surface)
+        "metrics": metrics,
     }
 
 
@@ -283,8 +298,13 @@ def run(argv: list[str] | None = None) -> int:
         import asyncio
 
         asyncio.run(backend.initialize())
-        components = build_components(config, backend)
-        components["observability"] = Observability(config)
+        # OBS-05: one observability per process — the registry/OTel provider
+        # are reused across component rebuilds (live reload keeps metrics).
+        from .observability.otel import Observability
+
+        observability = Observability(config)
+        components = build_components(config, backend, observability=observability)
+        components["observability"] = observability
     except (BackendUnavailableError, ConfigError) as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return EX_CONFIG
@@ -306,7 +326,9 @@ def run(argv: list[str] | None = None) -> int:
         # the reload call is (config, generation) — bind backend explicitly so
         # the signature collision (build_components(config, backend,
         # generation=1)) cannot silently bind the generation as the backend.
-        reload_builder = lambda cfg, gen: build_components(cfg, backend, gen)  # noqa: E731
+        reload_builder = lambda cfg, gen: build_components(  # noqa: E731
+            cfg, backend, gen, observability=observability
+        )
         reload_manager = ReloadManager(
             reload_builder, config, components, bundled_dir="/app/config"
         )

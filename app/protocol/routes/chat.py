@@ -169,6 +169,9 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
         # with 503 `overloaded` (API-15) BEFORE any model work starts.
         slots = components.get("run_slots")
         if slots is not None and not await slots.try_acquire():
+            metrics_bundle = components.get("metrics")
+            if metrics_bundle is not None:
+                metrics_bundle.denials.add(1, {"reason": "concurrency"})
             raise PublicErrorResponse("overloaded", "Too many concurrent runs", 503) from None
         # CNT-07: track the driving task so grace-expiry shutdown can cancel
         # it (persisting a terminal state) before storage closes.
@@ -405,8 +408,11 @@ async def _stream(
                     await asyncio.wait_for(queue.put(event), timeout=slow_seconds)
                 except TimeoutError:
                     # Output queue has been full for slowConsumerSeconds: the
-                    # client is not keeping up. Stop driving the run and let the
-                    # consumer cancel + tear it down.
+                    # client is not keeping up. Record OBS-05 and stop driving
+                    # the run; the consumer cancels + tears it down.
+                    metrics_bundle = components.get("metrics")
+                    if metrics_bundle is not None:
+                        metrics_bundle.queue_cancellations.add(1)
                     slow_consumer.set()
                     break
             queue.put_nowait(_STREAM_DONE)

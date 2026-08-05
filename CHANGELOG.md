@@ -4,6 +4,30 @@ Phase 1 (core runtime) is implemented and passing its host-based test suite (336
 
 ## [Unreleased]
 
+### P5-1: Prometheus /metrics endpoint (OBS-05) — DONE
+
+- User decision 2026-08-05: implement all three deferred-scope items;
+  P5-1 ships the metrics endpoint first.
+- `app/observability/metrics.py`: in-process registry (counters/gauges/
+  histograms with the OBS-05 latency buckets through 3600 s, text
+  exposition 0.0.4, per-metric label-set cap 128 with a drop warning);
+  `MetricBundle` holds the instrument set.
+- Config `observability.prometheus.{enabled,path}` (default "/metrics");
+  cross-field validation rejects collisions with built-in routes; the
+  scrape path is exempt from the replica-local rate limiter.
+- Recording: runner (admitted/completed{status}/failed{code}/active-runs
+  gauge/run-duration/tokens/tool+llm calls), chat route (concurrency
+  denials, slow-consumer output-queue cancellations), rate-limit
+  middleware (rate_limit denials), reload manager (reload outcomes).
+  The Observability facade records to the registry AND the OTel meter
+  when both are enabled; the registry survives live reloads.
+- REQUIREMENTS OBS-05 rewritten (route now in scope), §1.4 updated;
+  schemas + traceability regenerated; deployment.md documents scraping.
+- Tests: registry unit tests + end-to-end route tests
+  (tests/test_protocol/test_metrics.py, 8 tests) + config validation.
+
+
+
 ### TODO.md cleanup round 3 (2026-08-05)
 
 - The completed-task records in TODO.md were removed (they have been in

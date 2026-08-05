@@ -83,5 +83,8 @@ caller or deployment needs one.
       need for `kubectl get agentconfigs`, CRD-native status, or
       admission-webhook validation.
 - [ ] **Prometheus `/metrics` endpoint and per-request dollar-cost accounting.**
-      Explicitly deferred (REQUIREMENTS.md §1.4 / OBS-05 — "No Prometheus
-      `/metrics` route is in scope") — OTel metrics cover the interim need.
+      IN PROGRESS (P5, user decision 2026-08-05): the endpoint ships in
+      P5-1 (OBS-05 rewritten; `observability.prometheus.{enabled,path}`;
+      in-process registry + route + runner/route/reload recording). The
+      per-request cost-in-dollars accounting half stays deferred (token
+      counts are reported per API-14).

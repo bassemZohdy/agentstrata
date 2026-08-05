@@ -50,6 +50,24 @@ class TestCrossField:
             {"storage": {"type": "redis"}}
         )
 
+    def test_prometheus_path_collision_rejected(self):
+        assert ("observability.prometheus.path", "cross_field") in issues_for(
+            {"observability": {"prometheus": {"enabled": True, "path": "/healthz"}}}
+        )
+        assert ("observability.prometheus.path", "cross_field") in issues_for(
+            {"observability": {"prometheus": {"path": "/v1/models"}}}
+        )
+
+    def test_prometheus_path_ok(self):
+        assert valid({"observability": {"prometheus": {"enabled": True}}})
+        assert valid({"observability": {"prometheus": {"path": "/custom-metrics"}}})
+
+    def test_prometheus_path_must_be_absolute(self):
+        assert (
+            "observability.prometheus.path",
+            "value_error",
+        ) in issues_for({"observability": {"prometheus": {"path": "metrics"}}})
+
     def test_storage_postgres_needs_connection(self):
         assert ("storage.connectionStringEnv", "cross_field") in issues_for(
             {"storage": {"type": "postgres"}}
