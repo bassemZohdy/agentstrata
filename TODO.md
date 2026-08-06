@@ -41,6 +41,10 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-17** Prometheus cardinality guard per metric (instrument model).
 - **R-20** Declared-but-unwired engine contracts (decision: implement vs
   delete + spec traceability).
+- **R-31** ⚠ **Silent partial commit** — the R-10 reconnect retry fires
+  inside transactions, so a mid-transaction connection drop autocommits
+  the retried statement, loses the earlier ones, and reports SUCCESS to
+  the caller (breaks the ENG-06 atomic commit).
 
 ### Medium intelligence — localized correctness / security fixes
 
@@ -103,6 +107,7 @@ clean pass and does not end the loop.
 | 2026-08-06 | `fed1185` | HEAD tree 565 pass, ruff + mypy clean (verified on an extracted copy — the main working tree has 4 failures from uncommitted R-02 work) | R-14 verified across all three surfaces (chat/ACP/WS now emit identical `prompt/completion/total_tokens` + `costUsd`). **R-26 confirmed fixed** with the original repro (both routes → 503 `storage_unavailable`); ticks accurate. Opened **R-28** — the redis boundary wrap catches bare `Exception`, so a Lua script bug reports as an outage, while the psycopg wrap in the same commit correctly re-raises code bugs. Note: `32ea6c1` is a broken commit — its own tests fail without the boundary files that landed in `fed1185` (self-disclosed). |
 | 2026-08-06 | `90c7891` | 572 pass; ruff check, ruff format (117 files), mypy all clean; **working tree clean** | Two high-intelligence items landed. **R-02 confirmed fixed** with the original repro (`/config` now reflects an `applied_live` reload — was the founding finding of this backlog). R-11 verified: `maxTools` truncation propagates to the attached set, and the dead-session probe is covered by 4 genuinely-running stdio integration tests (not skipped). Opened **R-29** — a residual R-02 gap: `observability.prometheus.path` reports `applied_live` but the route stays bound at the boot path (verified 404/200), and `app.py:171` still reads the captured boot config. |
 | 2026-08-06 | `938f689` | 578 pass; ruff check, ruff format, mypy all clean; tree clean | R-08 landed. All three contract sub-fixes verified: completed records still replay (checked the ordering), in-flight duplicates → 409 `idempotency_in_progress`, partial streams release the record. **But opened R-30 (highest severity of the run):** the same commit moved `create_idempotency` after `slots.try_acquire()` and outside the releasing `try/finally`, so a storage blip permanently leaks a run slot — measured `in_flight` stuck at 2 of 2 with the replica 503ing after the dependency recovered. Affects chat + ACP. |
+| 2026-08-06 | `a70465d` | 586 pass; ruff + mypy clean (rag files uncommitted/excluded) | R-10 landed: connection **factory** replaces the one-shot coroutine, `_ensure` checks `closed`, `_run` retries once, pool deferred as a documented STACK-01 limit — all three original sub-findings addressed. **But opened R-31 (high):** the retry is not transaction-aware, so a drop inside one of the 7 ENG-06 `transaction()` blocks autocommits the retried statement, loses the earlier ones, and `__aexit__` COMMITs on a fresh connection — the caller is told SUCCESS. Simulated end-to-end. R-10's tests only cover standalone statements. |
 
 ## Completed work (pointer)
 
@@ -603,10 +608,17 @@ others — contradicting the module docstring ("each metric caps its
 distinct label sets"). `render()` also emits `# TYPE` but never `# HELP`,
 so the descriptions passed to every instrument are discarded.
 
-- [ ] Key the guard by `(metric, labels)` or hold one guard per metric.
-- [ ] Emit `# HELP` lines from the instrument descriptions.
-- [ ] Tests: one metric exhausting its cap does not affect another;
-      exposition includes HELP.
+- [x] Key the guard by `(metric, labels)` or hold one guard per metric.
+      Done: `_CardinalityGuard._seen` is now keyed by metric name — one
+      high-cardinality metric cannot starve the others.
+- [x] Emit `# HELP` lines from the instrument descriptions.  Done: the
+      registry gains `register(name, description)`; the dual instruments
+      thread their description at construction (observability.counter/
+      gauge/histogram), and render emits `# HELP` before `# TYPE`.
+- [x] Tests: one metric exhausting its cap does not affect another;
+      exposition includes HELP.  Done: `TestCardinalityAndHelp` — per-
+      metric cap isolation, HELP in the exposition, and HELP flowing from
+      instrument construction (the production path).
 
 ### R-18 `204 No Content` responses carry a JSON body
 
@@ -1007,6 +1019,61 @@ identical shape. `documents.py` acquires no slot and is unaffected.
 - [ ] Consider making `RunSlotGate` acquisition a context manager so the
       pairing cannot be broken by a future reorder — this is the second
       inc/dec pairing bug in the run path (cf. R-03's gauge).
+
+### R-31 ⚠ Reconnect retry inside a transaction silently partial-commits and reports success (regression from R-10, ENG-06/SES-01)
+
+*Intelligence: high — connection lifecycle / transaction contract.*
+*Severity: silent data loss with a false success signal.*
+
+R-10's `_PsycopgDb._run` retries a dropped statement on a fresh
+connection. `_connect` sets `autocommit=True`, and the retry is **not
+transaction-aware** — but `app/storage/postgres_backend.py` wraps seven
+call sites in `async with self._db.transaction():` (mutate_session,
+admit_run, decide_approval, …), and every statement inside those blocks
+goes through `execute`/`query` → `_run`.
+
+`_PsycopgTxn.__aexit__` compounds it: it calls `self._db._ensure()`,
+which happily hands back a **new** connection, then issues `COMMIT` on
+it — a no-op, since that connection never ran `BEGIN`.
+
+Simulated drop on the second statement of a two-statement transaction:
+
+```
+conn1: autocommit=False
+conn1: 'BEGIN'
+conn1: 'UPDATE sessions SET ...'          <- inside txn
+conn1: 'INSERT INTO runs ...'  -> CONNECTION DROPPED
+conn2: autocommit=True
+conn2: 'INSERT INTO runs ...'  (autocommit=True)   <- COMMITTED STANDALONE
+conn2: 'COMMIT'                (no txn open — no-op)
+caller saw: SUCCESS (transaction reported committed)
+```
+
+So the first statement's effect is **lost**, the second is **durably
+committed on its own**, and the caller is told the transaction
+committed. For `mutate_session` that is ENG-06's "one revision-checked
+transaction commits pruning + the complete turn + usage" broken into a
+partial write — with the revision check (optimistic concurrency) also
+defeated, since the caller proceeds as if it held the revision.
+
+R-10's own tests pass because they exercise **standalone** statements
+only; nothing covers a drop inside a transaction, which is why the suite
+is green.
+
+- [ ] Make the retry transaction-aware: track in-transaction state on
+      `_PsycopgDb` and **do not retry** while inside one — fail the whole
+      transaction with `BackendUnavailableError` and let the caller's
+      revision check / higher-level retry handle it. Retrying standalone
+      statements stays correct and valuable.
+- [ ] `__aexit__` must not silently `_ensure()` a fresh connection. If the
+      original connection is gone, raise rather than issue COMMIT/ROLLBACK
+      on a connection that never began the transaction.
+- [ ] Tests: a drop mid-transaction must surface an error, must not
+      autocommit the retried statement, and must never report success.
+      Add this to the real-Postgres contract matrix, not just fakes.
+- [ ] Re-check the same hazard on the redis backend's Lua scripts (each
+      script is atomic server-side, so `_eval` retry is likely safe — but
+      confirm rather than assume).
 
 ---
 

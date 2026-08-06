@@ -47,17 +47,19 @@ DEFAULT_BUCKETS = [
 
 
 class _CardinalityGuard:
-    """Drop label sets beyond the cap per metric (OBS-05 low-cardinality)."""
+    """Drop label sets beyond the cap PER METRIC (OBS-05 low-cardinality):
+    one high-cardinality metric cannot silently starve the others."""
 
     def __init__(self, cap: int = 128) -> None:
         self._cap = cap
-        self._seen: set[Any] = set()
+        self._seen: dict[str, set[Any]] = defaultdict(set)
         self._warned: set[str] = set()
 
     def admit(self, metric: str, key: Any) -> bool:
-        if key in self._seen:
+        seen = self._seen[metric]
+        if key in seen:
             return True
-        if len(self._seen) >= self._cap:
+        if len(seen) >= self._cap:
             if metric not in self._warned:
                 self._warned.add(metric)
                 logger.warning(
@@ -66,12 +68,8 @@ class _CardinalityGuard:
                     self._cap,
                 )
             return False
-        self._seen.add(key)
+        seen.add(key)
         return True
-
-    @property
-    def seen(self) -> set[Any]:
-        return self._seen
 
 
 class MetricsRegistry:
@@ -90,6 +88,15 @@ class MetricsRegistry:
         self._hist_counts: dict[str, dict[tuple[tuple[str, str], ...], int]] = defaultdict(dict)
         self._buckets = DEFAULT_BUCKETS
         self._guard = _CardinalityGuard(max_label_sets)
+        # R-17: instrument descriptions registered at construction feed the
+        # exposition's # HELP lines (previously discarded).
+        self._descriptions: dict[str, str] = {}
+
+    def register(self, name: str, description: str) -> None:
+        """R-17: record an instrument's description for the # HELP line."""
+        if description:
+            with self._lock:
+                self._descriptions[name] = description
 
     @staticmethod
     def _labels(attributes: dict[str, Any] | None) -> tuple[tuple[str, str], ...]:
@@ -138,10 +145,13 @@ class MetricsRegistry:
             self._hist_counts[name][key] = self._hist_counts[name].get(key, 0) + 1
 
     def render(self) -> str:
-        """Prometheus text exposition format 0.0.4."""
+        """Prometheus text exposition format 0.0.4 (with # HELP, R-17)."""
         lines: list[str] = []
         with self._lock:
             for name in sorted(set(self._counters) | set(self._gauges) | set(self._hist_counts)):
+                description = self._descriptions.get(name)
+                if description:
+                    lines.append(f"# HELP {name} {description}")
                 if name in self._counters:
                     lines.append(f"# TYPE {name} counter")
                     for key, value in sorted(self._counters[name].items()):

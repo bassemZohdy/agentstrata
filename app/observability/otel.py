@@ -65,10 +65,15 @@ class _DualCounter:
     enabled); both sinks are optional, so this is a no-op object when
     neither is active (OBS-06)."""
 
-    def __init__(self, otel_instrument: Any, registry: Any, name: str) -> None:
+    def __init__(
+        self, otel_instrument: Any, registry: Any, name: str, description: str = ""
+    ) -> None:
         self._otel = otel_instrument
         self._registry = registry
         self._name = name
+        # R-17: the description feeds the registry's # HELP exposition line.
+        if registry is not None and description:
+            registry.register(name, description)
 
     def add(self, amount: int, attributes: dict[str, Any] | None = None) -> None:
         if self._registry is not None:
@@ -78,10 +83,14 @@ class _DualCounter:
 
 
 class _DualHistogram:
-    def __init__(self, otel_instrument: Any, registry: Any, name: str) -> None:
+    def __init__(
+        self, otel_instrument: Any, registry: Any, name: str, description: str = ""
+    ) -> None:
         self._otel = otel_instrument
         self._registry = registry
         self._name = name
+        if registry is not None and description:
+            registry.register(name, description)
 
     def record(self, amount: float, attributes: dict[str, Any] | None = None) -> None:
         if self._registry is not None:
@@ -93,10 +102,14 @@ class _DualHistogram:
 class _DualGauge:
     """Active-count style gauge: OTel UpDownCounter + registry gauge."""
 
-    def __init__(self, otel_instrument: Any, registry: Any, name: str) -> None:
+    def __init__(
+        self, otel_instrument: Any, registry: Any, name: str, description: str = ""
+    ) -> None:
         self._otel = otel_instrument
         self._registry = registry
         self._name = name
+        if registry is not None and description:
+            registry.register(name, description)
 
     def inc(self, attributes: dict[str, Any] | None = None) -> None:
         if self._registry is not None:
@@ -193,15 +206,15 @@ class Observability:
 
     def counter(self, name: str, description: str = ""):
         otel_instrument = self._meter.create_counter(name, description=description)
-        return _DualCounter(otel_instrument, self._registry, name)
+        return _DualCounter(otel_instrument, self._registry, name, description)
 
     def histogram(self, name: str, description: str = ""):
         otel_instrument = self._meter.create_histogram(name, description=description)
-        return _DualHistogram(otel_instrument, self._registry, name)
+        return _DualHistogram(otel_instrument, self._registry, name, description)
 
     def gauge(self, name: str, description: str = ""):
         otel_instrument = self._meter.create_up_down_counter(name, description=description)
-        return _DualGauge(otel_instrument, self._registry, name)
+        return _DualGauge(otel_instrument, self._registry, name, description)
 
     def shutdown(self) -> None:
         if self._provider is not None:

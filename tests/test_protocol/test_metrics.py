@@ -118,3 +118,49 @@ class TestMetricsRoute:
             assert denied.status_code == 429
             text = client.get("/metrics").text
             assert 'agentbase_denials_total{reason="rate_limit"} 1' in text
+
+
+class TestCardinalityAndHelp:
+    """R-17: the label-set cap is PER METRIC (one high-cardinality metric
+    cannot starve the others) and exposition carries # HELP."""
+
+    def test_cap_is_per_metric(self):
+        reg = MetricsRegistry(max_label_sets=2)
+        # metric A exhausts its cap
+        for i in range(5):
+            reg.add("agentbase_denials_total", 1, {"reason": f"r{i}"})
+        # metric B is unaffected — a fresh label set is still admitted
+        reg.add("agentbase_runs_admitted_total", 1, {"mode": "standalone"})
+        text = reg.render()
+        assert text.count("agentbase_denials_total{") == 2
+        assert 'agentbase_runs_admitted_total{mode="standalone"} 1' in text
+
+    def test_exposition_includes_help(self):
+        reg = MetricsRegistry()
+        reg.register("agentbase_runs_admitted_total", "Runs admitted (ENG-03 step 7)")
+        reg.register("agentbase_cost_usd_total", "Accumulated USD cost, by model (COST-01)")
+        reg.add("agentbase_runs_admitted_total", 1)
+        reg.add("agentbase_cost_usd_total", 1.0)
+        text = reg.render()
+        assert "# HELP agentbase_runs_admitted_total Runs admitted (ENG-03 step 7)" in text
+        assert "# HELP agentbase_cost_usd_total Accumulated USD cost, by model (COST-01)" in text
+
+    def test_help_flows_from_instrument_construction(self):
+        """The description given to observability.counter() reaches the
+        registry's exposition (the instruments are the production path)."""
+        from app.config.models import AgentConfig
+        from app.observability.otel import Observability
+
+        config = AgentConfig.model_validate(
+            {
+                "name": "agent",
+                "engine": {"systemInstruction": "t"},
+                "llm": {"provider": "gemini", "model": "mock"},
+                "observability": {"prometheus": {"enabled": True}},
+            }
+        )
+        obs = Observability(config)
+        counter = obs.counter("agentbase_llm_calls_total", "Root LLM invocations, by model")
+        counter.add(1, {"model": "mock"})
+        text = obs.registry.render()
+        assert "# HELP agentbase_llm_calls_total Root LLM invocations, by model" in text
