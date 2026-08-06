@@ -722,3 +722,29 @@ class TestLiveSnapshotLeaves:
                 ws.send_text(_json.dumps({"type": "ping", "pad": "x" * 5000}))
                 ws.receive_json()
             assert exc.value.code == 1009
+
+
+class TestRestartPinnedLeaves:
+    """R-29: leaves that CANNOT take effect live report restart_required
+    instead of a misleading applied_live."""
+
+    async def test_prometheus_route_is_restart_required(self):
+        """The exposition route is registered once at boot — a live path/
+        enabled change cannot move it, so the reload must say so."""
+        from fastapi.testclient import TestClient
+        from test_protocol.conftest import build_components
+
+        from app.protocol.app import create_app
+
+        config = TestLiveSnapshotLeaves._config()
+        components = build_components(config)
+        app = create_app(config, components, mode="standalone")
+        manager = ReloadManager(
+            lambda cfg, gen: build_components(cfg), config, components, bundled_dir=REPO_CONFIG
+        )
+        components["reload_manager"] = manager
+        with TestClient(app):
+            result = await manager.apply_tier8(
+                {"observability": {"prometheus": {"path": "/newmetrics"}}}
+            )
+            assert result.outcome == "restart_required"

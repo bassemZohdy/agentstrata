@@ -138,6 +138,11 @@ class RagStore(Protocol):
 
     async def health(self) -> bool: ...
 
+    async def orphaned_chunk_count(self, embedding_model: str) -> int:
+        """R-32: chunks stored under a DIFFERENT embedding model than the
+        configured one — invisible to search after a model change."""
+        ...
+
 
 @dataclass
 class _StoredChunk:
@@ -268,6 +273,11 @@ class MemoryRagStore:
             del self._chunks[k]
         self._documents.pop((agent_name, principal_id, document_id), None)
         return len(keys)
+
+    async def orphaned_chunk_count(self, embedding_model: str) -> int:
+        """R-32: chunks from a previous embedding model are invisible to
+        search (R-16 filtering) — count them so operators can alert."""
+        return sum(1 for c in self._chunks.values() if c.embedding_model != embedding_model)
 
     async def delete_principal(self, *, agent_name: str, principal_id: str) -> int:
         keys = [
@@ -418,3 +428,8 @@ class RagRetriever:
         return await self.store.delete_document(
             agent_name=agent_name, principal_id=principal_id, document_id=document_id
         )
+
+    async def orphaned_chunks(self) -> int:
+        """R-32: stored chunks from a previous embedding model — they are
+        invisible to retrieval after a model change."""
+        return await self.store.orphaned_chunk_count(self.embedding.model)

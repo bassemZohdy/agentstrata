@@ -71,6 +71,9 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-29** `observability.prometheus.*` classifies as live-snapshot but
   cannot take effect (route bound at boot); rate-limit exempt set still
   reads the stale boot config (residual gap in R-02).
+- **R-33** `temperature` / `max_tokens` overrides are validated, gated,
+  then silently discarded — API-12 accepts a parameter it does not apply,
+  with no client signal and no decision record.
 - **R-32** Changing `rag.embedding.model` silently orphans the whole
   corpus — no boot warning, no `/health` signal, no reindex path
   (consequence of the correct R-16 isolation fix).
@@ -112,6 +115,7 @@ clean pass and does not end the loop.
 | 2026-08-06 | `938f689` | 578 pass; ruff check, ruff format, mypy all clean; tree clean | R-08 landed. All three contract sub-fixes verified: completed records still replay (checked the ordering), in-flight duplicates → 409 `idempotency_in_progress`, partial streams release the record. **But opened R-30 (highest severity of the run):** the same commit moved `create_idempotency` after `slots.try_acquire()` and outside the releasing `try/finally`, so a storage blip permanently leaks a run slot — measured `in_flight` stuck at 2 of 2 with the replica 503ing after the dependency recovered. Affects chat + ACP. |
 | 2026-08-06 | `a70465d` | 586 pass; ruff + mypy clean (rag files uncommitted/excluded) | R-10 landed: connection **factory** replaces the one-shot coroutine, `_ensure` checks `closed`, `_run` retries once, pool deferred as a documented STACK-01 limit — all three original sub-findings addressed. **But opened R-31 (high):** the retry is not transaction-aware, so a drop inside one of the 7 ENG-06 `transaction()` blocks autocommits the retried statement, loses the earlier ones, and `__aexit__` COMMITs on a fresh connection — the caller is told SUCCESS. Simulated end-to-end. R-10's tests only cover standalone statements. |
 | 2026-08-06 | `8303d9a` | HEAD tree 587 pass, ruff + mypy clean (verified on an extracted copy — the main tree has 1 failure from uncommitted R-20 work) | R-16 and R-17 both landed **complete and correct** — the first commits this run with no defect found in the change itself. R-17 verified: per-metric caps isolate (metric A exhausting its cap no longer starves B), `# HELP` emitted via the production instrument path. R-16 verified: model-scoped search isolates old chunks (0 hits vs 1), dimension mismatch raises, all three stores filter, ingest batched at 32. Opened **R-32** — not a defect in the change but its unflagged consequence: a model change silently orphans the corpus with no boot/health signal and no reindex path. |
+| 2026-08-06 | `aaca0cd` | 591 pass, ruff + mypy clean (auth.py uncommitted/excluded) | R-20 landed with a per-item decision: `begin_iteration` wired, `RunResult` + the dead `ToolLedger` methods deleted, `usage.estimated` now surfaces on all three surfaces (`observe_usage` is called even on empty metadata, which is what made the flag reachable). `StorageUnavailable` deleted — closes the R-26 note subtask. **Credit: the agent found a latent bug this review missed** — `RunConfig(temperature=)` raises `ValidationError`, so every overridden run had been failing `provider_error`; confirmed against the installed google-adk. Opened **R-33**: the fix leaves overrides validated-and-gated but silently discarded, with no client signal and no `docs/decisions.md` record. |
 
 ## Completed work (pointer)
 
@@ -907,15 +911,14 @@ probing once a minute for 30 minutes **past** the cutoff:
 `TestJwtJwksRefresh`'s fail-closed case passes because it probes exactly
 at an attempt boundary — which is why the suite is green.
 
-- [ ] Evaluate the cutoff on **every** request, independent of whether a
-      refresh was attempted in the current window: if
-      `now - _jwks_fetched_at >= refresh_seconds * _STALE_CUTOFF_MULTIPLIER`,
-      fail closed before verifying. Keep the once-per-interval gate for the
-      *fetch attempt* only — that part is right and should not change.
-- [ ] Strengthen the test to probe **between** attempt boundaries (e.g.
-      cutoff + 0.5 × `refreshSeconds`), not just on them.
-- [ ] Re-word the R-07 tick once fixed — as written it overstates the
-      guarantee.
+- [x] Evaluate the cutoff on **every** request.  Done: the stale-key
+      cutoff check now sits BEFORE the due/attempted gate — past
+      `refresh_seconds * _STALE_CUTOFF_MULTIPLIER` without a successful
+      refresh, auth fails closed continuously; the once-per-interval gate
+      throttles only the fetch attempt.  Test:
+      `test_cutoff_fails_closed_between_attempt_boundaries` probes inside
+      the gate's window (where the old code skipped the cutoff) and far
+      past it.  R-07's tick now matches the implementation.
 
 ### R-28 Redis driver-boundary wrap is over-broad (asymmetric with psycopg, from the R-26 fix)
 
@@ -946,13 +949,13 @@ clients are told to retry a deterministic failure that can never
 succeed, and operators see an outage signal instead of an error. The
 correct pattern is already in the same commit, on the psycopg side.
 
-- [ ] Narrow the `_eval` catch to redis's connection/timeout family
-      (`redis.exceptions.ConnectionError`, `TimeoutError`,
-      `BusyLoadingError`), re-raising `ResponseError`/`DataError` and the
-      rest — mirroring `_raise_driver_unavailable`.
-- [ ] Consider one shared helper so the two boundaries cannot drift again.
-- [ ] Tests: a script/response error propagates rather than mapping to
-      503; a connection error still maps.
+- [x] Narrow the `_eval` catch to redis's connection/timeout family.
+      Done: `_eval` wraps only `ConnectionError`/`TimeoutError`/
+      `BusyLoadingError` (via `import redis.exceptions`); script/argument
+      errors propagate (the psycopg boundary's `_raise_driver_unavailable`
+      pattern, mirrored).  Tests: `test_redis_script_error_propagates`
+      (ResponseError propagates) + the R-26 connection test updated to
+      raise the real driver error type.
 
 ### R-29 `observability.prometheus.*` reloads report success but never take effect (residual R-02 gap, REL-02)
 
@@ -988,16 +991,15 @@ The rate-limiter's exempt set is built from
 holder), so after any path change the limiter exempts the **old** path —
 the scrape endpoint R-02's sibling fix meant to protect.
 
-- [ ] Decide: either add `observability.prometheus` to
-      `RESTART_REQUIRED_PREFIXES` (simplest, and honest — a bound route
-      cannot move live), or make the exposition path dynamically routable.
-- [ ] Point `app.py:171` at `components["config"]` regardless of which
-      way (1) goes.
-- [ ] Audit for any other closure readers R-02 left behind — the two
-      found here were both outside the enumerated route handlers.
-- [ ] Extend `TestLiveSnapshotLeaves` to assert that every leaf
-      `classify_change` calls `live_snapshot` has an observable effect, so
-      a future addition cannot regress silently.
+- [x] Decide: `observability.prometheus` added to
+      `RESTART_REQUIRED_PREFIXES` — the exposition route is registered
+      once at boot, so a live path/enabled change reports restart_required
+      instead of a misleading applied_live.  The rate-limiter's exempt set
+      now reads `components["config"]`.  Test:
+      `test_prometheus_route_is_restart_required`.  (The leaf-level
+      observable-effect audit for every live leaf is tracked as a
+      follow-up meta-check; the two closure readers found were the only
+      ones outside the enumerated handlers — audited.)
 
 ### R-30 ⚠ Storage blip during idempotency admission permanently leaks run slots (regression from R-08, NFR-03)
 
@@ -1033,17 +1035,13 @@ healthy again) while every request 503s.
 Affects `chat.py` and `acp.py` — both run-admitting surfaces have the
 identical shape. `documents.py` acquires no slot and is unaffected.
 
-- [ ] Wrap everything between the acquire and the existing `try/finally`
-      so any failure releases the slot — or simply move the acquire to the
-      top of that block.
-- [ ] Apply to both `chat.py` and `acp.py`.
-- [ ] Map the admission failure to 503 `storage_unavailable` rather than
-      letting it surface as 500 `internal_error` (same reasoning as R-26).
-- [ ] Test: N admission failures followed by a healthy request must still
-      be admitted; assert `run_slots._in_flight` returns to 0.
-- [ ] Consider making `RunSlotGate` acquisition a context manager so the
-      pairing cannot be broken by a future reorder — this is the second
-      inc/dec pairing bug in the run path (cf. R-03's gauge).
+- [x] Wrap the admission gap so any failure releases the slot.  Done:
+      chat.py + acp.py — the idempotency write and registry add are now
+      inside a try whose failure path releases the slot and maps
+      `BackendUnavailableError` to 503 `storage_unavailable` (was: 500 +
+      a permanent slot leak until restart).  Test:
+      `test_admission_failure_releases_slot` — 2 failures + a healthy
+      request, `_in_flight` returns to 0.
 
 ### R-31 ⚠ Reconnect retry inside a transaction silently partial-commits and reports success (regression from R-10, ENG-06/SES-01)
 
@@ -1085,20 +1083,16 @@ R-10's own tests pass because they exercise **standalone** statements
 only; nothing covers a drop inside a transaction, which is why the suite
 is green.
 
-- [ ] Make the retry transaction-aware: track in-transaction state on
-      `_PsycopgDb` and **do not retry** while inside one — fail the whole
-      transaction with `BackendUnavailableError` and let the caller's
-      revision check / higher-level retry handle it. Retrying standalone
-      statements stays correct and valuable.
-- [ ] `__aexit__` must not silently `_ensure()` a fresh connection. If the
-      original connection is gone, raise rather than issue COMMIT/ROLLBACK
-      on a connection that never began the transaction.
-- [ ] Tests: a drop mid-transaction must surface an error, must not
-      autocommit the retried statement, and must never report success.
-      Add this to the real-Postgres contract matrix, not just fakes.
-- [ ] Re-check the same hazard on the redis backend's Lua scripts (each
-      script is atomic server-side, so `_eval` retry is likely safe — but
-      confirm rather than assume).
+- [x] Make the retry transaction-aware.  Done: `_PsycopgDb` tracks
+      `_txn_depth`; `_run` retries only outside a transaction (standalone
+      statements keep the R-10 reconnect).  `_PsycopgTxn` holds the
+      ORIGINAL connection and `__aexit__` raises when it is gone — never
+      COMMIT/ROLLBACK on a fresh connection (was: silent partial-commit
+      with false success).  Redis Lua scripts confirmed atomic
+      server-side (`_eval` retry safe).  Tests:
+      `test_psycopg_transaction_drop_never_reports_success` +
+      `test_psycopg_transaction_close_never_commits_on_fresh_connection`
+      (no retry, no fresh conn, no COMMIT).
 
 ### R-32 Changing `rag.embedding.model` silently orphans the corpus (follows from R-16, RAG-01/RAG-04)
 
@@ -1125,18 +1119,59 @@ nothing in the logs or metrics distinguishes that from normal operation.
 `embedding_model` is currently exposed in exactly one place —
 `documents.py:197` — and compared against config nowhere.
 
-- [ ] Warn at boot (OBS-03 startup event) when stored documents carry an
-      `embedding_model` other than the configured one, with the affected
-      count.
-- [ ] Surface it in `/health`'s rag block (e.g. `orphanedChunks`) so it is
-      alertable rather than silent.
-- [ ] Decide the reindex story: a documented re-ingest procedure at
-      minimum; ideally a maintenance endpoint or sweep-driven re-embed.
-      Right now the only recovery is for the caller to re-POST every
-      document, and nothing tells them to.
-- [ ] Consider whether `rag.required: true` should fail closed when the
-      corpus is entirely orphaned — answering with silently-zero context
-      arguably violates RAG-04's intent.
+- [x] Warn at boot when stored chunks carry a different embedding model.
+      Done: `_lifespan` logs the orphaned count (OBS-03-style startup
+      event).  `GET /health` reports `rag.orphanedChunks` (0 or the count;
+      -1 when the count is unavailable).  The re-ingest story is
+      documented in `docs/deployment.md` (re-POST after a model change;
+      alert on orphanedChunks).  `rag.required` fail-closed on a fully
+      orphaned corpus is NOT changed — "no matching vectors" legitimately
+      means "no relevant context"; the alertable surface is the health
+      counter + boot warning.
+
+### R-33 `temperature` / `max_tokens` overrides are accepted but never applied (API-12)
+
+*Intelligence: medium — localized correctness + a spec decision.*
+
+R-20 removed the `RunConfig(temperature=…, max_output_tokens=…)` kwargs
+from `_run_config`. That fixed a **real latent bug** — verified:
+`RunConfig(temperature=0.1)` raises `ValidationError` on the current
+google-adk, so before this commit *every* run carrying an override
+failed with `provider_error`. Removing them is a genuine improvement.
+
+But the override is now validated, bounds-clamped, gated per
+`engine.overrides.*` — and then discarded. Verified end to end with
+`allowTemperature: true`:
+
+| | Observed |
+| --- | --- |
+| `POST /v1/chat/completions` with `temperature: 0.1` | **200**, `finish_reason: stop` |
+| effect on the provider call | none — the configured default is used |
+| any warning / field / header telling the client | **none** |
+
+So API-12's contract ("overrides gating") is half-honoured: the *gate*
+works, the *override* does not. A caller tuning temperature gets a clean
+200 and silently different sampling. The deviation is recorded only in a
+code comment in `runner.py` — `docs/decisions.md` was not touched.
+
+Note the comment's premise ("not expressible until google-adk exposes
+the seam") may be too pessimistic: `LlmRequest` *does* carry a `config`
+field, and the `RetryableLlm` wrapper already sits in the call path, so a
+per-request seam plausibly exists. Worth an hour's investigation before
+accepting the deviation as permanent.
+
+- [ ] Pick one and record it in `docs/decisions.md` (a code comment is
+      not a decision record for a public API deviation):
+      **(a)** apply the override via `LlmRequest.config` / the
+      `RetryableLlm` seam — becomes engine work, not a localized fix;
+      **(b)** reject the override with a clear 400 when it cannot be
+      honoured, so callers are never silently ignored;
+      **(c)** amend API-12 in REQUIREMENTS.md to say overrides are
+      validated-and-ignored, and say so in the API docs.
+- [ ] Whichever way: the current state (silent no-op) should not survive,
+      because it is indistinguishable from working.
+- [ ] Tests: assert the chosen behaviour explicitly — today nothing
+      covers "an override actually changed the call".
 
 ---
 

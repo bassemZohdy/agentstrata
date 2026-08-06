@@ -66,6 +66,11 @@ RESTART_REQUIRED_PREFIXES = (
     "server.maxRequestLineBytes",
     "server.maxHeaderBytes",
     "server.maxHeaderCount",
+    # R-29: the Prometheus exposition route is registered once at boot — a
+    # live path/enabled change cannot move the route, so report
+    # restart_required instead of claiming an applied_live that does
+    # nothing.
+    "observability.prometheus",
     "k8s.",
     "observability.logFormat",
     "observability.otel",

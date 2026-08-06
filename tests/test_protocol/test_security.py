@@ -237,3 +237,38 @@ def _config_with(**overrides):
     if "mcp_url" in overrides:
         doc["tools"]["mcpServers"][0]["url"] = overrides["mcp_url"]
     return AgentConfig.model_validate(doc)
+
+
+class TestJwtStaleCutoffContinuous:
+    """R-27: the stale-key cutoff fails closed on EVERY request past the
+    bound — not just at the instants a refresh is attempted (the
+    once-per-interval gate throttles only the fetch attempt)."""
+
+    async def test_cutoff_fails_closed_between_attempt_boundaries(self, monkeypatch):
+        import app.protocol.auth as auth_mod
+
+        clock = {"now": 1_000.0}
+        monkeypatch.setattr(auth_mod, "_monotonic", lambda: clock["now"])
+        key_a, jwk_a = TestJwtJwksRefresh._keys("kid-a")
+        auth, state = TestJwtJwksRefresh._auth(
+            monkeypatch, jwks={"kid-a": jwk_a}, refresh_seconds=10
+        )
+        token_a = TestJwtJwksRefresh._signed(key_a, "kid-a")
+        assert (await auth.authenticate(TestJwtJwksRefresh._request(token_a)))[1] is None
+
+        # IdP down; advance just past the 3x cutoff (30 s).
+        state["jwks"] = None
+        clock["now"] += 30.5
+
+        # Every probe past the cutoff fails closed — at the boundary...
+        bad, err = await auth.authenticate(TestJwtJwksRefresh._request(token_a))
+        assert bad == "" and err is not None and err.code == "auth_unavailable"
+        # ...immediately after an attempt (inside the gate's window, where
+        # the old code skipped the cutoff test entirely)...
+        clock["now"] += 0.5
+        bad2, err2 = await auth.authenticate(TestJwtJwksRefresh._request(token_a))
+        assert bad2 == "" and err2 is not None and err2.code == "auth_unavailable"
+        # ...and far past it.
+        clock["now"] += 50
+        bad3, err3 = await auth.authenticate(TestJwtJwksRefresh._request(token_a))
+        assert bad3 == "" and err3 is not None and err3.code == "auth_unavailable"

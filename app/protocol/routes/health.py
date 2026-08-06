@@ -88,9 +88,18 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
         }
         rag = components.get("rag")
         if rag is not None and config.rag.enabled:
+            rag_orphaned = 0
+            if hasattr(rag, "orphaned_chunks"):
+                try:
+                    rag_orphaned = await rag.orphaned_chunks()
+                except Exception:  # noqa: BLE001 - health must not fail
+                    rag_orphaned = -1  # count unavailable
             components_status["rag"] = {
                 "status": "ok" if await rag.store.health() else "unavailable",
                 "required": config.rag.required,
+                # R-32: chunks from a previous embedding model are invisible
+                # to retrieval — alertable rather than silent zero context.
+                "orphanedChunks": rag_orphaned,
             }
         overall = "ok" if storage_ok and mcp.readiness() else "degraded"
         return JSONResponse(

@@ -350,6 +350,16 @@ class _ChromaStore:
 
         return await asyncio.to_thread(self._delete_document, kwargs)
 
+    async def orphaned_chunk_count(self, embedding_model: str) -> int:
+        """R-32: chunks stored under a different embedding model."""
+        import asyncio
+
+        return await asyncio.to_thread(self._orphaned_chunk_count, embedding_model)
+
+    def _orphaned_chunk_count(self, embedding_model: str) -> int:
+        collection = self._ensure()
+        return collection.count(where={"model": {"$ne": embedding_model}})
+
     def _delete_document(self, kwargs: dict[str, Any]) -> int:
         collection = self._ensure()
         result = collection.get(
@@ -523,6 +533,22 @@ class _PgvectorStore:
         import asyncio
 
         return await asyncio.to_thread(self._delete_document, kwargs)
+
+    async def orphaned_chunk_count(self, embedding_model: str) -> int:
+        """R-32: chunks stored under a different embedding model."""
+        import asyncio
+
+        return await asyncio.to_thread(self._orphaned_chunk_count, embedding_model)
+
+    def _orphaned_chunk_count(self, embedding_model: str) -> int:
+        conn = self._connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM rag_chunks WHERE embedding_model != %s",
+                (embedding_model,),
+            )
+            row = cur.fetchone()
+        return int((row or [0])[0])
 
     def _delete_document(self, kwargs: dict[str, Any]) -> int:
         conn = self._connect()

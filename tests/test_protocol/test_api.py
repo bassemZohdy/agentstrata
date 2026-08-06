@@ -479,3 +479,54 @@ class TestIdempotencyContract:
                 )
             )
             assert rec is None or rec.status != "completed"
+
+
+class TestSlotAdmissionSafety:
+    """R-30: a storage blip during idempotency admission must release the
+    run slot — N failures followed by a healthy request are all admitted,
+    and the gate returns to zero (was: permanent leak until restart)."""
+
+    def test_admission_failure_releases_slot(self):
+        from app.protocol.app import RunSlotGate
+        from app.storage.contract import BackendUnavailableError
+
+        class _FlakyBackend:
+            def __init__(self, inner, fail_for: int) -> None:
+                self._inner = inner
+                self._fail_for = fail_for
+
+            async def create_idempotency(self, **kwargs):
+                if self._fail_for > 0:
+                    self._fail_for -= 1
+                    raise BackendUnavailableError("redis blip")
+                return await self._inner.create_idempotency(**kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        from app.observability.otel import Observability
+        from app.protocol.app import create_app
+
+        from .conftest import build_components, make_config
+
+        config = make_config()
+        obs = Observability(config)
+        components = build_components(config, obs)
+        components["backend"] = _FlakyBackend(components["backend"], fail_for=2)
+        app = create_app(config, components, mode="standalone")
+        gate = components["run_slots"]
+        assert isinstance(gate, RunSlotGate)
+        with TestClient(app) as c:
+            payload = {
+                "model": "mock",
+                "messages": [{"role": "user", "content": "hi"}],
+                "idempotency_key": "k-slot",
+            }
+            for _ in range(2):
+                r = c.post("/v1/chat/completions", json=payload)
+                assert r.status_code == 503
+                assert r.json()["error"]["code"] == "storage_unavailable"
+            assert gate._in_flight == 0  # no slot leaked
+            r3 = c.post("/v1/chat/completions", json=payload)
+            assert r3.status_code == 200
+            assert gate._in_flight == 0

@@ -155,6 +155,20 @@ class _JwtAuth(AuthProvider):
             )
         now = _monotonic()
         if self._jwks and self._jwks_fetched_at is not None:
+            # R-27 (SEC-08): the stale-key cutoff is evaluated on EVERY
+            # request — past it without a successful refresh, fail closed
+            # continuously, not just at the instants a refresh is
+            # attempted.  (The once-per-interval gate below throttles only
+            # the fetch attempt.)
+            stale_cutoff = self._jwks_fetched_at + (
+                self._refresh_seconds * _STALE_CUTOFF_MULTIPLIER
+            )
+            if now >= stale_cutoff:
+                return "", AuthFailure(
+                    AUTH_UNAVAILABLE_STATUS,
+                    "auth_unavailable",
+                    "identity provider unavailable",
+                )
             due = now - self._jwks_fetched_at >= self._refresh_seconds
             attempted = (
                 self._jwks_last_attempt is not None
@@ -166,17 +180,7 @@ class _JwtAuth(AuthProvider):
                 # so a rotated key stops being trusted without needing a
                 # failed verification first.
                 self._jwks_last_attempt = now
-                if not await self._refresh_jwks() and (
-                    now - self._jwks_fetched_at >= self._refresh_seconds * _STALE_CUTOFF_MULTIPLIER
-                ):
-                    # SEC-08 stale-key cutoff: past this bound without a
-                    # successful refresh, fail closed rather than verify
-                    # against ancient keys.
-                    return "", AuthFailure(
-                        AUTH_UNAVAILABLE_STATUS,
-                        "auth_unavailable",
-                        "identity provider unavailable",
-                    )
+                await self._refresh_jwks()
         payload = _verify_jwt(token, self._jwks, self._issuer, self._audience)
         # SEC-08: rotation — refresh once and retry before failing.
         if payload is None and await self._refresh_jwks():

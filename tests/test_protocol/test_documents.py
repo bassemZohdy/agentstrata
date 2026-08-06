@@ -350,3 +350,18 @@ async def test_validation_failure_leaves_no_pending_record():
         assert rec is None
     finally:
         await components["mcp"].close()
+
+
+async def test_health_reports_orphaned_chunks():
+    """R-32: /health's rag block carries orphanedChunks (0 with no model
+    change) so a silently-zero corpus after a model change is alertable."""
+    transport, components = await _build_app(rag={"enabled": True})
+    try:
+        r = await _request(transport, "POST", "/v1/documents", {"text": "hello world"})
+        assert r.status_code == 201
+        h = await _request(transport, "GET", "/health")
+        assert h.status_code == 200
+        rag_block = h.json()["components"]["rag"]
+        assert rag_block["orphanedChunks"] == 0
+    finally:
+        await components["mcp"].close()

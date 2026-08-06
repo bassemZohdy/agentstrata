@@ -31,6 +31,7 @@ from ...engine.events import (
     ToolResult,
 )
 from ...engine.runner import RunRequest
+from ...storage.contract import BackendUnavailableError
 from ..errors import PublicErrorResponse
 
 _ALLOWED_FIELDS = {
@@ -185,22 +186,33 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 metrics_bundle.denials.add(1, {"reason": "concurrency"})
             raise PublicErrorResponse("overloaded", "Too many concurrent runs", 503) from None
 
-        # R-08: admit the idempotency key AFTER the slot acquire — a 503
-        # overloaded rejection must not leave a pending record behind.
-        if idem_key:
-            await components["backend"].create_idempotency(
-                agent_name=agent_name,
-                principal_id=principal,
-                session_id=body.get("session_id") or "",
-                key=idem_key,
-                ttl_seconds=config.storage.idempotencyTtlSeconds,
-            )
-        # CNT-07: track the driving task so grace-expiry shutdown can cancel
-        # it (persisting a terminal state) before storage closes.
-        run_registry = components.get("run_registry")
-        current_task = asyncio.current_task()
-        if run_registry is not None and current_task is not None:
-            run_registry.add(current_task)
+        # R-30: the slot is released by the run paths below — an admission
+        # failure in the gap (the idempotency write can raise on a storage
+        # outage, now that R-26 wraps driver errors) must release it and
+        # surface 503 storage_unavailable, never leak the slot.
+        try:
+            if idem_key:
+                await components["backend"].create_idempotency(
+                    agent_name=agent_name,
+                    principal_id=principal,
+                    session_id=body.get("session_id") or "",
+                    key=idem_key,
+                    ttl_seconds=config.storage.idempotencyTtlSeconds,
+                )
+            # CNT-07: track the driving task so grace-expiry shutdown can cancel
+            # it (persisting a terminal state) before storage closes.
+            run_registry = components.get("run_registry")
+            current_task = asyncio.current_task()
+            if run_registry is not None and current_task is not None:
+                run_registry.add(current_task)
+        except BackendUnavailableError as exc:
+            if slots is not None:
+                slots.release()
+            raise PublicErrorResponse("storage_unavailable", "storage unavailable") from exc
+        except BaseException:
+            if slots is not None:
+                slots.release()
+            raise
 
         if streaming:
             return StreamingResponse(

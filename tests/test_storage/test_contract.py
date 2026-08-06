@@ -611,28 +611,56 @@ class TestSweep:
         assert fresh_rec.status == "created"
 
     async def test_redis_driver_error_wraps_as_backend_unavailable(self, settings):
-        """R-26: a raw driver failure at the redis boundary surfaces as
-        BackendUnavailableError so routes map it to 503 (never a raw 500)."""
+        """R-26/R-28: a connection-level driver failure at the redis
+        boundary surfaces as BackendUnavailableError so routes map it to
+        503 (never a raw 500)."""
+        import redis.exceptions as redis_exc
+
         from app.storage.redis_backend import RedisBackend
 
         class _BoomClient:
             async def get(self, *args, **kwargs):
-                raise ConnectionError("redis is down")
+                raise redis_exc.ConnectionError("redis is down")
 
             async def set(self, *args, **kwargs):
-                raise ConnectionError("redis is down")
+                raise redis_exc.ConnectionError("redis is down")
 
             async def delete(self, *args, **kwargs):
-                raise ConnectionError("redis is down")
+                raise redis_exc.ConnectionError("redis is down")
 
             async def eval(self, *args, **kwargs):
-                raise ConnectionError("redis is down")
+                raise redis_exc.ConnectionError("redis is down")
 
         backend = RedisBackend(_BoomClient(), settings)
         with pytest.raises(BackendUnavailableError):
             await backend.create_session(agent_name=AGENT, principal_id=PRINCIPAL)
         with pytest.raises(BackendUnavailableError):
             await backend.delete_session(agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid")
+
+    async def test_redis_script_error_propagates(self, settings):
+        """R-28: a script/argument error (ResponseError/DataError) is a
+        code bug and must propagate — not masquerade as a retryable
+        BackendUnavailableError."""
+        import redis.exceptions as redis_exc
+
+        from app.storage.redis_backend import RedisBackend
+
+        class _ScriptBugClient:
+            async def get(self, *args, **kwargs):
+                return None
+
+            async def set(self, *args, **kwargs):
+                return None
+
+            async def delete(self, *args, **kwargs):
+                return 0
+
+            async def eval(self, *args, **kwargs):
+                raise redis_exc.ResponseError("Lua script bug")
+
+        backend = RedisBackend(_ScriptBugClient(), settings)
+        with pytest.raises(redis_exc.ResponseError):
+            await backend.create_session(agent_name=AGENT, principal_id=PRINCIPAL)
 
     async def test_postgres_driver_error_wraps_as_backend_unavailable(self, settings):
         """R-26: the psycopg boundary (execute/query incl. connection
@@ -1053,4 +1081,93 @@ async def test_psycopg_retry_exhausted_still_wraps_outage():
     db = _PsycopgDb(_factory)
     with pytest.raises(BackendUnavailableError):
         await db.execute("SELECT 1")
+    await db.close()
+
+
+async def test_psycopg_transaction_drop_never_reports_success():
+    """R-31: a connection dropped mid-transaction surfaces an error — the
+    dropped statement must NOT be retried on a fresh autocommit connection
+    (that would partial-commit outside the transaction), and the close
+    must never COMMIT on a fresh connection."""
+    import psycopg
+
+    from app.main import _PsycopgDb
+
+    executed: list[str] = []
+    created = {"n": 0}
+
+    class _DroppingConn:
+        def __init__(self) -> None:
+            self.closed = False
+            self.drop = True
+
+        async def set_autocommit(self, value: bool) -> None:
+            self.autocommit = value
+
+        async def execute(self, sql, params=None) -> None:
+            if self.drop and "INSERT" in sql:
+                self.drop = False
+                raise psycopg.OperationalError("server closed the connection")
+            executed.append(sql)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def _factory():
+        created["n"] += 1
+        return _DroppingConn()
+
+    db = _PsycopgDb(_factory)
+    with pytest.raises(BackendUnavailableError):
+        async with db.transaction():
+            await db.execute("UPDATE sessions SET x = 1")
+            await db.execute("INSERT INTO runs VALUES (1)")  # drops mid-txn
+    # No retry, no fresh connection, no COMMIT anywhere.
+    assert created["n"] == 1
+    assert "COMMIT" not in executed
+    await db.close()
+
+
+async def test_psycopg_transaction_close_never_commits_on_fresh_connection():
+    """R-31: __aexit__ must not silently acquire a fresh connection — if
+    the original transaction connection is gone, an outage is reported
+    instead of a no-op COMMIT that would claim false success."""
+    import psycopg
+
+    from app.main import _PsycopgDb
+
+    executed: list[str] = []
+    created = {"n": 0}
+
+    class _DiesOnInsert:
+        def __init__(self) -> None:
+            self.closed = False
+            self.inserted = False
+
+        async def set_autocommit(self, value: bool) -> None:
+            self.autocommit = value
+
+        async def execute(self, sql, params=None) -> None:
+            if "INSERT" in sql and not self.inserted:
+                self.inserted = True
+                self.closed = True  # the connection is gone
+                raise psycopg.OperationalError("server closed the connection")
+            executed.append(sql)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def _factory():
+        created["n"] += 1
+        return _DiesOnInsert()
+
+    db = _PsycopgDb(_factory)
+    with pytest.raises(BackendUnavailableError):
+        async with db.transaction():
+            await db.execute("UPDATE sessions SET x = 1")
+            await db.execute("INSERT INTO runs VALUES (1)")  # drop + dead conn
+    # __aexit__ saw the original connection closed -> outage, never a
+    # fresh-connection COMMIT.
+    assert created["n"] == 1
+    assert "COMMIT" not in executed
     await db.close()

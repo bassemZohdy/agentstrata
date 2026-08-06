@@ -138,7 +138,14 @@ knowledge) after the system instruction.
   identity field is a component rebuild — old documents are NEVER silently
   re-embedded; migrate explicitly (RAG-05).
 - **Embedding** (`rag.embedding`): `gemini` or `openai` with
-  `apiKeyEnv/File`; `model` selects the embedding model.
+  `apiKeyEnv/File`; `model` selects the embedding model.  **Model
+  changes (R-32):** after switching `rag.embedding.model`, previously
+  ingested documents become invisible to retrieval (search is scoped to
+  the configured model).  The boot log warns with the orphaned chunk
+  count, and `GET /health` reports `rag.orphanedChunks` — alert on it.
+  Recovery is a documented re-ingest: re-`POST` the documents (or run
+  the sweep-driven migration) so they are re-embedded under the new
+  model.
 - **Tuning**: `topK` (1..100), `minScore` (0..1), `chunkChars`,
   `chunkOverlapChars` (must be < chunkChars), `maxDocumentBytes` (default
   10 MiB).

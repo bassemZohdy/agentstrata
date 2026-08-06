@@ -99,6 +99,11 @@ class _PsycopgDb:
         self._factory = conn_factory
         self._row_factory = row_factory
         self._conn = None
+        # R-31: nonzero while a _PsycopgTxn is open — the reconnect retry
+        # is DISABLED inside a transaction (a dropped statement there must
+        # fail the whole transaction, never re-run on a fresh autocommit
+        # connection outside it).
+        self._txn_depth = 0
 
     async def _connect(self):
         """Create a fresh connection from the factory (a callable, or a
@@ -121,13 +126,19 @@ class _PsycopgDb:
     async def _run(self, op):
         """Run ``op(conn)`` with one reconnect retry when the connection
         was dropped mid-operation (R-10); driver outages still surface as
-        BackendUnavailableError after the retry (R-26)."""
+        BackendUnavailableError after the retry (R-26).
+
+        R-31: inside a transaction the retry is DISABLED — re-running a
+        dropped statement on a fresh autocommit connection would
+        partial-commit outside the transaction and report false success.
+        """
         import psycopg
 
+        retry = self._txn_depth == 0
         try:
             return await op(await self._ensure())
         except Exception as exc:  # noqa: BLE001 — driver boundary
-            if not isinstance(exc, psycopg.OperationalError):
+            if not isinstance(exc, psycopg.OperationalError) or not retry:
                 _raise_driver_unavailable(exc)
             # R-10: dropped/closed connection — reset and retry once.
             if self._conn is not None:
@@ -185,27 +196,56 @@ def _raise_driver_unavailable(exc: Exception) -> NoReturn:
 
 
 class _PsycopgTxn:
+    """BEGIN/COMMIT/ROLLBACK wrapper (R-31: holds the ORIGINAL connection;
+    if it is gone at close time, the transaction outcome is unknown and an
+    outage is reported instead of committing nothing on a fresh
+    connection)."""
+
     def __init__(self, db) -> None:
         self._db = db
+        self._conn: Any = None
 
     async def __aenter__(self):
+        self._db._txn_depth += 1
         try:
-            conn = await self._db._ensure()
-            await conn.set_autocommit(False)
-            await conn.execute("BEGIN")
-        except Exception as exc:  # noqa: BLE001 — driver boundary (R-26)
-            _raise_driver_unavailable(exc)
+
+            async def _begin(_unused: Any = None) -> Any:
+                conn = await self._db._ensure()
+                self._conn = conn
+                await conn.set_autocommit(False)
+                await conn.execute("BEGIN")
+                return conn
+
+            # _run wraps driver outages as BackendUnavailableError (R-26);
+            # inside a transaction (depth > 0) it does not retry (R-31).
+            await self._db._run(_begin)
+        except BaseException:
+            self._db._txn_depth -= 1
+            raise
         return None
 
     async def __aexit__(self, exc_type, exc, tb):
-        conn = await self._db._ensure()
+        self._db._txn_depth -= 1
+        conn: Any = self._conn
         try:
+            if conn is None or conn.closed:
+                # R-31: the transaction connection is gone — the outcome is
+                # unknown.  NEVER commit on a fresh connection (a no-op that
+                # would report false success and lose the partial writes).
+                import psycopg
+
+                raise psycopg.OperationalError("transaction connection lost")
             if exc_type is None:
                 await conn.execute("COMMIT")
             else:
                 await conn.execute("ROLLBACK")
+        except Exception as exc2:  # noqa: BLE001 — driver boundary
+            _raise_driver_unavailable(exc2)
         finally:
-            await conn.set_autocommit(True)
+            self._conn = None
+            if conn is not None:
+                with suppress(Exception):
+                    await conn.set_autocommit(True)
 
 
 def build_components(

@@ -107,6 +107,23 @@ async def _lifespan(app: FastAPI, components: dict[str, Any], config: Any) -> As
 
         await _sweep_once()
         components["sweep_task"] = asyncio.create_task(_sweep_loop())
+    # R-32: warn at boot when stored documents were embedded by a DIFFERENT
+    # model than the configured one — they are invisible to retrieval until
+    # re-ingested (alertable via /health's rag.orphanedChunks).
+    rag = components.get("rag")
+    if rag is not None and hasattr(rag, "orphaned_chunks"):
+        try:
+            orphaned = await rag.orphaned_chunks()
+            if orphaned:
+                logging.getLogger("app.lifecycle").warning(
+                    "rag: %d stored chunks use a different embedding model "
+                    "than the configured %s — re-ingest documents to make "
+                    "them retrievable again (R-32)",
+                    orphaned,
+                    rag.embedding.model,
+                )
+        except Exception:  # noqa: BLE001 - boot must not fail on the count
+            logging.getLogger("app.lifecycle").exception("rag orphaned-chunk count")
     # HITL-05: the approval reconciler runs at startup (finishes pending
     # records left by a previous process) and then on a fixed interval to
     # enforce approval timeouts against the onTimeout policy.
@@ -167,8 +184,10 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
         async def rate_limit_middleware(request: Request, call_next):
             # API-20: health probes are never rate-limited; the Prometheus
             # scrape endpoint (OBS-05) is exempt so scrapers cannot be
-            # throttled by the replica-local limiter.
-            exempt = {"/healthz", "/readyz", config.observability.prometheus.path}
+            # throttled by the replica-local limiter.  R-29: read the LIVE
+            # config (observability.prometheus is restart-pinned, but the
+            # holder is the single source of truth).
+            exempt = {"/healthz", "/readyz", components["config"].observability.prometheus.path}
             if request.url.path in exempt:
                 return await call_next(request)
             principal = getattr(request.state, "principal", None)

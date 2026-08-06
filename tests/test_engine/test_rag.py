@@ -879,3 +879,42 @@ class TestEmbeddingModelIsolation:
 
         with pytest.raises(ValueError):
             _cosine([1.0, 0.0], [1.0, 0.0, 0.0])
+
+
+class TestOrphanedCorpus:
+    """R-32: chunks from a previous embedding model are counted as
+    orphaned — invisible to retrieval until re-ingested."""
+
+    @pytest.mark.asyncio
+    async def test_store_counts_orphaned_chunks(self):
+        store = MemoryRagStore()
+        emb_a = DeterministicEmbedding(model="embed-a")
+        emb_b = DeterministicEmbedding(model="embed-b")
+        vectors = await emb_a.embed(["alpha"])
+        await store.upsert_document(
+            agent_name="agent",
+            principal_id="p1",
+            document_id="d1",
+            embedding_model=emb_a.model,
+            metadata={},
+            chunks=[(0, "alpha", content_hash("alpha"), vectors[0])],
+            content_hash=content_hash("alpha"),
+        )
+        assert await store.orphaned_chunk_count(emb_a.model) == 0
+        # a model change makes the stored chunk orphaned
+        assert await store.orphaned_chunk_count(emb_b.model) == 1
+
+    @pytest.mark.asyncio
+    async def test_retriever_orphaned_count(self):
+        store = MemoryRagStore()
+        retriever_a = RagRetriever(
+            config=_rag_config().rag, store=store, embedding=DeterministicEmbedding(model="a")
+        )
+        await retriever_a.ingest(
+            agent_name="agent", principal_id="p1", document_id="d1", text="alpha beta"
+        )
+        assert await retriever_a.orphaned_chunks() == 0
+        retriever_b = RagRetriever(
+            config=_rag_config().rag, store=store, embedding=DeterministicEmbedding(model="b")
+        )
+        assert await retriever_b.orphaned_chunks() == 1

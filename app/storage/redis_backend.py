@@ -111,8 +111,23 @@ class RedisBackend(StorageBackend):
             if type(self._client).__module__.startswith("redis"):
                 return await self._client.eval(script, len(keys), *keys, *args)
             return await self._client.eval(script, keys, args)
-        except Exception as exc:  # noqa: BLE001 — driver boundary
-            raise BackendUnavailableError(f"redis driver error: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 — driver boundary (R-28)
+            # R-28: mirror the psycopg boundary — wrap only the
+            # connection/timeout family as an outage; script/argument
+            # errors (ResponseError/DataError) are code bugs and must
+            # propagate, not masquerade as retryable 503s.
+            import redis.exceptions as redis_exc
+
+            if isinstance(
+                exc,
+                (
+                    redis_exc.ConnectionError,
+                    redis_exc.TimeoutError,
+                    redis_exc.BusyLoadingError,
+                ),
+            ):
+                raise BackendUnavailableError(f"redis driver error: {exc}") from exc
+            raise
 
     async def initialize(self) -> None:
         try:
