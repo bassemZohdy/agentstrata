@@ -101,10 +101,18 @@ class RedisBackend(StorageBackend):
         ``eval(script, numkeys, *keys_and_args)`` while the ACC-01
         FakeRedis substitute mirrors the backend's older two-list shape.
         (The real-instance matrix caught this mismatch: list-numkeys is a
-        DataError on redis-py.)"""
-        if type(self._client).__module__.startswith("redis"):
-            return await self._client.eval(script, len(keys), *keys, *args)
-        return await self._client.eval(script, keys, args)
+        DataError on redis-py.)
+
+        R-26: driver outages are translated to ``BackendUnavailableError``
+        HERE so every route that touches this backend can map them to
+        503 ``storage_unavailable`` instead of leaking a raw 500.
+        """
+        try:
+            if type(self._client).__module__.startswith("redis"):
+                return await self._client.eval(script, len(keys), *keys, *args)
+            return await self._client.eval(script, keys, args)
+        except Exception as exc:  # noqa: BLE001 — driver boundary
+            raise BackendUnavailableError(f"redis driver error: {exc}") from exc
 
     async def initialize(self) -> None:
         try:

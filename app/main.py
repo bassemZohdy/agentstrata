@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, NoReturn
 
 from .config import mode as mode_mod
 from .config.cli import EX_CONFIG, EX_OK
@@ -107,14 +107,20 @@ class _PsycopgDb:
             self._conn = None
 
     async def execute(self, sql, params=()):
-        conn = await self._ensure()
-        await conn.execute(sql, list(params) if params else None)
+        try:
+            conn = await self._ensure()
+            await conn.execute(sql, list(params) if params else None)
+        except Exception as exc:  # noqa: BLE001 — driver boundary (R-26)
+            _raise_driver_unavailable(exc)
 
     async def query(self, sql, params=()):
-        conn = await self._ensure()
-        async with conn.cursor(row_factory=self._row_factory) as cur:
-            await cur.execute(sql, list(params) if params else None)
-            return await cur.fetchall()
+        try:
+            conn = await self._ensure()
+            async with conn.cursor(row_factory=self._row_factory) as cur:
+                await cur.execute(sql, list(params) if params else None)
+                return await cur.fetchall()
+        except Exception as exc:  # noqa: BLE001 — driver boundary (R-26)
+            _raise_driver_unavailable(exc)
 
     def transaction(self):
         return _PsycopgTxn(self)
@@ -128,14 +134,29 @@ class _PsycopgDb:
         await self.execute("SELECT pg_advisory_unlock(%s)", (key,))
 
 
+def _raise_driver_unavailable(exc: Exception) -> NoReturn:
+    """R-26: translate psycopg DRIVER outages to BackendUnavailableError at
+    the boundary, so routes map them to 503 ``storage_unavailable`` instead
+    of leaking a raw psycopg error as a 500.  Non-connection errors (code
+    bugs) keep propagating as-is."""
+    import psycopg
+
+    if isinstance(exc, psycopg.OperationalError):
+        raise BackendUnavailableError(f"postgres driver error: {exc}") from exc
+    raise exc
+
+
 class _PsycopgTxn:
     def __init__(self, db) -> None:
         self._db = db
 
     async def __aenter__(self):
-        conn = await self._db._ensure()
-        await conn.set_autocommit(False)
-        await conn.execute("BEGIN")
+        try:
+            conn = await self._db._ensure()
+            await conn.set_autocommit(False)
+            await conn.execute("BEGIN")
+        except Exception as exc:  # noqa: BLE001 — driver boundary (R-26)
+            _raise_driver_unavailable(exc)
         return None
 
     async def __aexit__(self, exc_type, exc, tb):
