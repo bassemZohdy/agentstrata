@@ -4,9 +4,10 @@ The backlog from the 2026-08-05 deep review is **closed**.  All phases
 P1–P5 are implemented and passing the host-based test suite; the P5-4
 per-request cost-accounting finish line (usage-shape consistency, tests,
 docs, hygiene) landed on 2026-08-06 and is recorded in
-[CHANGELOG.md](CHANGELOG.md).  Requirement IDs in parentheses trace back
-to [REQUIREMENTS.md](REQUIREMENTS.md); build order and rationale are in
-[PLAN.md](PLAN.md).
+[CHANGELOG.md](CHANGELOG.md).  The only open items are the traceability
+gaps below (TRC-01) and the deferred scope at the bottom.  Requirement IDs
+in parentheses trace back to [REQUIREMENTS.md](REQUIREMENTS.md); build
+order and rationale are in [PLAN.md](PLAN.md).
 
 ## Completed work (pointer)
 
@@ -39,6 +40,27 @@ CHANGELOG.md.
       `McpToolset`, so no migration applies until an upstream release
       replaces it (STACK-01: a google-adk bump is a
       requirements-impacting decision).
+
+## Traceability gaps (TRC-01) — resolved
+
+The auto-generated traceability matrix (`docs/traceability.md`, produced by
+`scripts/gen-traceability.py`) is missing rows for requirement IDs that ARE
+implemented and tested but were never added to the generator's `MAPPINGS`
+dict.  Each is a TRC-01 completeness violation: the matrix must map every
+requirement ID to its verification location.
+
+- [x] **ACP surface IDs `A-1`..`A-6`** (P2 multi-agent, §13).  All six are
+      live requirements in REQUIREMENTS.md and are implemented
+      (`app/protocol/routes/acp.py`, conditionally registered in
+      `app/protocol/app.py` when `server.protocols.acp: true`) and tested
+      (`tests/test_protocol/test_acp.py`), but have **no rows** in
+      `docs/traceability.md` and no entries in the `MAPPINGS` dict.  Fix:
+      add `A-1`..`A-6` mappings to `scripts/gen-traceability.py` and
+      regenerate.  *Done:* mappings added; the ID regex now also matches
+      single-letter annex IDs (`A-1`..`A-6`) without catching prose like
+      P5-4/SHA-256/UTF-8; regenerated matrix maps 184 IDs (was 178) with
+      the six A- rows; regeneration is deterministic and zero-diff after
+      commit.
 
 ## Deferred scope
 

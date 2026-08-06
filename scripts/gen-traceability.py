@@ -207,15 +207,33 @@ MAPPINGS: dict[str, str] = {
     "observability/metrics.py (agentbase_cost_usd_total) + "
     "config/capabilities.py (health `costs`); tests/test_protocol/test_cost.py",
     "COST-02": "tests/test_protocol/test_cost.py + tests/test_config/test_validation.py",
+    # P2 ACP acceptance annex (§13.1): implemented in app/protocol/routes/acp.py
+    # (gated by server.protocols.acp in app/protocol/app.py), golden fixtures
+    # in tests/test_protocol/test_acp.py.
+    "A-1": "app/protocol/routes/acp.py (prefix); app/protocol/app.py (protocols.acp gating)",
+    "A-2": "app/protocol/routes/acp.py (GET /acp/agents); tests/test_protocol/test_acp.py",
+    "A-3": "app/protocol/routes/acp.py (POST /acp/runs request); tests/test_protocol/test_acp.py",
+    "A-4": "app/protocol/routes/acp.py (POST /acp/runs response); tests/test_protocol/test_acp.py",
+    "A-5": "app/protocol/routes/acp.py (auth/session/idempotency/errors); "
+    "tests/test_protocol/test_acp.py",
+    "A-6": "tests/test_protocol/test_acp.py (golden fixtures)",
 }
 
 
 def main() -> int:
     text = (ROOT / "REQUIREMENTS.md").read_text(encoding="utf-8")
     # TRC-01: requirement IDs are UPPER-words that may contain digits in the
-    # prefix (e.g. K8S-01) followed by -NN with an optional letter suffix
-    # (e.g. CFG-11a).
-    ids = sorted(set(re.findall(r"\b([A-Z][A-Z0-9]{1,4}-\d{2}[a-z]?)\b", text)))
+    # prefix (e.g. K8S-01), followed by -NN with an optional letter suffix
+    # (e.g. CFG-11a); the P2 ACP annex uses single-letter IDs A-1..A-6.
+    # (The two alternatives keep prose like P5-4/SHA-256/UTF-8 out.)
+    ids = sorted(
+        set(
+            re.findall(
+                r"\b(?:[A-Z][A-Z0-9]{1,4}-\d{2}[a-z]?|[A-Z]-\d{1,2}[a-z]?)\b",
+                text,
+            )
+        )
+    )
     missing = [i for i in ids if i not in MAPPINGS]
     if missing:
         print("unmapped requirement IDs:", ", ".join(missing), file=sys.stderr)

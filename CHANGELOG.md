@@ -71,6 +71,10 @@ TODO.md:
   — our code already uses `McpToolset`; deferral documented.
 - Host suite: **527 passed**; ruff + mypy (app, scripts, tests) clean;
   schemas zero-diff; manifest sync OK.
+- Follow-up (TRC-01): the P2 ACP acceptance-annex IDs `A-1`..`A-6` are
+  now mapped in the traceability matrix — the generator's ID regex also
+  matches single-letter annex IDs, and regeneration is deterministic
+  (184 requirements mapped).
 
 Open deferrals (documented, not release-blocking): google.adk upstream
 MCPTool replacement; multi-agent per-sub-agent cost pricing (until P2

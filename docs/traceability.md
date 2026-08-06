@@ -6,6 +6,12 @@ verified by the Milestone 8 acceptance/chaos run.
 
 | Requirement | Verification |
 | --- | --- |
+| A-1 | app/protocol/routes/acp.py (prefix); app/protocol/app.py (protocols.acp gating) |
+| A-2 | app/protocol/routes/acp.py (GET /acp/agents); tests/test_protocol/test_acp.py |
+| A-3 | app/protocol/routes/acp.py (POST /acp/runs request); tests/test_protocol/test_acp.py |
+| A-4 | app/protocol/routes/acp.py (POST /acp/runs response); tests/test_protocol/test_acp.py |
+| A-5 | app/protocol/routes/acp.py (auth/session/idempotency/errors); tests/test_protocol/test_acp.py |
+| A-6 | tests/test_protocol/test_acp.py (golden fixtures) |
 | ACC-01 | tests/; M8 acceptance run on the built image (storage per recorded deviation) |
 | API-00 | app/protocol/app.py (middleware) |
 | API-01 | app/protocol/routes/health.py (/healthz) |
