@@ -71,6 +71,9 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-29** `observability.prometheus.*` classifies as live-snapshot but
   cannot take effect (route bound at boot); rate-limit exempt set still
   reads the stale boot config (residual gap in R-02).
+- **R-32** Changing `rag.embedding.model` silently orphans the whole
+  corpus — no boot warning, no `/health` signal, no reindex path
+  (consequence of the correct R-16 isolation fix).
 - **R-30** ⚠ **Highest severity so far** — a storage blip during
   idempotency admission permanently leaks run slots on chat + ACP, so the
   replica 503s forever after `maxConcurrentRequests` failures (regression
@@ -108,6 +111,7 @@ clean pass and does not end the loop.
 | 2026-08-06 | `90c7891` | 572 pass; ruff check, ruff format (117 files), mypy all clean; **working tree clean** | Two high-intelligence items landed. **R-02 confirmed fixed** with the original repro (`/config` now reflects an `applied_live` reload — was the founding finding of this backlog). R-11 verified: `maxTools` truncation propagates to the attached set, and the dead-session probe is covered by 4 genuinely-running stdio integration tests (not skipped). Opened **R-29** — a residual R-02 gap: `observability.prometheus.path` reports `applied_live` but the route stays bound at the boot path (verified 404/200), and `app.py:171` still reads the captured boot config. |
 | 2026-08-06 | `938f689` | 578 pass; ruff check, ruff format, mypy all clean; tree clean | R-08 landed. All three contract sub-fixes verified: completed records still replay (checked the ordering), in-flight duplicates → 409 `idempotency_in_progress`, partial streams release the record. **But opened R-30 (highest severity of the run):** the same commit moved `create_idempotency` after `slots.try_acquire()` and outside the releasing `try/finally`, so a storage blip permanently leaks a run slot — measured `in_flight` stuck at 2 of 2 with the replica 503ing after the dependency recovered. Affects chat + ACP. |
 | 2026-08-06 | `a70465d` | 586 pass; ruff + mypy clean (rag files uncommitted/excluded) | R-10 landed: connection **factory** replaces the one-shot coroutine, `_ensure` checks `closed`, `_run` retries once, pool deferred as a documented STACK-01 limit — all three original sub-findings addressed. **But opened R-31 (high):** the retry is not transaction-aware, so a drop inside one of the 7 ENG-06 `transaction()` blocks autocommits the retried statement, loses the earlier ones, and `__aexit__` COMMITs on a fresh connection — the caller is told SUCCESS. Simulated end-to-end. R-10's tests only cover standalone statements. |
+| 2026-08-06 | `8303d9a` | HEAD tree 587 pass, ruff + mypy clean (verified on an extracted copy — the main tree has 1 failure from uncommitted R-20 work) | R-16 and R-17 both landed **complete and correct** — the first commits this run with no defect found in the change itself. R-17 verified: per-metric caps isolate (metric A exhausting its cap no longer starves B), `# HELP` emitted via the production instrument path. R-16 verified: model-scoped search isolates old chunks (0 hits vs 1), dimension mismatch raises, all three stores filter, ingest batched at 32. Opened **R-32** — not a defect in the change but its unflagged consequence: a model change silently orphans the corpus with no boot/health signal and no reindex path. |
 
 ## Completed work (pointer)
 
@@ -866,10 +870,11 @@ the client the server is broken. API-15/ENG-10 map dependency outages to
       `_eval` wraps driver errors; `_PsycopgDb.execute/query` and
       `_PsycopgTxn.__aenter__` wrap `psycopg.OperationalError`
       (`_raise_driver_unavailable`).
-- [ ] Note `StorageUnavailable` (`contract.py:57`) is declared but never
+- [x] Note `StorageUnavailable` (`contract.py:57`) is declared but never
       raised anywhere — decide whether it is the intended wrapper type or
-      dead code (see R-20).  *Carried into R-20's per-item decision
-      (same implement-vs-delete review).*
+      dead code (see R-20).  Decided: dead code — the boundary wraps use
+      `BackendUnavailableError` (R-26); the class was never referenced,
+      and is deleted (R-20's per-item decision).
 - [x] Tests: a backend raising a non-`StorageError` yields 503 on both
       routes.  Done: `test_driver_outage_maps_to_503` (both routes) +
       redis/postgres boundary-wrap tests in the storage contract suite.
@@ -1094,6 +1099,44 @@ is green.
 - [ ] Re-check the same hazard on the redis backend's Lua scripts (each
       script is atomic server-side, so `_eval` retry is likely safe — but
       confirm rather than assume).
+
+### R-32 Changing `rag.embedding.model` silently orphans the corpus (follows from R-16, RAG-01/RAG-04)
+
+*Intelligence: medium — localized correctness / operability.*
+
+R-16 correctly scoped retrieval to the configured embedding model — the
+alternative (scoring against stale vectors) was the bug. But nothing
+tells an operator what that means for data already ingested.
+
+After a model change, every previously ingested document is invisible to
+search, and **no surface says so**:
+
+| Surface | After the model change |
+| --- | --- |
+| retrieval | 0 hits, always |
+| `/readyz`, `/health` | `rag: ok` — the store *is* healthy |
+| `GET /v1/documents/{id}` | still returns the doc, `chunk_count > 0` |
+| `rag_degraded` event | never fires — RAG-04 signals store/embedding *failure*, not an orphaned corpus |
+
+The sharp edge is the last row: with `rag.required: true` the run does
+**not** fail, because "no matching vectors" is indistinguishable from "no
+relevant context". The agent answers with no knowledge, confidently, and
+nothing in the logs or metrics distinguishes that from normal operation.
+`embedding_model` is currently exposed in exactly one place —
+`documents.py:197` — and compared against config nowhere.
+
+- [ ] Warn at boot (OBS-03 startup event) when stored documents carry an
+      `embedding_model` other than the configured one, with the affected
+      count.
+- [ ] Surface it in `/health`'s rag block (e.g. `orphanedChunks`) so it is
+      alertable rather than silent.
+- [ ] Decide the reindex story: a documented re-ingest procedure at
+      minimum; ideally a maintenance endpoint or sweep-driven re-embed.
+      Right now the only recovery is for the caller to re-POST every
+      document, and nothing tells them to.
+- [ ] Consider whether `rag.required: true` should fail closed when the
+      corpus is entirely orphaned — answering with silently-zero context
+      arguably violates RAG-04's intent.
 
 ---
 

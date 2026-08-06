@@ -54,10 +54,6 @@ class StorageError(Exception):
     """Base class for storage contract errors."""
 
 
-class StorageUnavailable(StorageError):
-    """Backend unavailable (SES-04): stateful requests 503 storage_unavailable."""
-
-
 class CapacityError(StorageError):
     """A capacity bound was hit (SES-02/07): 503 storage_capacity."""
 
