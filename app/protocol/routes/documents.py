@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import suppress
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
@@ -100,16 +101,15 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             )
             if replay is not None and replay.status == "completed":
                 return JSONResponse(status_code=200, content=replay.outcome)
-            # API-06a: admit the key before the work (the replay only fires
-            # once the work completed; a racing duplicate sees the admitted
-            # record and waits on the same outcome).
-            await components["backend"].create_idempotency(
-                agent_name=agent_name,
-                principal_id=principal,
-                session_id="__documents__",
-                key=idem_key,
-                ttl_seconds=86400,
-            )
+            if replay is not None:
+                # R-08: the documented "racing duplicate waits on the same
+                # outcome" is implemented as the REQUIREMENTS in-progress
+                # contract — 409, never a second ingest.
+                raise PublicErrorResponse(
+                    "idempotency_in_progress",
+                    "a request with this idempotency key is already running",
+                    409,
+                )
         text = body.get("text")
         if not isinstance(text, str) or not text:
             raise PublicErrorResponse("invalid_request", "text must be non-empty", 400)
@@ -124,6 +124,16 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
         if not isinstance(document_id, str) or not validate_session_id(document_id):
             raise PublicErrorResponse("invalid_document_id", "invalid document id", 400)
         metadata = _validate_metadata(body.get("metadata", {}))
+        # R-08: admit the key only after validation — a 400 must not leave
+        # a pending record behind.
+        if idem_key:
+            await components["backend"].create_idempotency(
+                agent_name=agent_name,
+                principal_id=principal,
+                session_id="__documents__",
+                key=idem_key,
+                ttl_seconds=config.storage.idempotencyTtlSeconds,
+            )
         try:
             record = await rag.ingest(
                 agent_name=agent_name,
@@ -133,6 +143,16 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 metadata=metadata,
             )
         except Exception as exc:  # noqa: BLE001 - RAG-04: ingestion never degrades
+            if idem_key:
+                # R-08: release the record on a failed ingest — a retry
+                # must not wait out a TTL on a record that never completed.
+                with suppress(BaseException):
+                    await components["backend"].expire_idempotency(
+                        agent_name=agent_name,
+                        principal_id=principal,
+                        session_id="__documents__",
+                        key=idem_key,
+                    )
             raise PublicErrorResponse(
                 "rag_unavailable",
                 "document ingestion failed (store or embedding unavailable)",

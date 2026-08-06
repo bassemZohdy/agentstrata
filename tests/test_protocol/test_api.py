@@ -393,3 +393,89 @@ class TestCors:
             r = c.get("/health", headers={"Origin": "https://example.com"})
             # with default corsOrigins ["*"] and no credentials, requests pass
             assert r.status_code == 200
+
+
+class TestIdempotencyContract:
+    """R-08 (API-06a): in-flight duplicates get 409; a cancelled/partial
+    stream releases the record so a retry runs fresh."""
+
+    def test_in_flight_duplicate_409(self):
+        """A second request with the same key while the first is in flight
+        gets 409 idempotency_in_progress — never a second run."""
+        from app.protocol.app import create_app
+        from app.storage.model import IdempotencyRecord
+
+        class _InflightBackend:
+            async def get_idempotency(self, **kwargs):
+                return IdempotencyRecord(
+                    agent_name="agent",
+                    principal_id="anonymous",
+                    session_id="",
+                    key=kwargs["key"],
+                    status="in_progress",
+                )
+
+            async def create_idempotency(self, **kwargs):
+                return None
+
+            async def expire_idempotency(self, **kwargs):
+                return True
+
+        config = make_config()
+        components = {
+            "backend": _InflightBackend(),
+            "mcp": None,
+            "runner": None,  # the 409 raises before the runner is used
+        }
+        with TestClient(create_app(config, components, mode="standalone")) as c:
+            r = c.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "mock",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "idempotency_key": "k-race",
+                },
+            )
+            assert r.status_code == 409
+            assert r.json()["error"]["code"] == "idempotency_in_progress"
+
+    def test_partial_stream_never_finalized_as_completed(self):
+        """A mid-stream disconnect must never finalize the idempotency
+        record as a completed result (a retry would otherwise replay the
+        truncated answer).  The record is either released or left
+        in_progress — never completed with partial content."""
+        import asyncio
+
+        from app.observability.otel import Observability
+        from app.protocol.app import create_app
+
+        from .conftest import build_components
+
+        config = make_config()
+        obs = Observability(config)
+        components = build_components(config, obs)
+        app = create_app(config, components, mode="standalone")
+        with TestClient(app) as c:
+            payload = {
+                "model": "mock",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                "idempotency_key": "k-partial",
+            }
+            with c.stream("POST", "/v1/chat/completions", json=payload) as r:
+                assert r.status_code == 200
+                first = next(r.iter_text())
+                assert "chat.completion.chunk" in first
+                # (context exit = client disconnect mid-stream)
+            import hashlib
+
+            canonical = hashlib.sha256(b"k-partial").hexdigest()
+            rec = asyncio.run(
+                components["backend"].get_idempotency(
+                    agent_name="agent",
+                    principal_id="anonymous",
+                    session_id="",
+                    key=canonical,
+                )
+            )
+            assert rec is None or rec.status != "completed"

@@ -135,6 +135,14 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                     content=_non_streaming_from_replay(replay, request_id),
                     headers={"Cache-Control": "no-store"},
                 )
+            if replay is not None:
+                # R-08 (API-06a): a second request with the same key while
+                # the first is in flight gets 409 — never a second run.
+                raise PublicErrorResponse(
+                    "idempotency_in_progress",
+                    "a request with this idempotency key is already running",
+                    409,
+                )
 
         # API-12: overrides gating.
         temperature = body.get("temperature")
@@ -168,15 +176,6 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             streaming=streaming,
         )
 
-        if idem_key:
-            await components["backend"].create_idempotency(
-                agent_name=agent_name,
-                principal_id=principal,
-                session_id=body.get("session_id") or "",
-                key=idem_key,
-                ttl_seconds=config.storage.idempotencyTtlSeconds,
-            )
-
         # NFR-03: in-flight run cap (server.maxConcurrentRequests) - reject
         # with 503 `overloaded` (API-15) BEFORE any model work starts.
         slots = components.get("run_slots")
@@ -185,6 +184,17 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             if metrics_bundle is not None:
                 metrics_bundle.denials.add(1, {"reason": "concurrency"})
             raise PublicErrorResponse("overloaded", "Too many concurrent runs", 503) from None
+
+        # R-08: admit the idempotency key AFTER the slot acquire — a 503
+        # overloaded rejection must not leave a pending record behind.
+        if idem_key:
+            await components["backend"].create_idempotency(
+                agent_name=agent_name,
+                principal_id=principal,
+                session_id=body.get("session_id") or "",
+                key=idem_key,
+                ttl_seconds=config.storage.idempotencyTtlSeconds,
+            )
         # CNT-07: track the driving task so grace-expiry shutdown can cancel
         # it (persisting a terminal state) before storage closes.
         run_registry = components.get("run_registry")
@@ -481,6 +491,11 @@ async def _stream(
     x_status: str | None = None
     usage: dict[str, Any] = {}
     mid_stream_cancel: str | None = None
+    # R-08: only a stream that reached the producer's end marker counts as
+    # completed for idempotency finalization — every other exit (disconnect
+    # poll, slow consumer, GeneratorExit teardown) releases the record in
+    # the finally block below.
+    stream_completed = False
     try:
         while True:
             # Disconnect poll: the queue.get timeout bounds this to <=1 s.
@@ -498,6 +513,8 @@ async def _stream(
             if item is _STREAM_DONE:
                 if slow_consumer.is_set():
                     mid_stream_cancel = "slow_consumer"
+                else:
+                    stream_completed = True
                 break
             event = item
             if isinstance(event, TextDelta):
@@ -644,6 +661,20 @@ async def _stream(
         current_task = asyncio.current_task()
         if run_registry is not None and current_task is not None:
             run_registry.discard(current_task)
+        # R-08: a stream that did NOT reach the producer's end marker
+        # (disconnect poll, slow consumer, or GeneratorExit teardown) is
+        # never finalized as completed — release the idempotency record so
+        # a retry with the same key runs fresh.  This block runs on every
+        # exit path (including generator close during a client disconnect),
+        # which the post-finally code cannot reach.
+        if idem_key and not stream_completed:
+            with suppress(BaseException):
+                await components["backend"].expire_idempotency(
+                    agent_name=agent_name,
+                    principal_id=principal,
+                    session_id=run_request.session_id or "",
+                    key=idem_key,
+                )
 
     # API-08a: after headers are sent, a mid-stream cancellation emits one
     # x_agent_event error chunk then [DONE]; status stays 200 and no
@@ -694,7 +725,7 @@ async def _stream(
             }
         )
     yield "data: [DONE]\n\n"
-    if idem_key:
+    if idem_key and stream_completed:
         result = _non_streaming_body(
             text="".join(assistant_text),
             model=config.llm.model,

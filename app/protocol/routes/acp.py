@@ -116,6 +116,14 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                     content=_non_streaming_from_replay(replay, request_id),
                     headers={"Cache-Control": "no-store"},
                 )
+            if replay is not None:
+                # R-08 (A-5): an in-progress key returns 409 — never a
+                # second run.
+                raise PublicErrorResponse(
+                    "idempotency_in_progress",
+                    "a request with this idempotency key is already running",
+                    409,
+                )
 
         run_request = RunRequest(
             principal_id=principal,
@@ -127,6 +135,13 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             streaming=streaming,
         )
 
+        # Admission: same run cap + CNT-07 registry as chat (A-5).
+        slots = components.get("run_slots")
+        if slots is not None and not await slots.try_acquire():
+            raise PublicErrorResponse("overloaded", "Too many concurrent runs", 503) from None
+
+        # R-08: admit the idempotency key AFTER the slot acquire — a 503
+        # overloaded rejection must not leave a pending record behind.
         if idem_key:
             await components["backend"].create_idempotency(
                 agent_name=agent_name,
@@ -135,11 +150,6 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 key=idem_key,
                 ttl_seconds=config.storage.idempotencyTtlSeconds,
             )
-
-        # Admission: same run cap + CNT-07 registry as chat (A-5).
-        slots = components.get("run_slots")
-        if slots is not None and not await slots.try_acquire():
-            raise PublicErrorResponse("overloaded", "Too many concurrent runs", 503) from None
         run_registry = components.get("run_registry")
         current_task = asyncio.current_task()
         if run_registry is not None and current_task is not None:

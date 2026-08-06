@@ -64,6 +64,9 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-28** Redis driver-boundary wrap is over-broad: script/programming
   errors are reported as dependency outages (asymmetric with the psycopg
   wrap added in the same commit).
+- **R-29** `observability.prometheus.*` classifies as live-snapshot but
+  cannot take effect (route bound at boot); rate-limit exempt set still
+  reads the stale boot config (residual gap in R-02).
 
 ### Low intelligence — mechanical cleanup / docs / CI
 
@@ -94,6 +97,7 @@ clean pass and does not end the loop.
 | 2026-08-06 | *(idle ×49)* | not run | HEAD held at `1fb0772` for ~12 h. Idle intervals — no review, no edits. Activity resumed at the end of the run. |
 | 2026-08-06 | `9946770` | 565 pass, ruff + mypy clean | R-09 (streaming body cap) and R-13 (WS rate limit + UTF-8 byte cap) landed and verified. R-07 partially correct: the cadence refresh, `_jwks_failed` removal and the JWK-`alg` pinning are all right, but the stale-key cutoff leaks — opened **R-27** (measured: 77% of probes past the cutoff still verify against stale keys). Note R-26's ticks describe work that is still **uncommitted** at this HEAD, so it is not yet verified. |
 | 2026-08-06 | `fed1185` | HEAD tree 565 pass, ruff + mypy clean (verified on an extracted copy — the main working tree has 4 failures from uncommitted R-02 work) | R-14 verified across all three surfaces (chat/ACP/WS now emit identical `prompt/completion/total_tokens` + `costUsd`). **R-26 confirmed fixed** with the original repro (both routes → 503 `storage_unavailable`); ticks accurate. Opened **R-28** — the redis boundary wrap catches bare `Exception`, so a Lua script bug reports as an outage, while the psycopg wrap in the same commit correctly re-raises code bugs. Note: `32ea6c1` is a broken commit — its own tests fail without the boundary files that landed in `fed1185` (self-disclosed). |
+| 2026-08-06 | `90c7891` | 572 pass; ruff check, ruff format (117 files), mypy all clean; **working tree clean** | Two high-intelligence items landed. **R-02 confirmed fixed** with the original repro (`/config` now reflects an `applied_live` reload — was the founding finding of this backlog). R-11 verified: `maxTools` truncation propagates to the attached set, and the dead-session probe is covered by 4 genuinely-running stdio integration tests (not skipped). Opened **R-29** — a residual R-02 gap: `observability.prometheus.path` reports `applied_live` but the route stays bound at the boot path (verified 404/200), and `app.py:171` still reads the captured boot config. |
 
 ## Completed work (pointer)
 
@@ -342,12 +346,29 @@ failure. A revoked or rotated-in-place key stays trusted indefinitely.
 - A `503 overloaded` rejection (`chat.py:178`) leaves the record
   `pending` until TTL because it is created before the slot acquire.
 
-- [ ] Define and implement the in-flight-duplicate contract (409, or
-      wait-and-replay) consistently across chat / ACP / documents.
-- [ ] Do not finalize an idempotency record for a cancelled or partial
-      stream; release it instead.
-- [ ] Acquire the run slot before admitting the idempotency key.
-- [ ] Tests: concurrent same-key requests, disconnect-then-retry.
+- [x] Define and implement the in-flight-duplicate contract (409, or
+      wait-and-replay) consistently across chat / ACP / documents.  Done:
+      409 `idempotency_in_progress` (the REQUIREMENTS API-06a/A-5
+      contract) on chat, ACP, and documents — a racing duplicate never
+      runs a second time.  Codes added to the API-15 mapping.  (Note:
+      the RFC 8785 hash-conflict distinction — same key, different body
+      → `idempotency_conflict` — remains unimplemented; documented for a
+      follow-up.)
+- [x] Do not finalize an idempotency record for a cancelled or partial
+      stream; release it instead.  Done: `_stream` finalizes only when
+      the producer's end marker was reached; any other exit (disconnect
+      poll, slow consumer, generator close) expires the record in the
+      finally block — a retry never replays a truncated answer.
+- [x] Acquire the run slot before admitting the idempotency key.  Done:
+      chat + ACP admit the key after the slot acquire (a 503 overloaded
+      rejection leaves no pending record); documents admits after
+      validation and releases on ingest failure.
+- [x] Tests: concurrent same-key requests, disconnect-then-retry.  Done:
+      `test_in_flight_duplicate_409` (chat), ACP shares the chat check,
+      documents `test_idempotency_in_flight_409` +
+      `test_validation_failure_leaves_no_pending_record`,
+      `test_partial_stream_never_finalized_as_completed` (route-level),
+      `TestIdempotencyRelease` (unit: close releases, drain finalizes).
 
 ### R-09 Request body is fully buffered before the size check (API-20, NFR-03)
 
@@ -864,6 +885,51 @@ correct pattern is already in the same commit, on the psycopg side.
 - [ ] Consider one shared helper so the two boundaries cannot drift again.
 - [ ] Tests: a script/response error propagates rather than mapping to
       503; a connection error still maps.
+
+### R-29 `observability.prometheus.*` reloads report success but never take effect (residual R-02 gap, REL-02)
+
+*Intelligence: medium — localized correctness.*
+
+R-02 converted the route handlers it enumerated to read
+`components["config"]` per request. Two readers were missed, both with
+the same symptom R-02 existed to remove — a leaf that classifies as
+live-snapshot, reports `applied_live`, and silently does nothing.
+
+**1. The Prometheus route is bound at boot.**
+`observability.prometheus.path` / `.enabled` appear in neither
+`RESTART_REQUIRED_PREFIXES` nor the rebuild set, so `classify_change`
+returns `live_snapshot` — but `create_app` registers the exposition route
+once, at the boot path.
+
+Verified with a single-leaf overlay (`path: /metrics` → `/newmetrics`):
+
+| | Result |
+| --- | --- |
+| reload outcome | `applied_live`, changed `['observability.prometheus.path']` |
+| live holder | updated to `/newmetrics` ✔ |
+| `GET /newmetrics` | **404** ✘ |
+| `GET /metrics` | **200** — still serving the old path ✘ |
+
+A scrape config moved to the new path gets 404s while the runtime
+reports the reload applied. `.enabled` is worse: flipping it on live
+cannot register the route at all.
+
+**2. `app/protocol/app.py:171` still reads the captured boot config.**
+The rate-limiter's exempt set is built from
+`config.observability.prometheus.path` (the closure variable, not the
+holder), so after any path change the limiter exempts the **old** path —
+the scrape endpoint R-02's sibling fix meant to protect.
+
+- [ ] Decide: either add `observability.prometheus` to
+      `RESTART_REQUIRED_PREFIXES` (simplest, and honest — a bound route
+      cannot move live), or make the exposition path dynamically routable.
+- [ ] Point `app.py:171` at `components["config"]` regardless of which
+      way (1) goes.
+- [ ] Audit for any other closure readers R-02 left behind — the two
+      found here were both outside the enumerated route handlers.
+- [ ] Extend `TestLiveSnapshotLeaves` to assert that every leaf
+      `classify_change` calls `live_snapshot` has an observable effect, so
+      a future addition cannot regress silently.
 
 ---
 

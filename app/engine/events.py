@@ -206,6 +206,7 @@ PUBLIC_ERROR_CODES = {
     "iteration_limit",
     "tool_outcome_unknown",
     "invalid_request",
+    "idempotency_in_progress",
     "internal_error",
 }
 

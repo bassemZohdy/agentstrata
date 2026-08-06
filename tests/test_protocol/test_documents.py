@@ -298,3 +298,54 @@ async def test_readyz_required_and_optional():
         assert r.json()["rag"] is False
     finally:
         await mcp.close()
+
+
+async def test_idempotency_in_flight_409():
+    """R-08: a racing duplicate with the same key while the first ingest is
+    in flight gets 409 idempotency_in_progress — never a second ingest."""
+    import hashlib
+
+    transport, components = await _build_app(rag={"enabled": True})
+    try:
+        key = hashlib.sha256(b"k-race").hexdigest()
+        await components["backend"].create_idempotency(
+            agent_name="agent",
+            principal_id="anonymous",
+            session_id="__documents__",
+            key=key,
+            ttl_seconds=3600,
+        )
+        r = await _request(
+            transport,
+            "POST",
+            "/v1/documents",
+            {"text": "x", "idempotency_key": "k-race"},
+        )
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "idempotency_in_progress"
+    finally:
+        await components["mcp"].close()
+
+
+async def test_validation_failure_leaves_no_pending_record():
+    """R-08: a validation failure (400) must not leave a pending
+    idempotency record behind — the key is admitted only after
+    validation."""
+    transport, components = await _build_app(rag={"enabled": True})
+    try:
+        r = await _request(
+            transport,
+            "POST",
+            "/v1/documents",
+            {"text": "", "idempotency_key": "k-bad"},
+        )
+        assert r.status_code == 400
+        rec = await components["backend"].get_idempotency(
+            agent_name="agent",
+            principal_id="anonymous",
+            session_id="__documents__",
+            key="k-bad",
+        )
+        assert rec is None
+    finally:
+        await components["mcp"].close()

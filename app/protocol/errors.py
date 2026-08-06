@@ -20,6 +20,7 @@ STATUS_BY_CODE: dict[str, int] = {
     "auth_error": 401,
     "auth_unavailable": 503,
     "session_busy": 409,
+    "idempotency_in_progress": 409,
     "storage_unavailable": 503,
     "storage_capacity": 503,
     "rate_limited": 429,

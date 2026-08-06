@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -174,3 +175,95 @@ class TestClientDisconnect:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-q"])
+
+
+class TestIdempotencyRelease:
+    """R-08: a stream that does not complete releases its idempotency
+    record (never finalized as a completed result); a completed stream
+    finalizes it."""
+
+    @staticmethod
+    def _spy_backend():
+        calls = {"expired": 0, "finished": 0}
+
+        class _Spy:
+            async def expire_idempotency(self, **kwargs):
+                calls["expired"] += 1
+                return True
+
+            async def finish_idempotency(self, **kwargs):
+                calls["finished"] += 1
+
+        return _Spy(), calls
+
+    async def test_mid_stream_close_releases_record(self):
+        from collections.abc import AsyncGenerator
+
+        from app.engine.runner import RunRequest
+
+        config = make_config()
+        backend, calls = self._spy_backend()
+        runner = _runner(
+            [TextDelta(text="hi"), Done(usage={"input_tokens": 1, "output_tokens": 1})]
+        )
+        req = RunRequest(
+            principal_id="anon",
+            user_message="hi",
+            agent_name="agent",
+            idempotency_key="canon-key",
+            session_id=None,
+        )
+        gen = cast(
+            AsyncGenerator[str, None],
+            _stream(
+                runner,
+                req,
+                _FakeRequest(),
+                "rid",
+                config,
+                "canon-key",
+                {"backend": backend},
+                "anon",
+                "agent",
+            ),
+        )
+        first = await gen.__anext__()
+        assert "chat.completion.chunk" in first
+        # Client disconnect mid-stream: closing the generator must release
+        # the record, never finalize it as completed.
+        await gen.aclose()
+        assert calls["expired"] == 1
+        assert calls["finished"] == 0
+
+    async def test_completed_stream_finalizes_record(self):
+
+        from app.engine.runner import RunRequest
+
+        config = make_config()
+        backend, calls = self._spy_backend()
+        runner = _runner(
+            [TextDelta(text="hi"), Done(usage={"input_tokens": 1, "output_tokens": 1})]
+        )
+        req = RunRequest(
+            principal_id="anon",
+            user_message="hi",
+            agent_name="agent",
+            idempotency_key="canon-key",
+            session_id=None,
+        )
+        body = await _drain(
+            _stream(
+                runner,
+                req,
+                _FakeRequest(),
+                "rid",
+                config,
+                "canon-key",
+                {"backend": backend},
+                "anon",
+                "agent",
+            )
+        )
+        assert "data: [DONE]" in body
+        assert calls["finished"] == 1
+        assert calls["expired"] == 0
