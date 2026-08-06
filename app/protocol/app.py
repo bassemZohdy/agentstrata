@@ -133,7 +133,13 @@ async def _lifespan(app: FastAPI, components: dict[str, Any], config: Any) -> As
 
 
 def create_app(config: Any, components: dict[str, Any], mode: str = "standalone") -> FastAPI:
-    """Build the FastAPI app (API-00 surface-wide contract)."""
+    """Build the FastAPI app (API-00 surface-wide contract).
+
+    R-02: ``components["config"]`` is the LIVE config holder — the reload
+    path swaps it atomically and route handlers re-read it per request,
+    so live-snapshot leaves take effect without a restart.
+    """
+    components["config"] = config
     app = FastAPI(
         title="Agentbase",
         version=__version__,
@@ -299,7 +305,7 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
         from .routes.metrics import register as register_metrics
 
         register_metrics(app, config, components)
-    sessions.register_models(app, config)
+    sessions.register_models(app, config, components)
     # API-16: the ACP surface registers only when enabled; otherwise the
     # paths are ordinary 404s (API-00). CAP-01 still gates enabling it until
     # the P2 acceptance suite passes.

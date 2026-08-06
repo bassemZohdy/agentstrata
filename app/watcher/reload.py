@@ -198,6 +198,9 @@ class ReloadManager:
             self._config = new_config
             self._components["generation"] = self._generation
             self._components["config_hash"] = _config_hash(new_config)
+            # R-02: swap the live config holder so route handlers re-read
+            # the new generation per request (no restart needed).
+            self._components["config"] = new_config
             # REL-02 live-snapshot re-application: replica-local run cap and
             # the rate-limit ceiling apply immediately (the gate/limiter
             # objects are shared with the route/middleware, so mutating
@@ -249,6 +252,9 @@ class ReloadManager:
         self._config = new_config
         replacements["generation"] = self._generation
         replacements["config_hash"] = _config_hash(new_config)
+        # R-02: the replacement set carries the live config holder too — the
+        # captured create_app config is stale for both reload categories.
+        replacements["config"] = new_config
         for key, value in old_components.items():
             if key not in replacements:
                 replacements[key] = value

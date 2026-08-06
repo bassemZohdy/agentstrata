@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -570,3 +571,154 @@ class TestReloadWithInFlightRunsMA05:
         # the new runner carries the sub-agent tree
         new_component = manager.components["agent"]
         assert [a.name for a in new_component.sub_agents] == ["worker"]
+
+
+class TestLiveSnapshotLeaves:
+    """R-02: live-snapshot leaves reach the HTTP routes after apply_tier8 —
+    one observable effect per leaf, no restart (the config holder in
+    components["config"] is swapped atomically and route handlers re-read
+    it per request)."""
+
+    @staticmethod
+    def _config(server: dict | None = None, engine: dict | None = None) -> AgentConfig:
+        # Boot config must match the bundled tier-1 resolution EXCEPT for
+        # the leaf under test — otherwise apply_tier8's diff is polluted
+        # by unrelated fields and misclassifies the reload.
+        engine_doc: dict[str, Any] = {"systemInstruction": "You are a helpful assistant."}
+        if engine:
+            engine_doc.update(engine)
+        doc: dict[str, Any] = {
+            "name": "agent",
+            "engine": engine_doc,
+            "llm": {
+                "provider": "gemini",
+                "model": "gemini-2.5-flash",
+                "apiKeyEnv": "GEMINI_API_KEY",
+            },
+            # The resolver derives these from the agent name; mirror them so
+            # apply_tier8's diff against the bundled resolution is clean.
+            "k8s": {"name": "agent"},
+            "observability": {"otel": {"serviceName": "agent"}},
+            "server": server or {},
+        }
+        return AgentConfig.model_validate(doc)
+
+    @classmethod
+    def _live_app(cls, config: AgentConfig):
+        from fastapi.testclient import TestClient
+        from test_protocol.conftest import build_components
+
+        from app.protocol.app import create_app
+
+        components = build_components(config)
+        app = create_app(config, components, mode="standalone")
+        manager = ReloadManager(
+            lambda cfg, gen: build_components(cfg), config, components, bundled_dir=REPO_CONFIG
+        )
+        components["reload_manager"] = manager
+        return TestClient(app), components, manager
+
+    async def test_live_exposeSystemInstruction_reaches_config(self):
+        """The R-02 repro: after an applied_live reload setting
+        exposeSystemInstruction, /config starts showing the instruction."""
+        client, _components, manager = self._live_app(self._config())
+        with client:
+            boot = client.get("/config").json()
+            assert "systemInstruction" not in boot.get("engine", {})
+            result = await manager.apply_tier8({"server": {"exposeSystemInstruction": True}})
+            assert result.outcome == "applied_live"
+            live = client.get("/config").json()
+            assert "systemInstruction" in live["engine"]
+            # the reload manager's generation is reported by /health
+            assert client.get("/health").json()["configGeneration"] == 2
+
+    async def test_live_overrides_gating_reaches_chat(self):
+        """engine.overrides.allowTemperature flips live: the temperature
+        override is rejected after the reload without a restart."""
+        client, _components, manager = self._live_app(
+            self._config(engine={"overrides": {"allowTemperature": False}})
+        )
+        with client:
+            r = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "mock",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "temperature": 0.5,
+                },
+            )
+            assert r.status_code == 400
+            assert r.json()["error"]["code"] == "invalid_request"
+            result = await manager.apply_tier8(
+                {"engine": {"overrides": {"allowTemperature": True}}}
+            )
+            assert result.outcome == "applied_live"
+            r2 = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "mock",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "temperature": 0.5,
+                },
+            )
+            assert r2.status_code == 200
+
+    async def test_live_maxRequestBytes_reaches_read_body(self):
+        """The 413 threshold moves with a live maxRequestBytes reload."""
+        import json as _json
+
+        client, _components, manager = self._live_app(
+            self._config(server={"maxRequestBytes": 1024})
+        )
+        big = _json.dumps({"model": "mock", "messages": [{"role": "user", "content": "x" * 5000}]})
+        with client:
+            r = client.post(
+                "/v1/chat/completions",
+                content=big,
+                headers={"content-type": "application/json"},
+            )
+            assert r.status_code == 413
+            result = await manager.apply_tier8({"server": {"maxRequestBytes": 1_048_576}})
+            assert result.outcome == "applied_live"
+            r2 = client.post(
+                "/v1/chat/completions",
+                content=big,
+                headers={"content-type": "application/json"},
+            )
+            assert r2.status_code == 200
+
+    async def test_rebuild_llm_model_reaches_models_endpoint(self):
+        """component_rebuild also propagates the live config holder: a new
+        llm.model is served by /v1/models after the swap (no restart)."""
+        client, _components, manager = self._live_app(self._config())
+        with client:
+            assert client.get("/v1/models").json()["data"][0]["id"] == "gemini-2.5-flash"
+            result = await manager.apply_tier8({"llm": {"model": "gpt-5"}})
+            assert result.outcome == "applied_rebuild"
+            assert client.get("/v1/models").json()["data"][0]["id"] == "gpt-5"
+
+    async def test_live_maxMessageBytes_reaches_websocket(self):
+        """A live maxMessageBytes reload caps NEW WebSocket connections."""
+        import json as _json
+
+        import pytest
+        from starlette.websockets import WebSocketDisconnect
+
+        config = self._config(
+            server={"protocols": {"websocket": True}, "maxMessageBytes": 1_048_576}
+        )
+        client, components, manager = self._live_app(config)
+        with client:
+            # server.protocols is restart-pinned, so apply_tier8 cannot flip
+            # it via overlay; swap components["config"] directly — the same
+            # atomic holder the reload path writes (R-02).
+            doc = config.model_dump(by_alias=True, mode="json")
+            doc["server"]["maxMessageBytes"] = 1024
+            components["config"] = AgentConfig.model_validate(doc)
+            with (
+                pytest.raises(WebSocketDisconnect) as exc,
+                client.websocket_connect("/v1/ws") as ws,
+            ):
+                ws.send_text(_json.dumps({"type": "ping", "pad": "x" * 5000}))
+                ws.receive_json()
+            assert exc.value.code == 1009

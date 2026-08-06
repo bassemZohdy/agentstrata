@@ -33,6 +33,9 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
         # API-02: full readiness.
         # CNT-07: once draining begins, readiness fails immediately so the
         # platform stops sending new requests while in-flight runs drain.
+        # R-02: read the LIVE config per request (reloads take effect
+        # without a restart).
+        config = components["config"]
         shutdown = components.get("shutdown")
         if shutdown is not None and shutdown.is_draining():
             return JSONResponse(
@@ -67,6 +70,8 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
     async def health(request: Request):
         # API-03: per-component status; degraded vs ok.
         # REL-04: expose the Applied Config generation + configHash.
+        # R-02: read the LIVE config per request.
+        config = components["config"]
         reload = components.get("reload_manager")
         generation = reload.generation if reload is not None else 1
         config_hash = reload.config_hash if reload is not None else ""
@@ -105,8 +110,11 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
     async def config_endpoint(request: Request):
         # API-04: Applied Config with recursive redaction (SEC-02); the
         # system instruction is excluded unless exposeSystemInstruction.
+        # R-02: render the CURRENT generation's config (the captured boot
+        # config is stale after a live reload).
         from ...security import redact
 
+        config = components["config"]
         raw = _applied_dump(config, components)
         masked = redact.mask_value(raw, api=True)
         if not config.server.exposeSystemInstruction:
@@ -121,7 +129,11 @@ def register(app: Any, config: Any, components: dict[str, Any], mode: str) -> No
 
 
 def _applied_dump(config: Any, components: dict[str, Any]) -> dict[str, Any]:
-    return config.model_dump(by_alias=True, mode="json")
+    """The current generation's config.  R-02: the live holder in
+    ``components["config"]`` wins over the captured boot config (which is
+    stale after any reload)."""
+    live = components.get("config")
+    return (live if live is not None else config).model_dump(by_alias=True, mode="json")
 
 
 def _strip_system_instruction(doc: dict[str, Any]) -> None:

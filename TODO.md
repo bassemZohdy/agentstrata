@@ -158,19 +158,31 @@ Affected leaves include `engine.streaming`, `engine.overrides`,
 `server.exposeSystemInstruction`, `server.shutdownGraceSeconds`,
 `observability.includeToolArguments`.
 
-- [ ] Introduce a mutable config holder in `components` (e.g.
+- [x] Introduce a mutable config holder in `components` (e.g.
       `components["config"]`) that the reload path swaps atomically.
-- [ ] Convert route closures to read the current config per request
+      Done: `create_app` seeds `components["config"]`; both reload
+      categories (live + rebuild) swap it.
+- [x] Convert route closures to read the current config per request
       (`chat.py` streaming mode / overrides gating / `maxRequestBytes` /
       `llm.model` / `approval.enabled`; `health.py` `/config` +
       `exposeSystemInstruction`; `sessions.register_models`;
-      `websocket.py` `maxMessageBytes` / queue sizing).
-- [ ] Make `_applied_dump` render the current generation's config (it
-      currently ignores its `components` argument entirely).
-- [ ] Also propagate on `component_rebuild` — the swap replaces
-      `components` but not the captured `config`.
-- [ ] Tests: one per live-snapshot leaf, asserting observable effect
-      after `apply_tier8` without a restart.
+      `websocket.py` `maxMessageBytes` / queue sizing).  Done: each
+      handler re-binds `config = components["config"]` per request
+      (chat, health readyz/health/config, sessions /v1/models, WS
+      `_session` incl. the receive loop).
+- [x] Make `_applied_dump` render the current generation's config (it
+      currently ignores its `components` argument entirely).  Done: the
+      live holder wins over the captured boot config.
+- [x] Also propagate on `component_rebuild` — the swap replaces
+      `components` but not the captured `config`.  Done:
+      `replacements["config"] = new_config` in the rebuild swap.
+- [x] Tests: one per live-snapshot leaf, asserting observable effect
+      after `apply_tier8` without a restart.  Done: `TestLiveSnapshotLeaves`
+      — exposeSystemInstruction (`/config`, the original R-02 repro),
+      overrides gating (temperature override flips live), maxRequestBytes
+      (413 threshold moves), llm.model rebuild (`/v1/models`), WS
+      maxMessageBytes (direct holder swap — `server.protocols` is
+      restart-pinned so apply_tier8 cannot flip it).
 
 ### R-03 Per-run state stored on process-wide singletons (ENG-02, OBS-05, RAG-04)
 

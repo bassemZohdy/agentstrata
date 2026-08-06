@@ -112,8 +112,12 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
     app.include_router(router)
 
 
-def register_models(app: Any, config: Any) -> None:
-    """GET /v1/models (API-17): the single configured model."""
+def register_models(app: Any, config: Any, components: dict[str, Any]) -> None:
+    """GET /v1/models (API-17): the single configured model.
+
+    R-02: the model is read from the LIVE config per request so a
+    live-snapshot ``llm.model`` change is observable without a restart.
+    """
     from fastapi import APIRouter
 
     router = APIRouter(prefix="/v1")
@@ -121,7 +125,10 @@ def register_models(app: Any, config: Any) -> None:
     @router.get("/models")
     async def models(request: Request):
         return JSONResponse(
-            content={"object": "list", "data": [{"id": config.llm.model, "object": "model"}]},
+            content={
+                "object": "list",
+                "data": [{"id": components["config"].llm.model, "object": "model"}],
+            },
             headers={"Cache-Control": "no-store"},
         )
 

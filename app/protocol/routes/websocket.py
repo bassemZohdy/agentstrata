@@ -100,7 +100,12 @@ async def _session(
     agent_name: str,
     principal: str,
 ) -> None:
-    """One authenticated connection: an inbound queue + the main loop."""
+    """One authenticated connection: an inbound queue + the main loop.
+
+    R-02: ``config`` is re-bound from the LIVE holder so a live-snapshot
+    ``maxMessageBytes`` / queue-sizing change applies to new connections.
+    """
+    config = components["config"]
     inbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=8)
     recv_task = asyncio.create_task(_receive_loop(websocket, inbound, config))
     active: dict[str, Any] | None = None

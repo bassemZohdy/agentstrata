@@ -57,6 +57,11 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
 
     @router.post("/chat/completions")
     async def chat_completions(request: Request):
+        # R-02: read the LIVE config per request — the reload path swaps
+        # components["config"] atomically, so live-snapshot leaves
+        # (streaming mode, overrides gating, maxRequestBytes, llm.model,
+        # approval.enabled, …) take effect without a restart.
+        config = components["config"]
         # CNT-07: reject new runs once draining begins (existing runs keep
         # their deadline up to shutdownGraceSeconds).
         shutdown = components.get("shutdown")
