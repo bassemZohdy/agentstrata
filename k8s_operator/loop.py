@@ -9,15 +9,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from contextlib import suppress
 from typing import Any
 
 from .kube import KubeClient
 from .reconcile import reconcile
 
-logger = logging.getLogger("agentstrata.operator")
+logger = logging.getLogger("agentbase.operator")
 
 WATCH_TIMEOUT_SECONDS = 120
+
+# R-22: exponential backoff with jitter on the re-list path so a dead API
+# server (list + watch failing immediately) cannot hot-loop.
+BACKOFF_BASE_SECONDS = 0.25
+BACKOFF_CAP_SECONDS = 30.0
+JITTER_MAX_SECONDS = 0.25
+
+
+async def _backoff(failures: int) -> None:
+    """Sleep ``base * 2**(failures-1)`` capped, plus uniform jitter."""
+    delay = min(BACKOFF_BASE_SECONDS * (2 ** (failures - 1)), BACKOFF_CAP_SECONDS)
+    delay += random.uniform(0.0, JITTER_MAX_SECONDS)
+    await asyncio.sleep(delay)
 
 
 async def run_operator(
@@ -27,20 +41,32 @@ async def run_operator(
     *,
     stop_event: asyncio.Event | None = None,
 ) -> None:
-    """Reconcile-all, then watch until the stop event (tests) or forever."""
+    """Reconcile-all, then watch until the stop event (tests) or forever.
+
+    Consecutive list/watch failures back off exponentially (with jitter);
+    any successful phase resets the failure counter.
+    """
+    failures = 0
     while True:
+        if stop_event is not None and stop_event.is_set():
+            return
         try:
             crs = await kube.list_agentconfigs(namespace)
             for cr in crs:
                 await _reconcile_one(kube, namespace, cr)
+            failures = 0
         except Exception as exc:  # noqa: BLE001 — the loop must survive
+            failures += 1
             logger.exception("reconcile-all failed: %s", type(exc).__name__)
-        if stop_event is not None and stop_event.is_set():
-            return
+            await _backoff(failures)
+            continue
         try:
             await _watch_loop(kube, namespace, resync_seconds, stop_event)
+            failures = 0
         except Exception as exc:  # noqa: BLE001 — re-list on watch loss
+            failures += 1
             logger.warning("watch lost (%s); re-listing", type(exc).__name__)
+            await _backoff(failures)
 
 
 async def _watch_loop(

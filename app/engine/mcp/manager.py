@@ -37,8 +37,6 @@ logger = logging.getLogger(__name__)
 # reconnect pacing still comes from the backoff loop.
 STDIO_CONNECT_TIMEOUT_SECONDS = 30.0
 
-logger = logging.getLogger(__name__)
-
 BACKOFF_CAP_SECONDS = 60.0
 JITTER_MAX_SECONDS = 0.25
 
@@ -213,7 +211,6 @@ class ServerManager:
                 if final == final_name:
                     return (name, raw)
         return None
-        return self._handles.get(name)
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -353,7 +350,6 @@ class ServerManager:
                     + ", ".join(unresolved)
                 )
             return wrap_stdio_params(params)
-            return params
         if handle.transport in ("sse", "streamable-http"):
             from google.adk.tools.mcp_tool.mcp_session_manager import (
                 SseConnectionParams,

@@ -60,8 +60,13 @@ def _connection_string(storage: Any, env: dict[str, str]) -> str:
                 value = fh.read().rstrip("\r\n")
             if value:
                 return value
-        except OSError:
-            pass
+        except OSError as exc:
+            # SEC-04: never fail closed on an unreadable file silently — log
+            # and fall through to the env var (or the config error below).
+            logger.warning(
+                "connectionStringFile unreadable (%s): falling back to connectionStringEnv",
+                exc,
+            )
     if storage.connectionStringEnv:
         return env.get(storage.connectionStringEnv, "")
     raise ConfigError("redis/postgres storage requires a connection string")
@@ -300,8 +305,6 @@ def run(argv: list[str] | None = None) -> int:
         asyncio.run(backend.initialize())
         # OBS-05: one observability per process — the registry/OTel provider
         # are reused across component rebuilds (live reload keeps metrics).
-        from .observability.otel import Observability
-
         observability = Observability(config)
         components = build_components(config, backend, observability=observability)
         components["observability"] = observability

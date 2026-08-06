@@ -23,7 +23,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | API-06a | app/protocol/routes/chat.py (idempotency) |
 | API-07 | app/protocol/routes/chat.py (_non_streaming_body) |
 | API-08 | app/protocol/routes/chat.py (_stream) |
-| API-08a | app/protocol/routes/chat.py (SSE error events); TODO M5 backpressure |
+| API-08a | app/protocol/routes/chat.py (SSE error events + bounded queue/backpressure); tests/test_protocol/test_streaming.py |
 | API-09 | app/protocol/routes/sessions.py |
 | API-12 | app/protocol/routes/chat.py (overrides gating) |
 | API-13 | app/config/models.py (engine.streaming); app/protocol/routes/chat.py |
@@ -57,12 +57,12 @@ verified by the Milestone 8 acceptance/chaos run.
 | CFG-14 | app/config/validate.py::_cross_field |
 | CFG-15 | app/main.py::run (boot order) |
 | CNT-01 | Dockerfile (digest-pinned base, --require-hashes venv) |
-| CNT-02 | Dockerfile multi-arch; TODO M8 (buildx) |
+| CNT-02 | Dockerfile (multi-arch buildx); docs/release.md (buildx QEMU manifest) |
 | CNT-03 | Dockerfile USER 10001:0 |
 | CNT-04 | Dockerfile ENTRYPOINT; app/main.py |
 | CNT-05 | Dockerfile VOLUME/EXPOSE |
 | CNT-06 | Dockerfile ENV |
-| CNT-07 | docs/deployment.md graceful shutdown; TODO M8 |
+| CNT-07 | app/lifecycle.py (ShutdownManager/ManagedServer); docs/deployment.md graceful shutdown |
 | CNT-08 | app/main.py uvicorn.run(workers=1, reload=False) |
 | CNT-09 | docker-compose.yaml |
 | CNT-10 | app/healthcheck.py; Dockerfile HEALTHCHECK |

@@ -28,9 +28,10 @@ MAPPINGS: dict[str, str] = {
     "CNT-08": "app/main.py uvicorn.run(workers=1, reload=False)",
     "CNT-10": "app/healthcheck.py; Dockerfile HEALTHCHECK",
     "CNT-11": "Dockerfile USER 10001:0 + read-only rootfs notes; docs/deployment.md",
-    "CNT-02": "Dockerfile multi-arch; TODO M8 (buildx)",
+    "CNT-02": "Dockerfile (multi-arch buildx); docs/release.md (buildx QEMU manifest)",
     "CNT-03": "Dockerfile USER 10001:0",
-    "CNT-07": "docs/deployment.md graceful shutdown; TODO M8",
+    "CNT-07": "app/lifecycle.py (ShutdownManager/ManagedServer); "
+    "docs/deployment.md graceful shutdown",
     "CNT-09": "docker-compose.yaml",
     "CNT-12": "docs/decisions.md (severity policy); docs/release.md (vulnerability gate)",
     "CNT-13": ".dockerignore; Dockerfile secrets hygiene",
@@ -117,7 +118,8 @@ MAPPINGS: dict[str, str] = {
     "API-06a": "app/protocol/routes/chat.py (idempotency)",
     "API-07": "app/protocol/routes/chat.py (_non_streaming_body)",
     "API-08": "app/protocol/routes/chat.py (_stream)",
-    "API-08a": "app/protocol/routes/chat.py (SSE error events); TODO M5 backpressure",
+    "API-08a": "app/protocol/routes/chat.py (SSE error events + bounded "
+    "queue/backpressure); tests/test_protocol/test_streaming.py",
     "API-09": "app/protocol/routes/sessions.py",
     "API-12": "app/protocol/routes/chat.py (overrides gating)",
     "API-15": "app/protocol/errors.py",

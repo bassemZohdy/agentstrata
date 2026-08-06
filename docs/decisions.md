@@ -58,3 +58,15 @@ satisfy a requirement ID to this file.
 - **Note:** a google-adk bump is a requirements-impacting change
   (STACK-01) and must go through the same review as a REQUIREMENTS.md
   change.
+
+## CRD API group (`agentstrata.io`) vs product name "Agentbase"
+
+- **Decision:** keep the CRD API group `agentstrata.io` pre-1.0 (K8S-11
+  pins it in REQUIREMENTS.md).  It matches the repository identity and
+  the documented registry-clear fallback (`agent-strata`); the group is
+  invisible to runtime users (only cluster operators apply CRs), and a
+  pre-1.0 rename is a one-line change with no published resources to
+  migrate.
+- **Status:** resolved (revisit only if the product name definitively
+  changes — an API-group rename post-1.0 would be a breaking migration
+  and a versioned spec revision).

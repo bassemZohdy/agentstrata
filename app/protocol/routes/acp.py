@@ -9,6 +9,7 @@ idempotency/error behavior per A-5, and the annex golden shapes (A-2/A-4).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -131,7 +132,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
         if slots is not None and not await slots.try_acquire():
             raise PublicErrorResponse("overloaded", "Too many concurrent runs", 503) from None
         run_registry = components.get("run_registry")
-        current_task = __import__("asyncio").current_task()
+        current_task = asyncio.current_task()
         if run_registry is not None and current_task is not None:
             run_registry.add(current_task)
 

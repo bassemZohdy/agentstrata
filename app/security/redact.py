@@ -8,6 +8,7 @@ check (CFG-14); M5 wires it into every other surface.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 _SENSITIVE_SUFFIXES = (
@@ -22,7 +23,7 @@ _SENSITIVE_SUFFIXES = (
     "connectionstring",
 )
 _REF_SUFFIXES = ("env", "file", "ref")
-_STRIP_RE = __import__("re").compile(r"[-_.]")
+_STRIP_RE = re.compile(r"[-_.]")
 
 # SEC-02: values become *** in text/YAML and <redacted> in APIs.
 MASK_TEXT = "***"

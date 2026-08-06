@@ -59,7 +59,7 @@ jobs:
         run: ./scripts/verify-lock.sh
 
   test:
-    name: Tests (placeholder)
+    name: Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,6 +75,10 @@ jobs:
         run: |
           uv venv --python 3.12 .venv
           uv pip install --python .venv -r requirements-dev.lock --require-hashes
+      - name: Ruff lint (tests)
+        run: .venv/bin/python -m ruff check tests
+      - name: Ruff format check (tests)
+        run: .venv/bin/python -m ruff format --check tests
       - name: Run tests
         run: .venv/bin/python -m pytest
 

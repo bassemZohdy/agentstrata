@@ -9,6 +9,7 @@ reconcile-all + resync behavior.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 import yaml
@@ -140,6 +141,60 @@ class TestOperatorLoop:
         assert ("default", "agentstrata-a") in kube.deployments
         assert kube.statuses[("default", "a")]["conditions"][0]["status"] == "True"
         assert kube.statuses[("default", "b")]["conditions"][0]["status"] == "True"
+
+    async def test_watch_failure_backs_off(self):
+        """R-22: a watch that dies immediately must not hot-loop the re-list;
+        the exponential backoff bounds the number of cycles in a fixed
+        window (a hot loop would spin hundreds of times)."""
+        kube = _FlakyKube(fail_watch=True)
+        stop = asyncio.Event()
+
+        async def _stopper():
+            await asyncio.sleep(1.6)
+            stop.set()
+
+        stopper = asyncio.create_task(_stopper())
+        await run_operator(kube, "default", resync_seconds=30, stop_event=stop)
+        await stopper
+        # Backoff sleeps 0.25+0.5+1.0 … ≈ 1.75 s cumulative, so the window
+        # admits ~4-5 re-lists; assert a generous ceiling for CI jitter.
+        assert 3 <= kube.list_calls <= 8
+
+    async def test_list_failure_backs_off(self):
+        """R-22: a dead API server (list failing) also backs off instead of
+        spinning."""
+        kube = _FlakyKube(fail_list=True)
+        stop = asyncio.Event()
+
+        async def _stopper():
+            await asyncio.sleep(1.6)
+            stop.set()
+
+        stopper = asyncio.create_task(_stopper())
+        await run_operator(kube, "default", resync_seconds=30, stop_event=stop)
+        await stopper
+        assert 3 <= kube.list_calls <= 8
+
+
+class _FlakyKube(FakeKubeClient):
+    """FakeKubeClient whose list and/or watch can fail (R-22 backoff)."""
+
+    def __init__(self, fail_watch: bool = False, fail_list: bool = False) -> None:
+        super().__init__()
+        self.fail_watch = fail_watch
+        self.fail_list = fail_list
+        self.list_calls = 0
+
+    async def list_agentconfigs(self, namespace: str) -> list[dict[str, Any]]:
+        self.list_calls += 1
+        if self.fail_list:
+            raise RuntimeError("api server down")
+        return await super().list_agentconfigs(namespace)
+
+    def watch_agentconfigs(self, namespace: str, timeout_seconds: int = 120) -> Any:
+        if self.fail_watch:
+            raise RuntimeError("watch broken")
+        return super().watch_agentconfigs(namespace, timeout_seconds)
 
     async def test_invalid_cr_gets_false_status(self):
         kube = FakeKubeClient()
