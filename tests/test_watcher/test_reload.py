@@ -150,9 +150,7 @@ class TestReloadManager:
             component = build_agent_component(cfg, generation)
             backend = MemoryBackend()
             service = AdkSessionService(backend)
-            adk = AdkRunner(
-                agent=component.agent, app_name="agent", session_service=service
-            )
+            adk = AdkRunner(agent=component.agent, app_name="agent", session_service=service)
             applied = AppliedConfig.from_config(cfg, generation)
             runner = AgentRunner(applied, adk, backend, app_name="agent")
             mcp = ServerManager(applied, tool_targets=list(component.tool_targets))

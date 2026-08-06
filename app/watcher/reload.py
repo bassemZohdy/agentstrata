@@ -223,8 +223,10 @@ class ReloadManager:
             # swap — a failed start raises here and rolls back to
             # last-known-good (REL-03).
             new_mcp = replacements.get("mcp")
-            if new_mcp is not None and hasattr(new_mcp, "start") and not getattr(
-                new_mcp, "_started", False
+            if (
+                new_mcp is not None
+                and hasattr(new_mcp, "start")
+                and not getattr(new_mcp, "_started", False)
             ):
                 await new_mcp.start()
             await _health_check(replacements)
