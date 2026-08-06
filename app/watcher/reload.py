@@ -208,12 +208,25 @@ class ReloadManager:
             limiter = self._components.get("rate_limiter")
             if limiter is not None and hasattr(limiter, "set_requests_per_minute"):
                 limiter.set_requests_per_minute(new_config.server.rateLimit.requestsPerMinute)
-            self._audit("applied_live", started, paths)
+            self._audit(
+                "applied_live",
+                started,
+                paths,
+                old_generation=self._generation - 1,
+            )
             return ReloadResult(outcome="applied_live", generation=self._generation, changed=paths)
 
         # component_rebuild: build replacements + health-check, then swap.
         try:
             replacements = self._build_components(new_config, self._generation + 1)
+            # R-05: the replacement MCP manager must be started BEFORE the
+            # swap — a failed start raises here and rolls back to
+            # last-known-good (REL-03).
+            new_mcp = replacements.get("mcp")
+            if new_mcp is not None and hasattr(new_mcp, "start") and not getattr(
+                new_mcp, "_started", False
+            ):
+                await new_mcp.start()
             await _health_check(replacements)
         except Exception as exc:  # noqa: BLE001
             logger.exception("component rebuild failed")
@@ -240,25 +253,40 @@ class ReloadManager:
         self._components.clear()
         self._components.update(replacements)
         await _close_components(old_components)
-        self._audit("applied_rebuild", started, paths)
+        self._audit(
+            "applied_rebuild",
+            started,
+            paths,
+            old_generation=self._generation - 1,
+        )
         return ReloadResult(outcome="applied_rebuild", generation=self._generation, changed=paths)
 
     def _audit(
-        self, outcome: str, started: float, paths: list[str], error: str | None = None
+        self,
+        outcome: str,
+        started: float,
+        paths: list[str],
+        error: str | None = None,
+        old_generation: int | None = None,
     ) -> None:
         """REL-06: resource version, outcome, generations, sorted changed
-        paths, duration. Values are omitted; secret paths labeled only."""
+        paths, duration. Values are omitted; secret paths labeled only.
+
+        R-15: ``old_generation`` must be passed explicitly by callers that
+        have already incremented ``self._generation`` (the applied paths),
+        so the logged pair is the true before/after."""
         # OBS-05: reload outcomes feed the prometheus/OTel reload counter.
         metrics = self._components.get("metrics")
         if metrics is not None:
             metrics.reloads.add(1, {"outcome": outcome})
         duration_ms = _ms_since(started)
-        new_generation = self._generation + (1 if outcome.startswith("applied") else 0)
+        old_gen = self._generation if old_generation is None else old_generation
+        new_generation = old_gen + (1 if outcome.startswith("applied") else 0)
         logger.info(
             "reload outcome=%s old_generation=%d new_generation=%d changed=%s "
             "duration_ms=%d error=%s",
             outcome,
-            self._generation,
+            old_gen,
             new_generation,
             ",".join(paths) or "-",
             duration_ms,
@@ -309,6 +337,12 @@ async def _health_check(components: dict[str, Any]) -> None:
         ok = await backend.health()
         if not ok:
             raise RuntimeError("replacement storage backend unhealthy")
+    # R-05: the replacement MCP manager must be started before the swap — a
+    # not-started manager would silently drop every MCP server after the
+    # rebuild.
+    mcp = components.get("mcp")
+    if mcp is not None and hasattr(mcp, "_started") and not mcp._started:
+        raise RuntimeError("replacement MCP manager is not started")
 
 
 async def _close_components(components: dict[str, Any]) -> None:

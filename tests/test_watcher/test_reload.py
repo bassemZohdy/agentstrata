@@ -134,6 +134,85 @@ class TestReloadManager:
         assert manager.components["generation"] == 2
 
     @pytest.mark.asyncio
+    async def test_rebuild_starts_replacement_mcp_manager(self):
+        """R-05: the replacement MCP manager produced by a component rebuild
+        is started before the swap (a not-started manager would silently drop
+        every MCP server)."""
+        from google.adk.runners import Runner as AdkRunner
+
+        from app.engine.agent import build_agent_component
+        from app.engine.mcp.manager import ServerManager
+        from app.engine.runner import AgentRunner
+        from app.storage.adk_adapter import AdkSessionService
+        from app.storage.memory import MemoryBackend
+
+        def builder(cfg, generation):
+            component = build_agent_component(cfg, generation)
+            backend = MemoryBackend()
+            service = AdkSessionService(backend)
+            adk = AdkRunner(
+                agent=component.agent, app_name="agent", session_service=service
+            )
+            applied = AppliedConfig.from_config(cfg, generation)
+            runner = AgentRunner(applied, adk, backend, app_name="agent")
+            mcp = ServerManager(applied, tool_targets=list(component.tool_targets))
+            mcp.configure(cfg.tools.mcpServers)
+            return {
+                "applied": applied,
+                "agent": component,
+                "runner": runner,
+                "backend": backend,
+                "mcp": mcp,
+                "generation": generation,
+            }
+
+        config = _resolved_config()
+        components = builder(config, 1)
+        original_mcp = components["mcp"]
+        await components["mcp"].start()
+        manager = ReloadManager(builder, config, components, bundled_dir=REPO_CONFIG)
+        result = await manager.apply_tier8({"engine": {"temperature": 0.3}})
+        assert result.outcome == "applied_rebuild"
+        assert manager.components["mcp"]._started is True
+        assert manager.components["mcp"] is not original_mcp
+
+    @pytest.mark.asyncio
+    async def test_audit_logs_true_generation_pair(self, caplog):
+        """R-15: the reload audit logs the true before/after generation
+        pair (was: post-increment values, e.g. 1->2 logged as 2->3)."""
+        import logging
+
+        from app.watcher.reload import logger as reload_logger
+
+        config = _resolved_config()
+
+        async def _run(outcome, overlay):
+            manager = ReloadManager(
+                _build_components,
+                config,
+                _build_components(config, 1),
+                bundled_dir=REPO_CONFIG,
+            )
+            with caplog.at_level(logging.INFO, logger=reload_logger.name):
+                result = await manager.apply_tier8(overlay)
+            assert result.outcome == outcome
+            return [
+                r.message
+                for r in caplog.records
+                if r.name == reload_logger.name and "reload outcome=" in r.message
+            ]
+
+        caplog.clear()
+        live = await _run("applied_live", {"server": {"maxRequestBytes": 2_097_152}})
+        assert live and "old_generation=1 new_generation=2" in live[0]
+        caplog.clear()
+        rebuild = await _run("applied_rebuild", {"llm": {"model": "gpt-5"}})
+        assert rebuild and "old_generation=1 new_generation=2" in rebuild[0]
+        caplog.clear()
+        rejected = await _run("rejected", {"server": {"port": 99999}})
+        assert rejected and "old_generation=1 new_generation=1" in rejected[0]
+
+    @pytest.mark.asyncio
     async def test_component_rebuild_preserves_manager_owned_singletons(self):
         """M8 gate regression: the rebuild swap wiped keys that
         build_components does not produce (reload_manager, watcher, shutdown,

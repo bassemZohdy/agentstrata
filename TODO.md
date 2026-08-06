@@ -229,11 +229,16 @@ into `components` — with no reconciler tasks. After any
 servers keep `/readyz` at 503 permanently and tools disappear from the
 agents.
 
-- [ ] Start the replacement manager inside the rebuild path (before the
+- [x] Start the replacement manager inside the rebuild path (before the
       pointer swap, so a failed start rolls back to last-known-good).
-- [ ] Add the started-state check to `_health_check` in `reload.py`.
-- [ ] Tests: a `tools.mcpServers` change reconnects and re-attaches tools
-      without a restart.
+      Done: `apply_tier8` starts the replacement `ServerManager` inside
+      the rebuild try-block before `_health_check`.
+- [x] Add the started-state check to `_health_check` in `reload.py`.
+      Done: a replacement MCP manager with `_started == False` fails the
+      rebuild health check.
+- [x] Tests: a `tools.mcpServers` change reconnects and re-attaches tools
+      without a restart.  Done: `test_rebuild_starts_replacement_mcp_manager`
+      (a rebuild swaps in a fresh, started manager).
 
 ### R-06 Approval-paused runs return HTTP 500 on the ACP surface (API-16 annex A-5, HITL-01/03)
 
@@ -395,8 +400,15 @@ incremented, then logs `old_generation=self._generation` and
 Verified: a 1 → 2 live reload logs
 `old_generation=2 new_generation=3`.
 
-- [ ] Pass the pre-increment generation into `_audit` explicitly.
-- [ ] Tests: assert the logged pair for live, rebuild, and rejected.
+- [x] Pass the pre-increment generation into `_audit` explicitly.  Done:
+      `_audit(..., old_generation=...)` — the applied_live and
+      applied_rebuild call sites pass `self._generation - 1` (they have
+      already incremented); non-applied outcomes fall back to the current
+      generation (unchanged).
+- [x] Tests: assert the logged pair for live, rebuild, and rejected.
+      Done: `test_audit_logs_true_generation_pair` — 1→2 logged as
+      `old_generation=1 new_generation=2` for both applied paths and
+      `1→1` for a rejected overlay.
 
 ### R-16 RAG search ignores the embedding model and filters inconsistently (RAG-02)
 
