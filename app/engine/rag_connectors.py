@@ -61,7 +61,7 @@ _PGVECTOR_SEARCH = """
 SELECT document_id, chunk_index, text, content_hash,
        1 - (embedding <-> %s::vector) AS score
   FROM rag_chunks
- WHERE agent_name = %s AND principal_id = %s
+ WHERE agent_name = %s AND principal_id = %s AND embedding_model = %s
  ORDER BY embedding <-> %s::vector
  LIMIT %s
 """
@@ -215,13 +215,21 @@ class _ChromaStore:
         return self._collection
 
     @staticmethod
-    def _where(agent_name: str, principal_id: str, document_id: str | None = None) -> dict:
+    def _where(
+        agent_name: str,
+        principal_id: str,
+        document_id: str | None = None,
+        embedding_model: str | None = None,
+    ) -> dict:
         clauses: list[dict[str, Any]] = [
             {"agent": agent_name},
             {"principal": principal_id},
         ]
         if document_id is not None:
             clauses.append({"document_id": document_id})
+        if embedding_model is not None:
+            # R-16: never score stale vectors from another embedding model.
+            clauses.append({"model": embedding_model})
         return {"$and": clauses}
 
     async def upsert_document(self, **kwargs: Any) -> Any:
@@ -308,7 +316,11 @@ class _ChromaStore:
         result = collection.query(
             query_embeddings=[kwargs["query_embedding"]],
             n_results=kwargs["top_k"],
-            where=self._where(kwargs["agent_name"], kwargs["principal_id"]),
+            where=self._where(
+                kwargs["agent_name"],
+                kwargs["principal_id"],
+                embedding_model=kwargs.get("embedding_model"),
+            ),
         )
         hits: list[Any] = []
         ids = (result.get("ids") or [[]])[0]
@@ -487,6 +499,7 @@ class _PgvectorStore:
                     query_literal,
                     kwargs["agent_name"],
                     kwargs["principal_id"],
+                    kwargs.get("embedding_model"),
                     query_literal,
                     int(kwargs["top_k"]),
                 ),

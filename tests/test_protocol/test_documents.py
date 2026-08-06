@@ -154,6 +154,7 @@ async def test_generated_id_and_owner_scoping():
             agent_name="agent",
             principal_id="someone-else",
             query_embedding=query,
+            embedding_model=components["rag"].embedding.model,
             top_k=5,
             min_score=0.99,
         )

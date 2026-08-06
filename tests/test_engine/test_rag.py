@@ -112,7 +112,12 @@ class TestMemoryStore:
         # score 1.0; anything else is a near-zero random cosine
         query = (await emb.embed(["alpha beta gamma delta"]))[0]
         hits = await store.search(
-            agent_name="agent", principal_id="p1", query_embedding=query, top_k=3, min_score=0.0
+            agent_name="agent",
+            principal_id="p1",
+            query_embedding=query,
+            embedding_model=emb.model,
+            top_k=3,
+            min_score=0.0,
         )
         assert len(hits) == 3
         # descending score: the exact document leads (1.0), then by score
@@ -121,7 +126,12 @@ class TestMemoryStore:
         assert hits[2].score <= hits[1].score
         # stable tie-break: same query twice gives the same order
         hits2 = await store.search(
-            agent_name="agent", principal_id="p1", query_embedding=query, top_k=3, min_score=0.0
+            agent_name="agent",
+            principal_id="p1",
+            query_embedding=query,
+            embedding_model=emb.model,
+            top_k=3,
+            min_score=0.0,
         )
         assert [h.stable_id for h in hits] == [h.stable_id for h in hits2]
 
@@ -147,6 +157,7 @@ class TestMemoryStore:
                 agent_name="agent",
                 principal_id="p2",
                 query_embedding=query,
+                embedding_model=emb.model,
                 top_k=5,
                 min_score=0.99,
             )
@@ -157,6 +168,7 @@ class TestMemoryStore:
                 agent_name="other",
                 principal_id="p1",
                 query_embedding=query,
+                embedding_model=emb.model,
                 top_k=5,
                 min_score=0.99,
             )
@@ -185,6 +197,7 @@ class TestMemoryStore:
                     agent_name="agent",
                     principal_id="p1",
                     query_embedding=query,
+                    embedding_model=emb.model,
                     top_k=3,
                     min_score=0.0,
                 )
@@ -193,12 +206,22 @@ class TestMemoryStore:
         )
         # the exact match always wins the ranking
         ranked = await store.search(
-            agent_name="agent", principal_id="p1", query_embedding=query, top_k=10, min_score=0.0
+            agent_name="agent",
+            principal_id="p1",
+            query_embedding=query,
+            embedding_model=emb.model,
+            top_k=10,
+            min_score=0.0,
         )
         assert ranked[0].document_id == "d3"
         # a perfect-match query exceeds a high minScore only for the exact text
         strict = await store.search(
-            agent_name="agent", principal_id="p1", query_embedding=query, top_k=10, min_score=0.99
+            agent_name="agent",
+            principal_id="p1",
+            query_embedding=query,
+            embedding_model=emb.model,
+            top_k=10,
+            min_score=0.99,
         )
         assert all(h.document_id == "d3" for h in strict)
 
@@ -227,6 +250,7 @@ class TestMemoryStore:
                 agent_name="agent",
                 principal_id="p1",
                 query_embedding=query,
+                embedding_model=emb.model,
                 top_k=5,
                 min_score=0.99,
             )
@@ -237,6 +261,7 @@ class TestMemoryStore:
                 agent_name="agent",
                 principal_id="p1",
                 query_embedding=query,
+                embedding_model=emb.model,
                 top_k=5,
                 min_score=0.99,
             )
@@ -770,3 +795,87 @@ class TestRetrieverConcurrency:
 
         assert ctx_p1 is None and degraded_p1 is True
         assert ctx_p2 is not None and degraded_p2 is False
+
+
+class TestEmbeddingModelIsolation:
+    """R-16: search never scores chunks embedded by a different model;
+    min_score/top_k ordering matches the real backends; dimension
+    mismatches are explicit errors."""
+
+    @pytest.mark.asyncio
+    async def test_model_change_isolates_old_chunks(self):
+        store = MemoryRagStore()
+        emb_a = DeterministicEmbedding(model="embed-a")
+        emb_b = DeterministicEmbedding(model="embed-b")
+        vectors_a = await emb_a.embed(["unique phrase alpha"])
+        vectors_b = await emb_b.embed(["unique phrase beta"])
+        await store.upsert_document(
+            agent_name="agent",
+            principal_id="p1",
+            document_id="d-a",
+            embedding_model=emb_a.model,
+            metadata={},
+            chunks=[(0, "unique phrase alpha", content_hash("unique phrase alpha"), vectors_a[0])],
+            content_hash=content_hash("unique phrase alpha"),
+        )
+        await store.upsert_document(
+            agent_name="agent",
+            principal_id="p1",
+            document_id="d-b",
+            embedding_model=emb_b.model,
+            metadata={},
+            chunks=[(0, "unique phrase beta", content_hash("unique phrase beta"), vectors_b[0])],
+            content_hash=content_hash("unique phrase beta"),
+        )
+        query = (await emb_a.embed(["unique phrase alpha"]))[0]
+        hits = await store.search(
+            agent_name="agent",
+            principal_id="p1",
+            query_embedding=query,
+            embedding_model=emb_a.model,
+            top_k=5,
+            min_score=0.0,
+        )
+        # only model-a chunks are scored (the model-b chunk is never even
+        # considered, so its near-zero cosine cannot leak into results)
+        assert [h.document_id for h in hits] == ["d-a"]
+
+    @pytest.mark.asyncio
+    async def test_min_score_applied_after_truncation(self):
+        """R-16: the memory store mirrors the real backends — rank, truncate
+        to top_k, THEN apply min_score (a rank top_k+1 chunk above the
+        threshold is excluded, matching chroma/pgvector result counts)."""
+        store = MemoryRagStore()
+        emb = DeterministicEmbedding()
+        texts = [f"word {i}" for i in range(5)]
+        vectors = await emb.embed(texts)
+        for i, (text, vector) in enumerate(zip(texts, vectors, strict=True)):
+            await store.upsert_document(
+                agent_name="agent",
+                principal_id="p1",
+                document_id=f"d{i}",
+                embedding_model=emb.model,
+                metadata={},
+                chunks=[(0, text, content_hash(text), vector)],
+                content_hash=content_hash(text),
+            )
+        query = (await emb.embed(["word 0"]))[0]
+        hits = await store.search(
+            agent_name="agent",
+            principal_id="p1",
+            query_embedding=query,
+            embedding_model=emb.model,
+            top_k=2,
+            min_score=0.0,
+        )
+        # exactly the top-2 by score — the third chunk is truncated even
+        # though its score passes the (lenient) threshold
+        assert len(hits) == 2
+        assert hits[0].document_id == "d0"
+
+    @pytest.mark.asyncio
+    async def test_dimension_mismatch_is_explicit_error(self):
+        from app.engine.rag import _cosine
+
+        with pytest.raises(ValueError):
+            _cosine([1.0, 0.0], [1.0, 0.0, 0.0])

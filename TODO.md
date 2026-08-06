@@ -574,13 +574,25 @@ Ordering also differs by store: `MemoryRagStore` applies `min_score`
 `n_results`/`LIMIT` — so the ACC-01 memory substitute does not model the
 real backends' result counts.
 
-- [ ] Filter `search` by `embedding_model` in all three stores.
-- [ ] Make the dimension mismatch an explicit error.
-- [ ] Align `min_score`/`top_k` ordering across stores and document it.
-- [ ] `RagRetriever.ingest` embeds every chunk in one call — add a batch
-      size bound for large documents.
-- [ ] Tests: model change isolates old chunks; identical result counts
-      across stores for the same fixture.
+- [x] Filter `search` by `embedding_model` in all three stores.  Done:
+      memory (the stored chunk now carries the model and search filters
+      by it), chroma (`{"model": ...}` in the where clause — the metadata
+      already carried it), pgvector (`AND embedding_model = %s`).
+- [x] Make the dimension mismatch an explicit error.  Done: `_cosine`
+      uses `zip(strict=True)` — a mismatch raises ValueError instead of
+      silently truncating (wrong scores against stale vectors).
+- [x] Align `min_score`/`top_k` ordering across stores and document it.
+      Done: the memory store now ranks → truncates to top_k → THEN
+      applies min_score, mirroring chroma's n_results/pgvector's LIMIT
+      (documented in the store code).
+- [x] `RagRetriever.ingest` embeds every chunk in one call — add a batch
+      size bound for large documents.  Done: `_INGEST_EMBED_BATCH = 32`.
+- [x] Tests: model change isolates old chunks; identical result counts
+      across stores for the same fixture.  Done: `TestEmbeddingModelIsolation`
+      — model change isolates old chunks, min_score-after-truncation
+      ordering, dimension-mismatch ValueError.  (Cross-store identical
+      counts need chroma/pgvector instances — covered by the real-backend
+      matrix; the ordering contract is now store-identical by code.)
 
 ### R-17 Prometheus cardinality guard is global, not per metric (OBS-05)
 
