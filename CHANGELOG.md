@@ -8,6 +8,140 @@ docs/release.md.
 
 ## [Unreleased]
 
+### 2026-08-06 review backlog (R-01…R-32) — closed
+
+Full-project review backlog from 2026-08-06: **closed**. 27 items plus
+six review-loop follow-ups landed across 17 commits (`a70465d` →
+`d28756c`); the host suite grew 527 → 599 tests. Per-item detail and
+verification notes are in [docs/review-log.md](docs/review-log.md); the
+six remaining stragglers stay tracked in [TODO.md](TODO.md).
+
+**P0 — correctness and contract violations**
+
+- **R-01 Middleware order:** hardening + request-id middleware now
+  outermost (registration order rate-limit → auth → hardening →
+  request-id), so 401/403/429 responses carry `X-Request-Id` + every
+  hardening header, and SEC-10 auth-failure audits record the real
+  request id (not `""`).
+- **R-02 Live-snapshot reloads (the founding finding):** mutable
+  `components["config"]` holder swapped atomically by both reload
+  categories; every route handler re-binds the current config per
+  request; `_applied_dump` renders the live generation; rebuilds
+  propagate the holder. `TestLiveSnapshotLeaves` asserts one observable
+  effect per leaf.
+- **R-03 Per-run state on singletons:** `_run_started` moved into the
+  per-run scope, `agentbase_active_runs` inc/dec strictly paired in
+  `execute()`, `RagRetriever.degraded` replaced by a per-call
+  `(context, degraded)` return. Verified under real concurrency (6 runs
+  → gauge at 0).
+- **R-04 Storage sweep scheduling:** `storage.sweepIntervalSeconds`
+  (default 60 s) + lifespan sweep loop + cancellation at shutdown +
+  `agentbase_storage_sweeps_total{kind}` counter; reconciliation is
+  staleness-gated so in-flight runs are never raced.
+- **R-05 MCP rebuild start:** replacement `ServerManager` starts inside
+  the rebuild try-block (failed start rolls back to last-known-good);
+  rebuild health check requires `_started`.
+- **R-06 ACP approvals:** HITL-01 stateful-request guard (400
+  `approval_session_required`) and the annex-shaped 202
+  `run.pending_approval` response (was 500).
+
+**P1 — robustness and security**
+
+- **R-07 JWKS refresh cadence:** `refreshSeconds` honored via a
+  last-fetched timestamp + refresh lock; `_jwks_failed` removed; JWK
+  `alg` pinned; stale-key cutoff made continuous (see R-27).
+- **R-08 Idempotency contract:** completed records replay; in-flight
+  duplicates → 409 `idempotency_in_progress`; partial streams release
+  the record.
+- **R-09 Streaming body cap:** `_read_body` enforces
+  `server.maxRequestBytes` before buffering.
+- **R-10 Postgres connection lifecycle:** a connection **factory**
+  replaces the one-shot coroutine; `_ensure` checks `closed`;
+  standalone statements retry once on drop; connection pool deferred as
+  a documented STACK-01 limit.
+- **R-11 MCP reconciler:** dead-but-connected session probe (4 genuine
+  stdio integration tests) + `maxTools` truncation propagated to the
+  attached toolset.
+- **R-12 Shutdown hygiene:** `reconcile_task`/`sweep_task`/`watcher_task`
+  cancelled first in the close order; `_drain_after_grace` waits on the
+  in-flight run tasks (early finish shortens pod termination).
+- **R-13 WebSocket:** `run.start` gated by the shared per-principal rate
+  limiter (OBS-05 denial counter); `maxMessageBytes` compared on the
+  UTF-8 byte length, not code points; accept-then-close(1008) auth
+  decision documented.
+
+**P2 — consistency and observability**
+
+- **R-14 Usage shape:** one shared `_normalize_usage()` across
+  chat/ACP/WS (ACP no longer drops `costUsd`, WS no longer forwards the
+  raw internal dict); `costUsd` field decision + the ACP streaming
+  usage-chunk annex confirmation recorded in `docs/decisions.md`.
+- **R-15 Reload audit:** the pre-increment generation is passed
+  explicitly — a 1→2 reload logs `old_generation=1 new_generation=2`.
+- **R-16 RAG isolation:** search filtered by `embedding_model` in all
+  three stores; `zip(strict=True)` makes a dimension mismatch an
+  explicit error; `min_score`/`top_k` ordering aligned across stores;
+  ingest embedding batched at 32.
+- **R-17 Metrics:** `_CardinalityGuard` keyed per metric (one
+  high-cardinality metric can no longer starve the others); `# HELP`
+  emitted from the instrument descriptions.
+- **R-18 204 responses:** bare `Response(status_code=204)` — no body,
+  no content-type (RFC 9110).
+- **R-19 Session error mapping:** `_session_error` maps CapacityError →
+  503 `storage_capacity`, InvalidSessionId → 400, SessionBusy → 409,
+  everything else → 503 `storage_unavailable`; GET/DELETE validate the
+  session id.
+
+**P3 — dead code, hygiene, docs, CI**
+
+- **R-20 Unwired engine contracts:** per-item decisions — `begin_iteration`
+  wired; `cap_output_tokens` deleted (google-adk RunConfig cannot carry
+  it); the unwired `RunConfig(temperature=…)` kwargs **removed (latent
+  bug: they raised `ValidationError`, degrading every overridden run to
+  `provider_error`)**; dead `ToolLedger` plumbing and `RunResult`
+  deleted — `usage.estimated` now surfaces on all three API surfaces.
+- **R-21 Dead code:** 8 items removed (unreachable returns, duplicate
+  loggers/imports, `__import__` calls, swallowed-`OSError` log, stray
+  `operator/` dir).
+- **R-22 Operator:** exponential backoff with jitter (base 0.25 s, cap
+  30 s) + `agentbase.operator` logger namespace.
+- **R-23 Docs/CI:** traceability MAPPINGS reconciled (API-08a, CNT-02/07);
+  CI job renamed + ruff steps for tests; `agentstrata.io` naming
+  decision recorded.
+- **R-24 Doc-drift cleanup (closed during the TODO/CHANGELOG cleanup):**
+  README's doc-set table + status section now describe TODO.md as
+  remaining work (stragglers + planned-scope epics) instead of a closed
+  backlog; TODO.md rewritten to track only open items, with the
+  per-commit review history moved to `docs/review-log.md`.
+
+**Review-loop follow-ups (R-26…R-32 — all fixed in `d28756c`)**
+
+- **R-26 Driver outages → 503:** sessions map non-typed exceptions to
+  `storage_unavailable`; root fix at the boundaries — redis `_eval` and
+  psycopg `_run`/`_PsycopgTxn` wrap driver errors as
+  `BackendUnavailableError`; dead `StorageUnavailable` deleted (R-20).
+- **R-27 JWKS cutoff continuous:** the stale-key cutoff is evaluated on
+  EVERY request (fail-closed past 3× the refresh interval), not only at
+  refresh-attempt instants; test probes between attempt boundaries
+  (0/31 accepted past the cutoff, was 24/31).
+- **R-28 Redis boundary narrowed:** `_eval` wraps only
+  `ConnectionError`/`TimeoutError`/`BusyLoadingError`; script/argument
+  errors (ResponseError/DataError) propagate as code bugs.
+- **R-29 Prometheus reload honesty:** `observability.prometheus.*`
+  classifies `restart_required` (the route is boot-bound — no more
+  `applied_live` that 404s); the rate-limiter exempt set reads the live
+  config holder.
+- **R-30 Slot-leak fix (highest severity):** any admission failure in
+  chat/ACP releases the run slot and maps `BackendUnavailableError` →
+  503 — no permanent replica lockout after a storage blip.
+- **R-31 Transaction-aware retry:** `_PsycopgDb._run` retries only
+  outside a transaction; `_PsycopgTxn.__aexit__` raises when the
+  original connection is gone — never COMMITs on a fresh connection
+  (was: silent partial commit with false success).
+- **R-32 Orphaned corpus alerting:** `orphaned_chunk_count` on all three
+  stores; boot warning + `/health` `rag.orphanedChunks`; re-ingest
+  story documented in `docs/deployment.md`.
+
 ### P5-4: Per-request cost-in-dollars accounting (COST-01/02) — DONE
 
 - New `costs` config section (default disabled): USD per 1M tokens with
