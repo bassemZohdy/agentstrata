@@ -80,13 +80,24 @@ def _real_postgres_backend(settings):
 
     from app.main import _PsycopgDb
 
-    return PostgresBackend(_PsycopgDb(psycopg.AsyncConnection.connect(dsn), dict_row), settings)
+    # R-10: a factory (callable returning a connect coroutine), so the
+    # adapter can reconnect after close() or a dropped connection.
+    return PostgresBackend(
+        _PsycopgDb(lambda: psycopg.AsyncConnection.connect(dsn), dict_row), settings
+    )
 
 
 @pytest.fixture()
 async def redis_backend(settings):
+    from typing import cast
+
+    from app.storage.redis_backend import RedisClient
+
     real = _real_redis_backend(settings)
-    backend = real if real is not None else RedisBackend(FakeRedis(), settings)
+    # The FakeRedis eval shape differs from the protocol's redis-py shape
+    # by design (the backend's _eval adapts); the cast makes the runtime
+    # contract explicit.
+    backend = real if real is not None else RedisBackend(cast(RedisClient, FakeRedis()), settings)
     yield backend
     if real is not None:
         import redis.asyncio as redis_mod

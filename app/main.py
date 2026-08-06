@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from contextlib import suppress
 from typing import Any, NoReturn
 
 from .config import mode as mode_mod
@@ -77,27 +78,66 @@ def _psycopg_db(storage: Any):
     from psycopg.rows import dict_row
 
     dsn = _connection_string(storage, dict(os.environ))
-    return _PsycopgDb(psycopg.AsyncConnection.connect(dsn), dict_row)
+    # R-10: pass a FACTORY (callable returning a connect coroutine), not a
+    # one-shot coroutine object — the adapter must be able to reconnect
+    # after close() or a dropped connection.
+    return _PsycopgDb(lambda: psycopg.AsyncConnection.connect(dsn), dict_row)
 
 
 class _PsycopgDb:
-    """Async psycopg adapter implementing the DbClient protocol."""
+    """Async psycopg adapter implementing the DbClient protocol.
+
+    R-10: the adapter holds a connection FACTORY (a callable returning a
+    connect coroutine), so every acquisition — including after ``close()``
+    or a dropped connection — creates a fresh connection.  A connection
+    lost mid-operation is detected and re-established with one retry.
+    One connection serves concurrent requests (serialized by the DB); a
+    pool (psycopg_pool) is a documented STACK-01 follow-up.
+    """
 
     def __init__(self, conn_factory, row_factory=None) -> None:
         self._factory = conn_factory
         self._row_factory = row_factory
         self._conn = None
 
+    async def _connect(self):
+        """Create a fresh connection from the factory (a callable, or a
+        coroutine for callers not yet migrated to the factory form)."""
+        coro: Any = self._factory() if callable(self._factory) else self._factory
+        conn = await coro
+        # Simple ops autocommit (matching the SqliteDb substitute); the
+        # explicit transaction() wrapper toggles autocommit off around
+        # BEGIN/COMMIT. Without this, implicit transactions dangle on
+        # the connection and a single failed statement aborts them,
+        # poisoning every later statement (InFailedSqlTransaction).
+        await conn.set_autocommit(True)
+        return conn
+
     async def _ensure(self):
-        if self._conn is None:
-            self._conn = await self._factory
-            # Simple ops autocommit (matching the SqliteDb substitute); the
-            # explicit transaction() wrapper toggles autocommit off around
-            # BEGIN/COMMIT. Without this, implicit transactions dangle on
-            # the connection and a single failed statement aborts them,
-            # poisoning every later statement (InFailedSqlTransaction).
-            await self._conn.set_autocommit(True)
+        if self._conn is None or self._conn.closed:
+            self._conn = await self._connect()
         return self._conn
+
+    async def _run(self, op):
+        """Run ``op(conn)`` with one reconnect retry when the connection
+        was dropped mid-operation (R-10); driver outages still surface as
+        BackendUnavailableError after the retry (R-26)."""
+        import psycopg
+
+        try:
+            return await op(await self._ensure())
+        except Exception as exc:  # noqa: BLE001 — driver boundary
+            if not isinstance(exc, psycopg.OperationalError):
+                _raise_driver_unavailable(exc)
+            # R-10: dropped/closed connection — reset and retry once.
+            if self._conn is not None:
+                with suppress(Exception):
+                    await self._conn.close()
+                self._conn = None
+            try:
+                return await op(await self._ensure())
+            except Exception as exc2:  # noqa: BLE001 — driver boundary
+                _raise_driver_unavailable(exc2)
 
     async def close(self) -> None:
         """Release the connection (the real-backend matrix opens one per
@@ -107,20 +147,18 @@ class _PsycopgDb:
             self._conn = None
 
     async def execute(self, sql, params=()):
-        try:
-            conn = await self._ensure()
+        async def _op(conn):
             await conn.execute(sql, list(params) if params else None)
-        except Exception as exc:  # noqa: BLE001 — driver boundary (R-26)
-            _raise_driver_unavailable(exc)
+
+        await self._run(_op)
 
     async def query(self, sql, params=()):
-        try:
-            conn = await self._ensure()
+        async def _op(conn):
             async with conn.cursor(row_factory=self._row_factory) as cur:
                 await cur.execute(sql, list(params) if params else None)
                 return await cur.fetchall()
-        except Exception as exc:  # noqa: BLE001 — driver boundary (R-26)
-            _raise_driver_unavailable(exc)
+
+        return await self._run(_op)
 
     def transaction(self):
         return _PsycopgTxn(self)

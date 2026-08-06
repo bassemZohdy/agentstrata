@@ -645,9 +645,8 @@ class TestSweep:
         async def _broken():
             raise psycopg.OperationalError("connection refused")
 
-        # Current _PsycopgDb contract: a coroutine object (R-10 reworks the
-        # factory shape).
-        db = _PsycopgDb(_broken())
+        # R-10 factory form: a callable returning a connect coroutine.
+        db = _PsycopgDb(_broken)
         backend = PostgresBackend(db, settings)
         with pytest.raises(BackendUnavailableError):
             await backend.create_session(agent_name=AGENT, principal_id=PRINCIPAL)
@@ -949,3 +948,109 @@ class TestPostgresCasRetry:
             assert postgres_backend._db._failed  # the race actually happened
         finally:
             postgres_backend._db = original_db
+
+
+async def test_psycopg_factory_reconnects_after_close():
+    """R-10: the adapter holds a connection FACTORY — close-then-use
+    creates a fresh connection instead of awaiting a consumed coroutine
+    (was: RuntimeError 'cannot reuse already awaited coroutine')."""
+
+    from app.main import _PsycopgDb
+
+    created = {"n": 0}
+
+    class _FakeConn:
+        def __init__(self) -> None:
+            self.closed = False
+            self.executed: list[str] = []
+
+        async def set_autocommit(self, value: bool) -> None:
+            self.autocommit = value
+
+        async def execute(self, sql, params=None) -> None:
+            self.executed.append(sql)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def _factory():
+        created["n"] += 1
+        return _FakeConn()
+
+    db = _PsycopgDb(_factory)
+    await db.execute("SELECT 1")
+    assert created["n"] == 1
+    await db.close()
+    # close-then-use must create a fresh connection (the old code awaited
+    # the already-consumed coroutine and raised).
+    await db.execute("SELECT 2")
+    assert created["n"] == 2
+    await db.close()
+
+
+async def test_psycopg_dropped_connection_retries_once():
+    """R-10: a connection lost mid-operation is re-established with one
+    retry on a fresh connection."""
+    import psycopg
+
+    from app.main import _PsycopgDb
+
+    created = {"n": 0}
+    outcomes: list[str] = []
+    dropped = {"once": True}
+
+    class _FlakyConn:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def set_autocommit(self, value: bool) -> None:
+            self.autocommit = value
+
+        async def execute(self, sql, params=None) -> None:
+            if dropped["once"]:
+                dropped["once"] = False
+                raise psycopg.OperationalError("server closed the connection")
+            outcomes.append(sql)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def _factory():
+        created["n"] += 1
+        return _FlakyConn()
+
+    db = _PsycopgDb(_factory)
+    await db.execute("SELECT 1")
+    # the first connection dropped mid-call; the retry used a fresh one
+    assert outcomes == ["SELECT 1"]
+    assert created["n"] == 2
+    await db.close()
+
+
+async def test_psycopg_retry_exhausted_still_wraps_outage():
+    """R-10/R-26: when the reconnect also fails, the outage still surfaces
+    as BackendUnavailableError (never a raw driver error)."""
+    import psycopg
+
+    from app.main import _PsycopgDb
+
+    class _DeadConn:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def set_autocommit(self, value: bool) -> None:
+            pass
+
+        async def execute(self, sql, params=None) -> None:
+            raise psycopg.OperationalError("connection refused")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def _factory():
+        return _DeadConn()
+
+    db = _PsycopgDb(_factory)
+    with pytest.raises(BackendUnavailableError):
+        await db.execute("SELECT 1")
+    await db.close()

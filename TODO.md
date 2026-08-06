@@ -67,6 +67,10 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-29** `observability.prometheus.*` classifies as live-snapshot but
   cannot take effect (route bound at boot); rate-limit exempt set still
   reads the stale boot config (residual gap in R-02).
+- **R-30** ⚠ **Highest severity so far** — a storage blip during
+  idempotency admission permanently leaks run slots on chat + ACP, so the
+  replica 503s forever after `maxConcurrentRequests` failures (regression
+  from the R-08 reordering).
 
 ### Low intelligence — mechanical cleanup / docs / CI
 
@@ -98,6 +102,7 @@ clean pass and does not end the loop.
 | 2026-08-06 | `9946770` | 565 pass, ruff + mypy clean | R-09 (streaming body cap) and R-13 (WS rate limit + UTF-8 byte cap) landed and verified. R-07 partially correct: the cadence refresh, `_jwks_failed` removal and the JWK-`alg` pinning are all right, but the stale-key cutoff leaks — opened **R-27** (measured: 77% of probes past the cutoff still verify against stale keys). Note R-26's ticks describe work that is still **uncommitted** at this HEAD, so it is not yet verified. |
 | 2026-08-06 | `fed1185` | HEAD tree 565 pass, ruff + mypy clean (verified on an extracted copy — the main working tree has 4 failures from uncommitted R-02 work) | R-14 verified across all three surfaces (chat/ACP/WS now emit identical `prompt/completion/total_tokens` + `costUsd`). **R-26 confirmed fixed** with the original repro (both routes → 503 `storage_unavailable`); ticks accurate. Opened **R-28** — the redis boundary wrap catches bare `Exception`, so a Lua script bug reports as an outage, while the psycopg wrap in the same commit correctly re-raises code bugs. Note: `32ea6c1` is a broken commit — its own tests fail without the boundary files that landed in `fed1185` (self-disclosed). |
 | 2026-08-06 | `90c7891` | 572 pass; ruff check, ruff format (117 files), mypy all clean; **working tree clean** | Two high-intelligence items landed. **R-02 confirmed fixed** with the original repro (`/config` now reflects an `applied_live` reload — was the founding finding of this backlog). R-11 verified: `maxTools` truncation propagates to the attached set, and the dead-session probe is covered by 4 genuinely-running stdio integration tests (not skipped). Opened **R-29** — a residual R-02 gap: `observability.prometheus.path` reports `applied_live` but the route stays bound at the boot path (verified 404/200), and `app.py:171` still reads the captured boot config. |
+| 2026-08-06 | `938f689` | 578 pass; ruff check, ruff format, mypy all clean; tree clean | R-08 landed. All three contract sub-fixes verified: completed records still replay (checked the ordering), in-flight duplicates → 409 `idempotency_in_progress`, partial streams release the record. **But opened R-30 (highest severity of the run):** the same commit moved `create_idempotency` after `slots.try_acquire()` and outside the releasing `try/finally`, so a storage blip permanently leaks a run slot — measured `in_flight` stuck at 2 of 2 with the replica 503ing after the dependency recovered. Affects chat + ACP. |
 
 ## Completed work (pointer)
 
@@ -398,11 +403,25 @@ raises `RuntimeError: cannot reuse already awaited coroutine`. There is
 also no reconnect on a dropped connection and no pool — one connection
 serves every concurrent request.
 
-- [ ] Store a connection *factory* (callable), not a coroutine.
-- [ ] Reconnect on a dropped/closed connection.
-- [ ] Use a connection pool (`psycopg_pool`) sized from config, or
+- [x] Store a connection *factory* (callable), not a coroutine.  Done:
+      `_PsycopgDb` now holds a callable factory (main.py + conftest pass
+      `lambda: psycopg.AsyncConnection.connect(dsn)`); `_connect` also
+      tolerates a coroutine for un-migrated callers — close-then-use no
+      longer awaits a consumed coroutine (was `RuntimeError`).
+- [x] Reconnect on a dropped/closed connection.  Done: `_ensure` checks
+      `conn.closed`; `_run` retries once on `psycopg.OperationalError`
+      with a fresh connection (execute/query/txn entry all routed through
+      it); an exhausted retry still surfaces as
+      `BackendUnavailableError` (R-26).
+- [x] Use a connection pool (`psycopg_pool`) sized from config, or
       document the single-connection serialization as a known limit.
-- [ ] Tests: close-then-use, and a killed connection recovering.
+      Done: single-connection serialization documented as a known limit
+      in the adapter docstring (a pool needs `psycopg_pool` — a STACK-01
+      dependency decision, deferred).
+- [x] Tests: close-then-use, and a killed connection recovering.  Done:
+      `test_psycopg_factory_reconnects_after_close`,
+      `test_psycopg_dropped_connection_retries_once`,
+      `test_psycopg_retry_exhausted_still_wraps_outage`.
 
 ### R-11 MCP reconciler never detects a dead-but-connected server; `maxTools` unenforced (MCP-01, MCP-03)
 
@@ -930,6 +949,52 @@ the scrape endpoint R-02's sibling fix meant to protect.
 - [ ] Extend `TestLiveSnapshotLeaves` to assert that every leaf
       `classify_change` calls `live_snapshot` has an observable effect, so
       a future addition cannot regress silently.
+
+### R-30 ⚠ Storage blip during idempotency admission permanently leaks run slots (regression from R-08, NFR-03)
+
+*Intelligence: medium — localized correctness. **Severity: highest of
+this review run** — a transient dependency failure permanently disables
+the replica.*
+
+R-08 moved `create_idempotency` to **after** `slots.try_acquire()` (a
+correct fix for "a 503 leaves a pending record"). But the call now sits
+between the acquire and the `try/finally` that releases the slot, so if
+it raises, the slot is never released. `RunSlotGate._in_flight` only ever
+decrements in `release()`, so the loss is permanent.
+
+This is newly reachable *because of* R-26: redis/postgres driver outages
+now raise `BackendUnavailableError` out of the storage boundary, exactly
+where this call sits.
+
+Verified with `maxConcurrentRequests: 2` and `create_idempotency` raising
+`BackendUnavailableError`:
+
+| Step | Result |
+| --- | --- |
+| request 1 (storage down) | 500 — `in_flight` 0 → **1** |
+| request 2 (storage down) | 500 — `in_flight` 1 → **2** |
+| storage **recovers**, healthy request | **503 `overloaded`** ✘ |
+| final state | `in_flight = 2 of limit 2`, permanently |
+
+After `maxConcurrentRequests` such failures the replica refuses **all**
+traffic until restarted, even though the dependency has recovered. A
+brief Redis blip is enough. `/readyz` would report ready (storage is
+healthy again) while every request 503s.
+
+Affects `chat.py` and `acp.py` — both run-admitting surfaces have the
+identical shape. `documents.py` acquires no slot and is unaffected.
+
+- [ ] Wrap everything between the acquire and the existing `try/finally`
+      so any failure releases the slot — or simply move the acquire to the
+      top of that block.
+- [ ] Apply to both `chat.py` and `acp.py`.
+- [ ] Map the admission failure to 503 `storage_unavailable` rather than
+      letting it surface as 500 `internal_error` (same reasoning as R-26).
+- [ ] Test: N admission failures followed by a healthy request must still
+      be admitted; assert `run_slots._in_flight` returns to 0.
+- [ ] Consider making `RunSlotGate` acquisition a context manager so the
+      pairing cannot be broken by a future reorder — this is the second
+      inc/dec pairing bug in the run path (cf. R-03's gauge).
 
 ---
 
