@@ -367,7 +367,7 @@ class MemoryBackend(StorageBackend):
 
     async def sweep(self, *, now: datetime | None = None) -> dict[str, int]:
         now = now or utcnow()
-        stats = {"sessions": 0, "runs": 0, "idempotency": 0}
+        stats = {"sessions": 0, "runs": 0, "idempotency": 0, "interrupted": 0}
         async with self._lock:
             for key, session_rec in list(self._sessions.items()):
                 if (
@@ -382,6 +382,17 @@ class MemoryBackend(StorageBackend):
                 if run_rec.terminal and (now - run_rec.updated_at).total_seconds() > run_ttl:
                     self._runs.pop(rkey, None)
                     stats["runs"] += 1
+            # R-04: a nonterminal run stale for a full runTtl (lost lease /
+            # crashed process) is reconciled to failed/run_interrupted so it
+            # can never be resumed and stops blocking session expiry (ENG-05).
+            # Fresh nonterminal runs are left alone (an in-flight run is
+            # nonterminal too).
+            for run_rec in list(self._runs.values()):
+                if not run_rec.terminal and (now - run_rec.updated_at).total_seconds() > run_ttl:
+                    run_rec.status = "failed"
+                    run_rec.outcome = {"error_code": "run_interrupted"}
+                    run_rec.updated_at = now
+                    stats["interrupted"] += 1
             for ikey, idem_rec in list(self._idempotency.items()):
                 if idem_rec.expires_at is not None and idem_rec.expires_at <= now:
                     self._idempotency.pop(ikey, None)

@@ -427,6 +427,7 @@ def _t_sweep_runs(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
     now_ts, ttl = _i(args[0]), _i(args[1])
     cutoff = now_ts - ttl
     deleted = 0
+    interrupted = 0
     for runidx in list(fake._sorted_sets):
         if not runidx.startswith("agentbase:") or ":runidx:" not in runidx:
             continue
@@ -439,11 +440,17 @@ def _t_sweep_runs(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:
                     fake._put(k, None)
                     fake._zrem(runidx, k)
                     deleted += 1
-                elif not terminal and updated > 0:
-                    fake._zadd(runidx, float(updated), k)
+                elif not terminal:
+                    if updated > 0:
+                        fake._zadd(runidx, float(updated), k)
+                    # R-04: reconcile to failed/run_interrupted (ENG-05).
+                    r["status"] = "failed"
+                    r["outcome"] = {"error_code": "run_interrupted"}
+                    fake._put(k, json.dumps(r).encode("utf-8"))
+                    interrupted += 1
             else:
                 fake._zrem(runidx, k)
-    return deleted
+    return [deleted, interrupted]
 
 
 def _t_create_approval(fake: FakeRedis, keys: list[str], args: list[str]) -> Any:

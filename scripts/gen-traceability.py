@@ -80,7 +80,8 @@ MAPPINGS: dict[str, str] = {
     "SES-03": "app/protocol/auth.py (principals); app/storage/*",
     "SES-04": "app/storage/contract.py (unavailable); app/storage/file_backend.py (probe)",
     "SES-05": "app/storage/* (fencing); tests/test_storage/test_contract.py::TestFencing",
-    "SES-06": "app/storage/* (sweep/ttl); tests/test_storage/test_contract.py::TestSweep",
+    "SES-06": "app/storage/* (sweep/ttl); app/protocol/app.py (lifespan sweep task); "
+    "tests/test_storage/test_contract.py::TestSweep",
     "SES-07": "app/storage/* (capacity); tests",
     "SES-08": "app/storage/* (delete cascade + close)",
     "SES-09": "app/storage/adk_adapter.py; tests/test_storage/test_adk_adapter.py",

@@ -241,6 +241,11 @@ SQL = {
         "WHERE (data->>'status') IN ('succeeded','failed','cancelled') "
         "AND updated_at < %s"
     ),
+    "nonterminal_runs": (
+        "SELECT data FROM agent_runs "
+        "WHERE (data->>'status') NOT IN ('succeeded','failed','cancelled') "
+        "AND updated_at < %s"
+    ),
     "expired_idem": (
         "SELECT agent_name, principal_id, session_id, key FROM agent_idempotency "
         "WHERE expires_at IS NOT NULL AND expires_at <= %s"
@@ -783,11 +788,12 @@ class PostgresBackend(StorageBackend):
 
     async def sweep(self, *, now: datetime | None = None) -> dict[str, int]:
         now = now or utcnow()
-        stats = {"sessions": 0, "runs": 0, "idempotency": 0}
+        stats = {"sessions": 0, "runs": 0, "idempotency": 0, "interrupted": 0}
         async with self._db.transaction():
             stats["sessions"] = await self._purge_expired_sessions(now)
             stats["runs"] = await self._purge_expired_runs(now)
             stats["idempotency"] = await self._purge_expired_idem(now)
+            stats["interrupted"] = await self._reconcile_nonterminal_runs(now)
         return stats
 
     async def _purge_expired_sessions(self, now: datetime) -> int:
@@ -828,6 +834,33 @@ class PostgresBackend(StorageBackend):
         cutoff = now - timedelta(seconds=self._settings.run_ttl_seconds)
         await self._db.execute(SQL["delete_runs_older_than"], (cutoff,))
         return 0  # sqlite driver returns no rowcount; deletion is idempotent
+
+    async def _reconcile_nonterminal_runs(self, now: datetime) -> int:
+        """R-04: a nonterminal run stale for a full runTtl (lost lease /
+        crashed process) is reconciled to failed/run_interrupted (ENG-05);
+        fresh nonterminal runs are left alone (an in-flight run is
+        nonterminal too)."""
+        cutoff = now - timedelta(seconds=self._settings.run_ttl_seconds)
+        rows = await self._db.query(SQL["nonterminal_runs"], (cutoff,))
+        count = 0
+        for row in rows:
+            rec = RunRecord.from_json(row["data"])
+            rec.status = "failed"
+            rec.outcome = {"error_code": "run_interrupted"}
+            rec.updated_at = now
+            await self._db.execute(
+                SQL["update_run"],
+                (
+                    rec.to_json(),
+                    now,
+                    rec.agent_name,
+                    rec.principal_id,
+                    rec.session_id,
+                    rec.run_id,
+                ),
+            )
+            count += 1
+        return count
 
     async def _purge_expired_idem(self, now: datetime) -> int:
         rows = await self._db.query(SQL["expired_idem"], (now,))

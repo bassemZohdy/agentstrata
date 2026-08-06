@@ -105,10 +105,22 @@ class ShutdownManager:
         self._drain_task = asyncio.create_task(self._drain_after_grace())
 
     async def _drain_after_grace(self) -> None:
+        # R-12: instead of sleeping the full grace, wait for the in-flight
+        # runs themselves (bounded by the grace timeout) — when every run
+        # finishes early the drain proceeds immediately, shortening pod
+        # termination.  On timeout the runs are cancelled below, as before.
+        registry = self.components.get("run_registry")
+        pending = [t for t in list(registry or ()) if not t.done()]
         try:
-            await asyncio.sleep(self.grace_seconds)
-        except asyncio.CancelledError:
-            return
+            if pending:
+                await asyncio.wait_for(
+                    asyncio.wait(pending, return_when=asyncio.ALL_COMPLETED),
+                    timeout=self.grace_seconds,
+                )
+            else:
+                await asyncio.sleep(self.grace_seconds)
+        except (TimeoutError, asyncio.CancelledError):
+            pass
         # CNT-07: cancel in-flight runs FIRST so the runner persists terminal
         # states/usage while storage is still open.
         started = time.monotonic()
@@ -168,6 +180,17 @@ class ShutdownManager:
                 ok = False
                 failures.append(label)
                 logger.warning("shutdown_close_failed component=%s err=%s", label, exc)
+
+        # 0. R-12: cancel the lifespan background tasks FIRST so nothing
+        # keeps running against components being closed (the approval
+        # reconciler and storage sweep would otherwise touch a backend that
+        # is mid-close; the watcher loop would keep polling).
+        for label in ("reconcile_task", "sweep_task", "watcher_task"):
+            task = self.components.get(label)
+            if isinstance(task, asyncio.Task) and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
 
         # 1. Stop the watcher so no more tier-8 reloads race the teardown.
         watcher = self.components.get("watcher")

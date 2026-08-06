@@ -202,6 +202,46 @@ class TestAuth:
             assert r.status_code == 200
 
 
+class TestMiddlewareOrder:
+    """R-01: request-id + hardening middleware wrap auth and rate-limit,
+    so failure responses still carry X-Request-Id, every hardening header,
+    and a non-empty body request_id — and the auth_failure audit records
+    the real request id instead of "" ."""
+
+    def test_auth_failure_carries_request_id_and_hardening(self, monkeypatch, caplog):
+        import logging
+
+        from app.security.audit import HARDENING_HEADERS
+
+        monkeypatch.setenv("API_KEY", "sekret")
+        with _client(auth={"mode": "apiKey", "apiKeyEnv": "API_KEY"}) as c:
+            with caplog.at_level(logging.INFO, logger="agentbase.audit"):
+                r = c.get("/v1/models", headers={"Authorization": "Bearer wrong"})
+            assert r.status_code == 401
+            assert r.headers.get("x-request-id")
+            for key in HARDENING_HEADERS:
+                assert key in r.headers
+            assert r.json().get("request_id")
+            # SEC-10: the audit record carries the same request id.
+            records = [
+                x for x in caplog.records if x.message.startswith("audit_event=auth_failure")
+            ]
+            assert records
+            assert "request_id=" + r.headers["x-request-id"] in records[0].message
+
+    def test_rate_limited_carries_request_id_and_hardening(self):
+        from app.security.audit import HARDENING_HEADERS
+
+        with _client(rateLimit={"enabled": True, "requestsPerMinute": 1}) as c:
+            assert c.get("/v1/models").status_code == 200
+            r = c.get("/v1/models")
+            assert r.status_code == 429
+            assert r.headers.get("x-request-id")
+            for key in HARDENING_HEADERS:
+                assert key in r.headers
+            assert r.json().get("request_id")
+
+
 class TestCors:
     def test_wildcard_origin_allowed(self):
         with _client() as c:

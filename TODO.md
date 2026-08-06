@@ -63,6 +63,7 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-22** Operator loop backoff + logger namespace.
 - **R-23** Documentation and CI hygiene.
 - **R-24** README/TODO backlog-status drift.
+- **R-25** Operator backoff tests flake on a zero-margin lower bound.
 
 ## Review log
 
@@ -78,6 +79,7 @@ clean pass and does not end the loop.
 | Reviewed | HEAD | Suite | Findings |
 | --- | --- | --- | --- |
 | 2026-08-06 | `9408092` | 527 pass, ruff + mypy clean | Commit was docs-only (CHANGELOG/PLAN/README); no R-item landed. Opened **R-24**. |
+| 2026-08-06 | `a705e22` | 532 pass, ruff + mypy clean; committed tree passes all CI steps incl. the two new ones | R-21 (8 of 11), R-22 (all), R-23 (all) landed and independently verified against the code; the 3 open R-21 items are correctly annotated as blocked on in-flight R-02/R-03. No regression. Opened **R-25** (new backoff tests have zero timing margin). |
 
 ## Completed work (pointer)
 
@@ -107,14 +109,25 @@ Verified: a 401 from `/v1/chat/completions` in `apiKey` mode returns no
 `X-Request-Id` header, no `X-Content-Type-Options`, and `request_id: ""`
 in the body; the same request when authorized returns both headers.
 
-- [ ] Re-register middleware so request-id and hardening are outermost
-      (register them last) and auth/rate-limit inner.
-- [ ] Confirm `request.state.client_ip` is still populated before the
+- [x] Re-register middleware so request-id and hardening are outermost
+      (register them last) and auth/rate-limit inner.  Done: hardened +
+      request-id middleware blocks moved after auth in `create_app`;
+      registration order is now rate-limit → auth → hardening →
+      request-id (outermost), so 401/403/429 responses carry
+      `X-Request-Id` + every hardening header.
+- [x] Confirm `request.state.client_ip` is still populated before the
       rate limiter keys on it (`FixedWindowLimiter.key_for_request`).
-- [ ] Fix the SEC-10 `audit("auth_failure", …)` call so it records the
-      real request id instead of `""`.
-- [ ] Tests: 401/403/429 responses carry `X-Request-Id` + every
+      Confirmed: request-id (which sets client_ip when
+      `trustedProxyCidrs` is configured) now runs outermost; the limiter
+      also degrades to `request.client.host`/`unknown` when absent.
+- [x] Fix the SEC-10 `audit("auth_failure", …)` call so it records the
+      real request id instead of `""`.  Fixed by the reorder itself:
+      auth now runs inside request-id, so `request.state.request_id` is
+      populated when the audit fires.
+- [x] Tests: 401/403/429 responses carry `X-Request-Id` + every
       `HARDENING_HEADERS` entry and a non-empty body `request_id`.
+      Done: `TestMiddlewareOrder` in test_api.py (401 auth failure +
+      audit-record request_id match, 429 rate-limit denial).
 
 ### R-02 Live-snapshot reloads never reach the HTTP routes (REL-02)
 
@@ -162,13 +175,20 @@ by all concurrent requests, but both hold **per-run** mutable state:
   `rag.py:349`) — request A's reset can mask request B's real degradation,
   and a `rag.required` run can fail or pass on the wrong signal (RAG-04).
 
-- [ ] Move `_run_started` into the per-run local scope (it is already
+- [x] Move `_run_started` into the per-run local scope (it is already
       threaded through `_execute_inner`; pass it to the commit helpers).
-- [ ] Make the active-runs gauge inc/dec strictly paired in one scope.
-- [ ] Replace `RagRetriever.degraded` with a per-call return value
-      (e.g. `retrieve()` returns `(context, degraded)`).
-- [ ] Tests: concurrent runs assert independent durations and independent
+- [x] Make the active-runs gauge inc/dec strictly paired in one scope.
+- [x] Replace `RagRetriever.degraded` with a per-call return value
+      (`retrieve()` returns `(context, degraded)`).
+- [x] Tests: concurrent runs assert independent durations and independent
       degraded signals.
+
+**Done** — `AgentRunner` now passes `run_started` through a per-run holder
+and manages `active_runs` inc/dec in `execute()`; `RagRetriever.retrieve`
+returns `(context, degraded)` so the singleton has no per-call mutable
+state.  Added `TestConcurrency` in `tests/test_engine/test_run.py` and
+`TestRetrieverConcurrency` in `tests/test_engine/test_rag.py`; full suite
+passes.
 
 ### R-04 Storage sweep is implemented but never scheduled (SES-05, ENG-05)
 
@@ -179,13 +199,25 @@ reconciliation therefore never run in a live process — despite
 `chat.py:431` documenting that "any lingering nonterminal run is
 reconciled by the storage sweep".
 
-- [ ] Start a periodic sweep task in `_lifespan` (interval from config)
-      alongside the approval reconciler.
-- [ ] Cancel it in `ShutdownManager.close_components` before the storage
-      flush.
-- [ ] Emit the sweep counters to the OBS-05 metric set.
-- [ ] Tests: a run left nonterminal is reconciled to `run_interrupted`;
-      an expired session/idempotency record is removed.
+- [x] Start a periodic sweep task in `_lifespan` (interval from config)
+      alongside the approval reconciler.  Done: `storage.sweepIntervalSeconds`
+      (default 60 s) added to the config model; `_lifespan` runs an initial
+      sweep and then a loop, each failure logged non-fatally.
+- [x] Cancel it in `ShutdownManager.close_components` before the storage
+      flush.  Done (with R-12): `reconcile_task`/`sweep_task`/`watcher_task`
+      are cancelled first in the close order.
+- [x] Emit the sweep counters to the OBS-05 metric set.  Done:
+      `agentbase_storage_sweeps_total{kind}` counter (sessions/runs/
+      idempotency/interrupted).
+- [x] Tests: a run left nonterminal is reconciled to `run_interrupted`;
+      an expired session/idempotency record is removed.  Done:
+      `test_sweep_reconciles_stale_nonterminal_run` (all four backends —
+      stale nonterminal → failed/run_interrupted, fresh nonterminal left
+      alone) + `test_startup_sweep_reconciles_stale_run_and_reports_metric`
+      (lifespan startup sweep + counter).  Reconciliation is
+      staleness-gated (nonterminal for ≥ runTtl) so an in-flight run is
+      never raced; expired-session/idempotency removal was already covered
+      by `test_sweep_*` in the contract suite.
 
 ### R-05 MCP manager is never started after a component rebuild (MCP-01, MCP-02, REL-03)
 
@@ -307,9 +339,18 @@ closed. `_drain_after_grace` (`lifecycle.py:109`) also sleeps the whole
 `shutdownGraceSeconds` even when every in-flight run finished in the
 first second, needlessly extending pod termination.
 
-- [ ] Cancel `reconcile_task` and `watcher_task` first in the close order.
-- [ ] Wake the drain timer early once `run_registry` is empty.
-- [ ] Tests: no pending tasks after shutdown; early drain shortens it.
+- [x] Cancel `reconcile_task` and `watcher_task` first in the close order.
+      Done: `close_components` cancels `reconcile_task`, `sweep_task`, and
+      `watcher_task` (awaits each cancellation) before the watcher stop.
+- [x] Wake the drain timer early once `run_registry` is empty.  Done:
+      `_drain_after_grace` waits on the in-flight run tasks themselves
+      (bounded by the grace timeout) instead of a blind sleep — an
+      early-finishing fleet shortens pod termination.
+- [x] Tests: no pending tasks after shutdown; early drain shortens it.
+      Done: `test_background_tasks_cancelled_before_components_close`
+      (all three tasks cancelled in order) +
+      `test_early_drain_when_runs_finish_before_grace` (a 30 s grace
+      completes in < 2 s when the run finishes in 50 ms).
 
 ### R-13 WebSocket surface bypasses rate limiting; message cap counts characters (WS-01, API-20)
 
@@ -533,6 +574,38 @@ epics are open.
       work") for the same premise.
 - [ ] Keep the TODO.md preamble's scope narrow — the *2026-08-05* backlog
       is closed; the 2026-08-06 one is not.
+
+### R-25 The R-22 backoff tests sit exactly on their assertion's lower bound
+
+*Intelligence: low — test reliability / CI.*
+
+`test_watch_failure_backs_off` and `test_list_failure_backs_off`
+(`tests/test_operator/test_operator.py`, added in `a705e22`) let the
+operator run for 1.6 s of wall clock and assert
+`3 <= kube.list_calls <= 8`.
+
+Measured: `list_calls` is **exactly 3** on every run, for both tests
+(4 trials each, both failure modes). The expected value *is* the lower
+bound, so the tests have zero margin — any scheduling delay on a loaded
+CI runner pushes the third re-list past the stop and yields 2, failing
+the build.
+
+The docstring's premise is a miscount: it says the window "admits ~4-5
+re-lists", but the backoff sleeps are 0.25 / 0.5 / 1.0 s, so re-lists
+land at t ≈ 0, 0.25, 0.75 and the fourth at ≈1.75 s — after the 1.6 s
+stop. The author chose the bound believing there was 1-2 calls of
+headroom that does not exist.
+
+This does not affect production code — the R-22 backoff itself is
+correct and the assertion's *upper* bound is what guards the hot-loop
+regression.
+
+- [ ] Drop the lower bound (or set it to 1): it guards nothing — the
+      hot-loop regression is caught by the upper bound alone.
+- [ ] Preferred: make the test deterministic by injecting the sleep/clock
+      into `_backoff` instead of racing wall time, which also removes
+      ~3.2 s from the suite.
+- [ ] Fix the docstring's "~4-5 re-lists" arithmetic either way.
 
 ---
 

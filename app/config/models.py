@@ -211,6 +211,9 @@ class Storage(BaseModel):
     maxIdempotencyRecordsPerSession: int = Field(default=1000, gt=0)
     lockAcquireSeconds: float = Field(default=0.0, ge=0.0, le=5.0)
     idempotencyTtlSeconds: int = Field(default=86400, ge=60)
+    # SES-06/07 (R-04): how often the lifespan storage sweep runs (TTL
+    # expiry, capacity trimming, nonterminal-run reconciliation).
+    sweepIntervalSeconds: int = Field(default=60, ge=1, le=86400)
 
 
 class JwtAuth(BaseModel):

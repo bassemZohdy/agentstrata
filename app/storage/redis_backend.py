@@ -591,14 +591,20 @@ class RedisBackend(StorageBackend):
     async def sweep(self, *, now: datetime | None = None) -> dict[str, int]:
         # SES-06 redis row: session/idempotency expiration is applied
         # atomically with mutations (TTL'd keys fall out naturally); terminal
-        # run retention is enforced here via a scan.
+        # run retention + nonterminal-run reconciliation happen here.
         now = now or utcnow()
-        deleted = await self._eval(
+        result = await self._eval(
             SWEEP_RUNS,
             [],
             [str(_to_int(now.timestamp())), str(self._settings.run_ttl_seconds)],
         )
-        return {"sessions": 0, "runs": _to_int(deleted), "idempotency": 0}
+        deleted, interrupted = result if isinstance(result, (list, tuple)) else (result, 0)
+        return {
+            "sessions": 0,
+            "runs": _to_int(deleted),
+            "idempotency": 0,
+            "interrupted": _to_int(interrupted),
+        }
 
     # -- fencing (SES-05 lease) ----------------------------------------------------------------
 
@@ -1106,12 +1112,15 @@ SWEEP_RUNS = """
 -- Non-blocking retention sweep: enumerate the per-session run indexes
 -- with SCAN (no blocking KEYS), then expire each index's stale terminal
 -- runs by score. SCAN is a random command, so replicate_commands() is
--- required before the DEL/ZREM/ZADD writes.
+-- required before the DEL/ZREM/ZADD writes.  Nonterminal runs are
+-- reconciled to failed/run_interrupted (R-04/ENG-05) so a lost lease or
+-- crashed process can never leave a resumable run.
 redis.replicate_commands()
 local now = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
 local cutoff = now - ttl
 local deleted = 0
+local interrupted = 0
 local cursor = '0'
 repeat
   local scan = redis.call('SCAN', cursor, 'MATCH', 'agentbase:*:runidx:*', 'COUNT', 200)
@@ -1128,9 +1137,18 @@ repeat
           redis.call('DEL', k)
           redis.call('ZREM', runidx, k)
           deleted = deleted + 1
-        elseif not terminal and updated > 0 then
-          -- self-heal: update_run advanced the record without reindexing
-          redis.call('ZADD', runidx, updated, k)
+        elseif not terminal then
+          if updated > 0 then
+            -- self-heal: update_run advanced the record without reindexing
+            redis.call('ZADD', runidx, updated, k)
+          end
+          -- R-04: reconcile the nonterminal run to failed/run_interrupted.
+          -- (cjson decodes missing fields to nil; keep the outcome shape
+          -- compatible with the Python-side failure convention.)
+          r.status = 'failed'
+          r.outcome = { error_code = 'run_interrupted' }
+          redis.call('SET', k, cjson.encode(r))
+          interrupted = interrupted + 1
         end
       else
         -- the key is gone (session deleted): drop the stale index member
@@ -1139,7 +1157,7 @@ repeat
     end
   end
 until cursor == '0'
-return deleted
+return { deleted, interrupted }
 """
 
 

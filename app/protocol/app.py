@@ -61,7 +61,7 @@ class RunSlotGate:
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> AsyncIterator[None]:
+async def _lifespan(app: FastAPI, components: dict[str, Any], config: Any) -> AsyncIterator[None]:
     """Startup: the tier-8 watch loop and the MCP reconcilers need a live
     event loop; main.py only constructs them (M8 gate regressions: both
     were never started in production). Also writes the CNT-10 bound-port
@@ -73,13 +73,40 @@ async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> Asyn
 
     marker = Path(os.environ.get("AGENT_HEALTH_MARKER", "/tmp/agentbase.ready"))
     with suppress(OSError):
-        marker.write_text(str(port), encoding="utf-8")
+        marker.write_text(str(config.server.port), encoding="utf-8")
     watcher = components.get("watcher")
     if watcher is not None and hasattr(watcher, "run"):
         components["watcher_task"] = asyncio.create_task(watcher.run())
     mcp = components.get("mcp")
     if mcp is not None and hasattr(mcp, "start") and not getattr(mcp, "_started", False):
         await mcp.start()
+    # SES-06/07 (R-04): the storage sweep runs at startup (reconciles
+    # nonterminal runs and clears expired records left by a previous
+    # process) and then on a fixed interval; a failed sweep never blocks
+    # the next tick.
+    backend = components.get("backend")
+    if backend is not None and hasattr(backend, "sweep"):
+        # Pydantic guarantees sweepIntervalSeconds is an int in [1, 86400].
+        sweep_interval = config.storage.sweepIntervalSeconds
+
+        async def _sweep_once() -> None:
+            try:
+                stats = await backend.sweep()
+                metrics_bundle = components.get("metrics")
+                if metrics_bundle is not None:
+                    for kind, count in stats.items():
+                        if count:
+                            metrics_bundle.sweeps.add(count, {"kind": kind})
+            except Exception:  # noqa: BLE001 — sweep must never block boot
+                logging.getLogger("app.lifecycle").exception("storage sweep")
+
+        async def _sweep_loop() -> None:
+            while True:
+                await asyncio.sleep(sweep_interval)
+                await _sweep_once()
+
+        await _sweep_once()
+        components["sweep_task"] = asyncio.create_task(_sweep_loop())
     # HITL-05: the approval reconciler runs at startup (finishes pending
     # records left by a previous process) and then on a fixed interval to
     # enforce approval timeouts against the onTimeout policy.
@@ -89,7 +116,9 @@ async def _lifespan(app: FastAPI, components: dict[str, Any], port: int) -> Asyn
             await runner.reconcile_pending()
         except Exception:  # noqa: BLE001 - reconciliation must not block boot
             logging.getLogger("app.lifecycle").exception("approval reconcile (startup)")
-        interval = max(float(getattr(runner, "_reconcile_interval", 5.0)), 1.0)
+        # _reconcile_interval is a float class attribute (default 5.0);
+        # the max() guard keeps a misconfigured value from stalling boot.
+        interval = max(getattr(runner, "_reconcile_interval", 5.0), 1.0)
 
         async def _reconcile_loop() -> None:
             while True:
@@ -111,7 +140,7 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
         docs_url=None,  # API-18: documented OpenAPI, no interactive docs by default
         redoc_url=None,
         openapi_url="/openapi.json",
-        lifespan=lambda _app: _lifespan(_app, components, config.server.port),
+        lifespan=lambda _app: _lifespan(_app, components, config),
     )
 
     # NFR-03 / API-15: replica-local in-flight run cap. The chat route
@@ -159,32 +188,14 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
             return await call_next(request)
 
     # SEC-11: response hardening + SEC-09 trusted-proxy + SEC-10 audit.
+    # NOTE: the hardening and request-id middleware blocks below are
+    # registered AFTER auth (R-01) so they wrap it — auth failures and
+    # rate-limit denials still carry X-Request-Id + hardening headers, and
+    # request.state.request_id/client_ip are populated before auth audits
+    # and the rate limiter key.
     from ..security.audit import HARDENING_HEADERS, audit, parse_forwarded_for
 
     trusted_cidrs = list(config.server.trustedProxyCidrs)
-
-    @app.middleware("http")
-    async def hardening_middleware(request: Request, call_next):
-        response = await call_next(request)
-        for key, value in HARDENING_HEADERS.items():
-            response.headers.setdefault(key, value)
-        return response
-
-    # Per-request request id (API-00: every response after scope creation
-    # includes X-Request-Id).
-    @app.middleware("http")
-    async def request_id_middleware(request: Request, call_next):
-        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-        request.state.request_id = request_id
-        if trusted_cidrs:
-            direct = request.client.host if request.client else ""
-            client = parse_forwarded_for(
-                request.headers.get("x-forwarded-for", ""), trusted_cidrs, direct
-            )
-            request.state.client_ip = client or direct
-        response = await call_next(request)
-        response.headers["X-Request-Id"] = request_id
-        return response
 
     # Error mapping (ENG-10 / API-15).
     from .errors import PublicErrorResponse, public_error_handler
@@ -226,6 +237,34 @@ def create_app(config: Any, components: dict[str, Any], mode: str = "standalone"
             return JSONResponse(status_code=error.status, content=error.body(request_id))
         request.state.principal = principal
         return await call_next(request)
+
+    # R-01: registered last = outermost.  Hardening wraps auth so 401/403
+    # responses carry the hardening headers; request-id wraps hardening so
+    # every response (including 429s and auth failures) carries
+    # X-Request-Id and request.state.request_id is set before auth audits
+    # and the rate limiter key.
+    @app.middleware("http")
+    async def hardening_middleware(request: Request, call_next):
+        response = await call_next(request)
+        for key, value in HARDENING_HEADERS.items():
+            response.headers.setdefault(key, value)
+        return response
+
+    # Per-request request id (API-00: every response after scope creation
+    # includes X-Request-Id).
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        if trusted_cidrs:
+            direct = request.client.host if request.client else ""
+            client = parse_forwarded_for(
+                request.headers.get("x-forwarded-for", ""), trusted_cidrs, direct
+            )
+            request.state.client_ip = client or direct
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id
+        return response
 
     # CORS (SEC-06).
     from fastapi.middleware.cors import CORSMiddleware

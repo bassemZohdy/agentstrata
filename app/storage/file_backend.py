@@ -533,7 +533,7 @@ class FileBackend(StorageBackend):
 
     async def sweep(self, *, now: datetime | None = None) -> dict[str, int]:
         now = now or utcnow()
-        stats = {"sessions": 0, "runs": 0, "idempotency": 0}
+        stats = {"sessions": 0, "runs": 0, "idempotency": 0, "interrupted": 0}
         async with self._lock:
             for agent_dir in list(self._base.iterdir()) if self._base.is_dir() else []:
                 if not agent_dir.is_dir() or agent_dir.is_symlink():
@@ -546,6 +546,11 @@ class FileBackend(StorageBackend):
                         if name.endswith(".run") or ".run-" in name:
                             stats["runs"] += await asyncio.to_thread(
                                 self._maybe_delete_run, path, now
+                            )
+                            # R-04: reconcile a nonterminal run file (lost
+                            # lease / crashed process) to failed.
+                            stats["interrupted"] += await asyncio.to_thread(
+                                self._maybe_reconcile_run, path, now
                             )
                         elif name.endswith(".idem") or ".idem-" in name:
                             stats["idempotency"] += await asyncio.to_thread(
@@ -609,6 +614,22 @@ class FileBackend(StorageBackend):
             path.unlink(missing_ok=True)
             return 1
         return 0
+
+    def _maybe_reconcile_run(self, path: Path, now: datetime) -> int:
+        """R-04: a nonterminal run stale for a full runTtl (lost lease /
+        crashed process) is reconciled to failed/run_interrupted (ENG-05);
+        fresh nonterminal runs are left alone (an in-flight run is
+        nonterminal too). Returns 1 when reconciled."""
+        record = self._read_record(path, RunRecord.from_json)
+        if record is None or record.terminal:
+            return 0
+        if (now - record.updated_at).total_seconds() <= self._settings.run_ttl_seconds:
+            return 0
+        record.status = "failed"
+        record.outcome = {"error_code": "run_interrupted"}
+        record.updated_at = now
+        self._atomic_write(path, record.to_json())
+        return 1
 
     def _maybe_delete_idem(self, path: Path, now: datetime) -> int:
         record = self._read_record(path, IdempotencyRecord.from_json)

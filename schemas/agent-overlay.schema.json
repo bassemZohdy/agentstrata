@@ -1095,6 +1095,13 @@
           "title": "Sessionttlseconds",
           "type": "integer"
         },
+        "sweepIntervalSeconds": {
+          "default": 60,
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Sweepintervalseconds",
+          "type": "integer"
+        },
         "type": {
           "$ref": "#/$defs/StorageType",
           "default": "memory"

@@ -569,6 +569,46 @@ class TestSweep:
             is None
         )
 
+    async def test_sweep_reconciles_stale_nonterminal_run(self, backend, settings):
+        """R-04/ENG-05: a nonterminal run stale for a full runTtl (lost
+        lease / crashed process) is reconciled to failed/run_interrupted;
+        a fresh nonterminal run (possibly in flight) is left alone."""
+        await _open(backend)
+        now = utcnow()
+        stale = now - timedelta(seconds=settings.run_ttl_seconds + 60)
+        await backend.create_session(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", now=now
+        )
+        await backend.create_run(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id="sid",
+            run_id="stale",
+            run_input={},
+            now=stale,
+        )
+        await backend.create_run(
+            agent_name=AGENT,
+            principal_id=PRINCIPAL,
+            session_id="sid",
+            run_id="fresh",
+            run_input={},
+            now=now,
+        )
+        stats = await backend.sweep(now=now)
+        assert stats["interrupted"] == 1
+        stale_rec = await backend.get_run(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", run_id="stale"
+        )
+        assert stale_rec is not None
+        assert stale_rec.status == "failed"
+        assert stale_rec.outcome == {"error_code": "run_interrupted"}
+        fresh_rec = await backend.get_run(
+            agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid", run_id="fresh"
+        )
+        assert fresh_rec is not None
+        assert fresh_rec.status == "created"
+
 
 class TestFencing:
     async def test_acquire_renew_release_by_token(self, backend):

@@ -874,6 +874,12 @@ spec:
                     minimum: 60
                     title: Idempotencyttlseconds
                     type: integer
+                  sweepIntervalSeconds:
+                    default: 60
+                    maximum: 86400
+                    minimum: 1
+                    title: Sweepintervalseconds
+                    type: integer
                 title: Storage
                 type: object
               StorageType:

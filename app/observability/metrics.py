@@ -225,6 +225,10 @@ class MetricBundle:
             "agentbase_output_queue_cancellations_total",
             "Runs cancelled for a full output queue (slow consumer)",
         )
+        self.sweeps = observability.counter(
+            "agentbase_storage_sweeps_total",
+            "Storage sweep deletions/reconciliations, by kind (SES-06/07)",
+        )
         self.dependency_healthy = observability.gauge(
             "agentbase_dependency_healthy", "Dependency health (1 healthy, 0 not), by dependency"
         )
