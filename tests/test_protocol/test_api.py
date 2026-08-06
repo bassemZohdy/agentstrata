@@ -152,9 +152,70 @@ class TestSessions:
 
             d = c.delete(f"/v1/sessions/{sid}")
             assert d.status_code == 204
+            # R-18: RFC 9110 — a 204 has an empty body and no content-type.
+            assert d.content == b""
+            assert d.headers.get("content-type") is None
 
             g2 = c.get(f"/v1/sessions/{sid}")
             assert g2.status_code == 404
+
+    def test_delete_invalid_session_id_400(self):
+        with _client() as c:
+            r = c.delete("/v1/sessions/bad id!")
+            assert r.status_code == 400
+            assert r.json()["error"]["code"] == "invalid_session_id"
+
+    def test_get_invalid_session_id_400(self):
+        with _client() as c:
+            r = c.get("/v1/sessions/bad id!")
+            assert r.status_code == 400
+            assert r.json()["error"]["code"] == "invalid_session_id"
+
+    def test_capacity_error_maps_to_storage_capacity(self):
+        """R-19: a maxSessions CapacityError surfaces as 503
+        storage_capacity, not a generic 5xx outage."""
+        from app.protocol.app import create_app
+        from app.storage.contract import CapacityError
+
+        class _FullBackend:
+            async def create_session(self, **kwargs):
+                raise CapacityError("maxSessions reached")
+
+            async def get_session(self, **kwargs):
+                return None
+
+            async def delete_session(self, **kwargs):
+                return False
+
+        config = make_config()
+        components = {"backend": _FullBackend(), "mcp": None}
+        with TestClient(create_app(config, components, mode="standalone")) as c:
+            r = c.post("/v1/sessions", json={})
+            assert r.status_code == 503
+            assert r.json()["error"]["code"] == "storage_capacity"
+
+    def test_session_busy_maps_to_409(self):
+        """R-19: deleting a session with a nonterminal run surfaces 409
+        session_busy instead of a generic error."""
+        from app.protocol.app import create_app
+        from app.storage.contract import SessionBusy
+
+        class _BusyBackend:
+            async def create_session(self, **kwargs):
+                raise SessionBusy("busy")
+
+            async def get_session(self, **kwargs):
+                return None
+
+            async def delete_session(self, **kwargs):
+                raise SessionBusy("busy")
+
+        config = make_config()
+        components = {"backend": _BusyBackend(), "mcp": None}
+        with TestClient(create_app(config, components, mode="standalone")) as c:
+            d = c.delete("/v1/sessions/sid")
+            assert d.status_code == 409
+            assert d.json()["error"]["code"] == "session_busy"
 
     def test_unknown_session_identical_404(self):
         with _client() as c:

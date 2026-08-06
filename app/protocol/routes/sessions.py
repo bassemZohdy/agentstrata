@@ -8,9 +8,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
+from ...storage.contract import (
+    BackendUnavailableError,
+    CapacityError,
+    InvalidSessionId,
+    SessionBusy,
+)
 from ...storage.model import validate_session_id
 from ..errors import PublicErrorResponse, error_body
 
@@ -22,6 +28,17 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
 
     def principal_of(request: Request) -> str:
         return getattr(request.state, "principal", "anonymous")
+
+    def _session_error(exc: Exception) -> PublicErrorResponse:
+        """R-19: map distinct storage failures to their public codes instead
+        of collapsing every exception into one (API-15, ENG-10)."""
+        if isinstance(exc, CapacityError):
+            return PublicErrorResponse("storage_capacity", "session capacity reached")
+        if isinstance(exc, InvalidSessionId):
+            return PublicErrorResponse("invalid_session_id", "invalid session id", 400)
+        if isinstance(exc, SessionBusy):
+            return PublicErrorResponse("session_busy", "session is busy", 409)
+        return PublicErrorResponse("storage_unavailable", "storage unavailable")
 
     @router.post("")
     async def create_session(request: Request, body: dict | None = None):
@@ -35,8 +52,8 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 principal_id=principal_of(request),
                 session_id=session_id,
             )
-        except Exception as exc:  # noqa: BLE001
-            raise PublicErrorResponse("storage_unavailable", "storage unavailable") from exc
+        except (BackendUnavailableError, CapacityError, InvalidSessionId) as exc:
+            raise _session_error(exc) from exc
         return JSONResponse(
             status_code=200,
             content={"session_id": record.session_id},
@@ -45,6 +62,8 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
 
     @router.get("/{session_id}")
     async def get_session(request: Request, session_id: str):
+        if not validate_session_id(session_id):
+            raise PublicErrorResponse("invalid_session_id", "invalid session id", 400)
         record = await backend.get_session(
             agent_name=agent_name,
             principal_id=principal_of(request),
@@ -67,14 +86,16 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
 
     @router.delete("/{session_id}")
     async def delete_session(request: Request, session_id: str):
+        if not validate_session_id(session_id):
+            raise PublicErrorResponse("invalid_session_id", "invalid session id", 400)
         try:
             deleted = await backend.delete_session(
                 agent_name=agent_name,
                 principal_id=principal_of(request),
                 session_id=session_id,
             )
-        except Exception as exc:  # noqa: BLE001
-            raise PublicErrorResponse("session_busy", "session is busy") from exc
+        except (BackendUnavailableError, SessionBusy) as exc:
+            raise _session_error(exc) from exc
         if not deleted:
             return JSONResponse(
                 status_code=404,
@@ -84,7 +105,8 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                     getattr(request.state, "request_id", ""),
                 ),
             )
-        return JSONResponse(status_code=204, content=None)
+        # R-18: RFC 9110 — a 204 has no body and no content-type.
+        return Response(status_code=204)
 
     app.include_router(router)
 

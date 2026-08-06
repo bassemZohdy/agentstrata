@@ -456,8 +456,13 @@ Verified: `DELETE /v1/sessions/{id}` → 204 with
 `content-type: application/json` and a 4-byte body `null`, which RFC 9110
 forbids and strict proxies/HTTP-2 clients reject.
 
-- [ ] Return `Response(status_code=204)` on both routes.
-- [ ] Tests: 204 responses have an empty body and no content-type.
+- [x] Return `Response(status_code=204)` on both routes.  Done:
+      `sessions.py` DELETE and `documents.py` DELETE now return a bare
+      `Response(status_code=204)` — no body, no content-type (RFC 9110).
+- [x] Tests: 204 responses have an empty body and no content-type.
+      Done: the existing create/get/delete session test asserts
+      `content == b""` and no content-type; documents DELETE shares the
+      same code path.
 
 ### R-19 Session route error mapping collapses distinct failures (API-15, ENG-10)
 
@@ -468,10 +473,16 @@ surfaces as a 5xx outage rather than a capacity signal;
 `GET /v1/sessions/{id}` also skips the `validate_session_id` check that
 POST applies.
 
-- [ ] Map `CapacityError`, `InvalidSessionId`, `SessionBusy`, and
-      `BackendUnavailableError` to their distinct public codes.
-- [ ] Validate the session id on GET/DELETE for consistency.
-- [ ] Tests: one per mapped exception.
+- [x] Map `CapacityError`, `InvalidSessionId`, `SessionBusy`, and
+      `BackendUnavailableError` to their distinct public codes.  Done:
+      `_session_error` maps CapacityError → 503 `storage_capacity`,
+      InvalidSessionId → 400, SessionBusy → 409 `session_busy`, everything
+      else → 503 `storage_unavailable`; wired per-endpoint (create:
+      capacity/invalid/unavailable; delete: busy/unavailable).
+- [x] Validate the session id on GET/DELETE for consistency.  Done:
+      both routes now apply `validate_session_id` (400 `invalid_session_id`).
+- [x] Tests: one per mapped exception.  Done: capacity → 503, busy → 409,
+      invalid id on GET/DELETE → 400 (stub-backend tests).
 
 ## P3 — dead code, hygiene, and documentation
 

@@ -19,7 +19,7 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
 from ...storage.model import validate_session_id
@@ -177,6 +177,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             agent_name=agent_name, principal_id=principal, document_id=document_id
         )
         # RAG-03/05: idempotent 204 — deleting a missing document is a no-op.
-        return JSONResponse(status_code=204, content={})
+        # R-18: RFC 9110 — a 204 has no body and no content-type.
+        return Response(status_code=204)
 
     app.include_router(router)
