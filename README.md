@@ -125,5 +125,5 @@ The runtime is feature-complete through phase 5: P1 core, P2 multi-agent/ACP, P3
 | [docs/decisions.md](docs/decisions.md) | Decision log: resolved engineering and product decisions (requirement-ID traceable). |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | The authoritative specification. Every rule has a stable ID (e.g. `CFG-03`, `API-07`) that code and tests trace back to. |
 | [PLAN.md](PLAN.md) | Build order and milestones. |
-| [TODO.md](TODO.md) | Remaining-work checklist and deferred scope. |
+| [TODO.md](TODO.md) | Deferred scope and pointers to completed work (backlog is closed). |
 | [CHANGELOG.md](CHANGELOG.md) | What changed and why, release by release. |

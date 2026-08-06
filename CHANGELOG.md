@@ -25,11 +25,10 @@ docs/release.md.
   extended; traceability + schemas regenerated; deployment.md costs
   section; PLAN.md P5-4.
 
-### P5-4 finish line (2026-08-06) — consistency, tests, docs, hygiene
+### P5-4 finish line (2026-08-06) — usage-shape consistency and compliance
 
 The 2026-08-05 deep review found the P5-4 surface inconsistent with its
-spec and the surrounding code; the finish line closed every gap in
-TODO.md:
+spec; the finish line closed every gap:
 
 - **Usage shape consistency (API-07/08, COST-01):** `_normalize_usage()`
   in `app/protocol/routes/chat.py` maps the internal
@@ -55,22 +54,16 @@ TODO.md:
   (OBS-05), negative-price validation extended to per-model entries,
   and the NFR-06 openai-SDK `costUsd` extra-field compatibility test.
 - **Docs:** REQUIREMENTS.md COST-01/02 verified against implementation
-  (typo fixed), traceability COST rows extended, deployment.md cost
-  section rewritten (price table, matching rules, scraping, disabled
-  default, label cardinality, `/health` reporting) + operator paragraph
-  restored + `## Human-in-the-loop` and `## Phase 5 extensions` headings
-  - cost counter in Observability + multi-agent pricing limitation;
-  README.md status/phase table/What's in the image/Deploy it; PLAN.md
-  P5 milestone order; release.md P5 evidence section + checklist;
-  `/health` reports `capabilities.costs: true` (not phase-gated).
-- **Hygiene:** unawaited coroutine fixed in test_rag.py; line endings
-  normalized (`.gitattributes` LF, `git add --renormalize`, 0 CRLF
-  warnings); `mypy tests` enabled (42 files clean) + CI step;
-  `_FakeRequest` pyright errors fixed via a `_StreamRequest` Protocol;
-  google.adk MCPTool deprecation confirmed to be upstream (2.6.1/2.6.2)
-  — our code already uses `McpToolset`; deferral documented.
+  (typo fixed); deployment.md cost section rewritten (price table,
+  matching rules, scraping, disabled default, label cardinality) +
+  `## Human-in-the-loop` and `## Phase 5 extensions` headings; `/health`
+  reports `capabilities.costs: true` (not phase-gated).
+- **Hygiene:** unawaited coroutine fixed in test_rag.py; `_FakeRequest`
+  pyright errors fixed via a `_StreamRequest` Protocol; google.adk
+  MCPTool deprecation confirmed to be upstream (2.6.1/2.6.2) — our code
+  already uses `McpToolset`; deferral documented.
 - Host suite: **527 passed**; ruff + mypy (app, scripts, tests) clean;
-  schemas zero-diff; manifest sync OK.
+  schemas zero-diff.
 - **TRC-01:** the P2 ACP acceptance-annex IDs `A-1`..`A-6` are now
   mapped in the traceability matrix — the generator's ID regex also
   matches single-letter annex IDs, and regeneration is deterministic
@@ -104,14 +97,6 @@ proofs; NFR-00 image-based release gates.
 - Tests: 10 operator tests (create/update reconcile, fail-closed status,
   observedGeneration, reconcile-all loop, manifest validity); 508 host
   tests; ruff/mypy/manifest clean.
-
-### TODO.md cleanup (final)
-
-- Every `[ ]` item in TODO.md is now resolved.  The 2026-08-05 review
-  had reopened the backlog for the P5-4 consistency/test/docs gaps; the
-  2026-08-06 finish line closed all of them (see the P5-4 finish line
-  entry above).  The only remaining deferrals are documented in
-  TODO.md's Deferred scope section.
 
 ### P5-2: WebSocket API (WS-01) — DONE
 
@@ -161,16 +146,6 @@ proofs; NFR-00 image-based release gates.
 - Tests: registry unit tests + end-to-end route tests
   (tests/test_protocol/test_metrics.py, 8 tests) + config validation.
 
-### TODO.md cleanup round 3 (2026-08-05)
-
-- The completed-task records in TODO.md were removed (they have been in
-  CHANGELOG since their respective rounds): the review section is now a
-  pointer, and the product-name research + decision are condensed to their
-  on-record facts. TODO.md now contains only the five resolved decisions
-  (for the record) and the three deferred-scope items (WebSocket API,
-  Kubernetes CRD, Prometheus /metrics — each with its recorded "don't
-  reopen speculatively" justification).
-
 ### Product name decision RESOLVED (2026-08-05)
 
 - The open human-call item is closed: the project is open-source and
@@ -178,13 +153,14 @@ proofs; NFR-00 image-based release gates.
   and the name stays as-is ("Agentbase" / "AgentStrata"). The clearance
   research (2026-08-05, PyPI/Docker Hub/GitHub/npm/domains/USPTO-EUIPO
   surfaces + the ParamAgent/BaseAgent/Agenter/AgentImage candidate check)
-  stays on record in TODO.md — if the project ever turns commercial, the
+  stays on record in [docs/decisions.md](docs/decisions.md) — if the
+  project ever turns commercial, the
   registry-clear fallback is `agent-strata` (free on PyPI, npm, Docker
   Hub, and GitHub).
 
 ### Product-name clearance research (recorded 2026-08-05)
 
-- The TODO.md clearance item's checkable part is DONE: every registry was
+- The clearance item's checkable part is DONE: every registry was
   probed and the provisional "Agentbase" name is encumbered everywhere:
   PyPI `agentbase` taken (unrelated OmniAgents package; `agent-strata` is
   free), Docker Hub namespace taken (`abi-image-v2`), GitHub login taken
@@ -194,12 +170,13 @@ proofs; NFR-00 image-based release gates.
   AGENTBASE USPTO/EUIPO registration surfaced, but the mark is in active
   commercial use — including Demandbase's "Agentbase" AI-agent product line
   (PRNewswire 2025-05) — so classes 9/42 carry high confusion/opposition
-  risk. Verdict recorded in TODO.md: provisional-only; a rename before any
+  risk. Verdict recorded in [docs/decisions.md](docs/decisions.md):
+  provisional-only; a rename before any
   public release is strongly advised (the repo is already `agentstrata` and
   `agent-strata` is clear on PyPI). The keep-vs-rename DECISION itself
   remains a human call.
 
-### Deferred-review items completed (TODO.md -> CHANGELOG.md, round 2)
+### 2026-08-05 review fixes (round 2)
 
 - **Redis `KEYS` in Lua (DONE):** every blocking `KEYS` scan is gone from
   the Lua scripts. Runs and idempotency records live in per-session ZSET
@@ -229,12 +206,8 @@ proofs; NFR-00 image-based release gates.
   finds the run record (terminal `cancelled` commit) or leaves nothing.
   `_commit_failure` still suppresses `SessionNotFound` for the
   pre-record window.
-- **TODO.md cleanup round 2:** the last three deferred review items are
-  now DONE records; TODO.md's only remaining `[ ]` items are the
-  product-name human decision and the explicitly-deferred scope
-  (WebSocket / CRD / metrics).
 
-### Review-item cleanup (TODO.md -> CHANGELOG.md)
+### Review fixes (2026-08-05)
 
 - **Real-backend CI matrix (ACC-01 deviation, DONE):** the
   `storage-contract-real` CI job runs the shared storage contract suite
@@ -289,11 +262,6 @@ proofs; NFR-00 image-based release gates.
 - **Unknown audit events warn (DONE):** `audit()` logs an
   `audit_unknown_event` warning with the offending name + fields and
   still emits the remapped `audit_unknown` record.
-- **TODO.md cleanup:** completed task records moved here; TODO.md now
-  tracks only the genuinely-deferred review items (Redis `KEYS` in Lua,
-  pre-admission cancellation residual, non-atomic admission), the product-
-  name human decision, and the explicitly-deferred scope (WebSocket/CRD/
-  metrics).
 
 ### P4 — RAG / long-term memory (RAG-01..06, §15, complete)
 
@@ -372,7 +340,7 @@ zero-downtime reload proof passes. The only remaining M8 exit check tracked in
 - **STACK-02 feasibility spike (M0):** ADK session/event lifecycle — GO (public seams, e2e smoke); McpToolset lifecycle — GO on mcp 1.29.0, broken on mcp 2.0.0; MCP-08 bounded-read seam — GO for HTTP/SSE (httpx injection), no stdio seam; uvicorn 0.52.1 API-20 — partial (414/431 + header-count cap planned via custom protocol class at M5). Resulted in REQUIREMENTS.md v2.5 phase note (stdio pre-parse cap deferred per user decision) and the `mcp>=1.24,<2` pin.
 - **Minimal Dockerfile (CNT-01/04/05/06/08):** digest-pinned `python:3.12-slim`, multi-stage, hash-verified venv install, exec-form `ENTRYPOINT`, one worker, no reload; `.dockerignore`. Exit check passed: running container serving on 8080.
 - **CI skeleton:** lint/type-check/lockfile-hash/placeholder-test jobs (SHA-pinned actions, read-only permissions, zizmor clean).
-- **LICENSE placeholder only** — no license decision yet; product name **Agentbase** is chosen but pending trademark/domain/registry clearance (see TODO.md "Open decisions").
+- **LICENSE placeholder only** — no license decision yet; product name **Agentbase** is chosen but pending trademark/domain/registry clearance (see [docs/decisions.md](docs/decisions.md)).
 - **Product rename — "AgentStrata" → "Agentbase":** the chosen product name propagated consistently across docs, code, identifiers, manifests, schemas, and tests (logger names, image names, package/distribution name, K8s resource names, Redis key prefix, FastAPI title). No import paths changed (the Python module stays `app.*`). Clearance is still pending, so the name remains provisional.
 
 - **Milestone 1 — Configuration engine (complete; SCH/CFG/CAP/MODE, BASE-01):** Pydantic v2 schema with camelCase aliases, `extra="forbid"`, strict mode; full `engine`/`llm`/`tools.mcpServers`/`storage`/`server`/`k8s`/`observability` fields plus phase-gated `agents`/`approval`/`rag` stubs (SCH-01..09); bundled base `config/agent.yaml` (BASE-01); JSON Schema generation → `schemas/agent.schema.json` with CI zero-diff (SCH-02, DEL-02). Tier 1–7 resolver — bundled/mounted file discovery in exact candidate order, deep-merge (recursive map merge, wholesale list replace, null-reset), relaxed schema-aware env binding with ambiguity/near-match detection, `AGENT_APPLICATION_JSON` inline JSON, `--<dotted.path>=<value>` CLI flags, per-leaf provenance, source-safety (UTF-8, 1 MiB cap, single-mapping root, duplicate-key rejection, immutable byte snapshots) (CFG-01..11a). Validation pipeline — `model_validate` + alias-only external walk, full cross-field checklist, deterministic aggregate error reporting, capability fail-closed gating (CAP-01), `/health` capability reporting (CAP-02), exact CFG-15 boot order. Operational-mode selection — `k8s.enabled` + `KUBERNETES_SERVICE_HOST` detection, `k8s.required` fail-closed vs. warn-and-run-standalone (MODE-01..04). NFR-05 verified: identical resolver inputs (incl. permuted env-var enumeration order) produce byte-identical `--dump-config` output.

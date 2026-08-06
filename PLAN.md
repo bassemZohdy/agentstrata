@@ -4,9 +4,10 @@ This is the build order for turning [REQUIREMENTS.md](REQUIREMENTS.md) into a wo
 
 Milestones are ordered by dependency, not by section number: config has to exist before anything can read it, storage has to exist before the engine can persist a run, and so on. Each milestone lists the requirement IDs it must satisfy so progress stays traceable back to the spec.
 
-Phase 1 (core runtime) is the only phase planned in detail below. Phases 2–4 are sequenced at the end but not broken into milestones until P1 ships — see [TODO.md](TODO.md).
-
-Every milestone below is broken into a checked task list in TODO.md under the same name. This file is the rationale (why this order, what "done" means); TODO.md is the actionable checklist. Keep both in sync when scope shifts.
+All phases P1–P5 are implemented; milestone completion records and
+what-landed-when are in [CHANGELOG.md](CHANGELOG.md).  This file remains
+the rationale: build order, milestone sequencing, and engineering
+tradeoffs.
 
 **Cross-cutting rule (DEL-02):** `schemas/agent.schema.json`, `schemas/agent-overlay.schema.json`, and `openapi.json` are always generated from source, never hand-edited. Bake a regeneration+diff check into CI as each artifact is introduced — `agent.schema.json` in Milestone 1, `agent-overlay.schema.json` in Milestone 6, `openapi.json` in Milestone 5 — rather than retrofitting it once all three exist.
 
@@ -94,13 +95,15 @@ Every milestone below is broken into a checked task list in TODO.md under the sa
 
 **Exit check:** both architectures build and pass the full acceptance suite in REQUIREMENTS.md §18; release evidence (image digest, commit, test results) is captured per TRC-01/TRC-02.
 
-## After P1 ships
+## Phases 2–5 (implemented)
 
 - **P2 — Multi-agent** (§13): sub-agent hierarchies, ADK transfer routing, shared budget/cancellation, ACP REST surface (API-16).
 - **P3 — Human-in-the-loop** (§14): durable approval checkpoints, decision race handling, restart reconciliation.
 - **P4 — RAG** (§15): document ingestion, chunking, retrieval-scoped context injection.
+- **P5 — Extensions**: Prometheus `/metrics` (P5-1), WebSocket API (P5-2), Kubernetes CRD/operator (P5-3), cost accounting (P5-4).
 
-Each phase gets its own milestone breakdown in this file once P1's acceptance criteria pass — see [TODO.md](TODO.md) for what's tracked in the meantime.
+Each phase's detailed milestone breakdown follows below; completed
+milestones are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
