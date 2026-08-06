@@ -67,7 +67,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | CNT-09 | docker-compose.yaml |
 | CNT-10 | app/healthcheck.py; Dockerfile HEALTHCHECK |
 | CNT-11 | Dockerfile USER 10001:0 + read-only rootfs notes; docs/deployment.md |
-| CNT-12 | TODO.md Decisions made (severity policy); TODO M8 scan gate |
+| CNT-12 | docs/decisions.md (severity policy); docs/release.md (vulnerability gate) |
 | CNT-13 | .dockerignore; Dockerfile secrets hygiene |
 | COST-01 | app/engine/runner.py (_cost_usd) + config/models.py::Costs + observability/metrics.py (agentbase_cost_usd_total) + config/capabilities.py (health `costs`); tests/test_protocol/test_cost.py |
 | COST-02 | tests/test_protocol/test_cost.py + tests/test_config/test_validation.py |
@@ -127,7 +127,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | NFR-03 | Milestone 8 benchmark (concurrency) |
 | NFR-04 | Milestone 8 benchmark (idle footprint) |
 | NFR-05 | tests/test_config/test_dump.py::TestNfr05 |
-| NFR-06 | tests/test_protocol/test_openai_sdk.py; TODO Decisions made |
+| NFR-06 | tests/test_protocol/test_openai_sdk.py; docs/decisions.md |
 | NFR-07 | Milestone 8 chaos (slow/disconnected client) |
 | NFR-08 | scripts/image-nfr.py (nfr08_reload: zero-downtime reload, docs/nfr-report.json) |
 | NFR-09 | Milestone 8 chaos (dependency recovery) |
@@ -182,7 +182,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | SES-08 | app/storage/* (delete cascade + close) |
 | SES-09 | app/storage/adk_adapter.py; tests/test_storage/test_adk_adapter.py |
 | STACK-01 | requirements.txt/lock; scripts/compile-lock.sh, verify-lock.sh; PLAN.md rule |
-| STACK-02 | TODO.md M0 spike; scripts/spike_*.py; REQUIREMENTS.md v2.5 note |
+| STACK-02 | CHANGELOG.md M0 spike; scripts/spike_*.py; REQUIREMENTS.md v2.5 note |
 | TRC-01 | scripts/gen-traceability.py; docs/traceability.md |
 | TRC-02 | docs/release.md (image digest/commit/lock hash/test results) |
 | TRUST-01 | app/config/parse.py (trusted source handling); app/protocol/auth.py; MCP bounds |

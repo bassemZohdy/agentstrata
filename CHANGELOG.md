@@ -76,6 +76,15 @@ TODO.md:
   matches single-letter annex IDs, and regeneration is deterministic
   (184 requirements mapped).
 
+### TODO.md cleanup (2026-08-06)
+
+- TODO.md now contains only the deferred scope; the resolved decisions
+  moved to a new [docs/decisions.md](docs/decisions.md) decision log
+  (NFR-06, CNT-12, MCP-08, mcp range, ACC-01, product name, google.adk
+  MCPTool) and the traceability MAPPINGS rows that pointed at "TODO.md
+  Decisions made" now point there (CNT-12, NFR-06) or to CHANGELOG
+  (STACK-02).
+
 Open deferrals (documented, not release-blocking): google.adk upstream
 MCPTool replacement; multi-agent per-sub-agent cost pricing (until P2
 cost tests); stdio pre-parse byte cap; ACC-01 real-instance storage

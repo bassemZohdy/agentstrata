@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MAPPINGS: dict[str, str] = {
     # Milestone 0
     "STACK-01": "requirements.txt/lock; scripts/compile-lock.sh, verify-lock.sh; PLAN.md rule",
-    "STACK-02": "TODO.md M0 spike; scripts/spike_*.py; REQUIREMENTS.md v2.5 note",
+    "STACK-02": "CHANGELOG.md M0 spike; scripts/spike_*.py; REQUIREMENTS.md v2.5 note",
     "CNT-01": "Dockerfile (digest-pinned base, --require-hashes venv)",
     "CNT-04": "Dockerfile ENTRYPOINT; app/main.py",
     "CNT-05": "Dockerfile VOLUME/EXPOSE",
@@ -32,7 +32,7 @@ MAPPINGS: dict[str, str] = {
     "CNT-03": "Dockerfile USER 10001:0",
     "CNT-07": "docs/deployment.md graceful shutdown; TODO M8",
     "CNT-09": "docker-compose.yaml",
-    "CNT-12": "TODO.md Decisions made (severity policy); TODO M8 scan gate",
+    "CNT-12": "docs/decisions.md (severity policy); docs/release.md (vulnerability gate)",
     "CNT-13": ".dockerignore; Dockerfile secrets hygiene",
     "DEL-01": "app/ layout; docs/deployment.md; Dockerfile",
     "DEL-02": "scripts/gen-schemas.py; schemas/; CI zero-diff",
@@ -135,7 +135,7 @@ MAPPINGS: dict[str, str] = {
     "SEC-09": "app/security/audit.py::parse_forwarded_for",
     "SEC-10": "app/security/audit.py::audit",
     "SEC-11": "app/security/audit.py (hardening headers + guards)",
-    "NFR-06": "tests/test_protocol/test_openai_sdk.py; TODO Decisions made",
+    "NFR-06": "tests/test_protocol/test_openai_sdk.py; docs/decisions.md",
     # Milestone 6
     "K8S-01": "app/watcher/watcher.py",
     "K8S-02": "app/watcher/watcher.py (watch loop)",
