@@ -248,10 +248,17 @@ line raises `internal_error` (500). The ACP route also omits the HITL-01
 guard that `chat.py:111` applies (approval enabled ⇒ `session_id`
 required), so the failure is reachable with the documented config.
 
-- [ ] Add the HITL-01 stateful-request guard to `POST /acp/runs`.
-- [ ] Return the annex-shaped pending-approval response (the HITL-03
-      202 equivalent) instead of 500.
-- [ ] Tests: approval-gated ACP run, streaming and non-streaming.
+- [x] Add the HITL-01 stateful-request guard to `POST /acp/runs`.  Done:
+      approval enabled without `session_id` → 400
+      `approval_session_required`, before any model work.
+- [x] Return the annex-shaped pending-approval response (the HITL-03
+      202 equivalent) instead of 500.  Done: the non-streaming path now
+      uses the `paused` event from `_collect_non_streaming` and returns
+      202 `run.pending_approval` with the durable approval record.
+- [x] Tests: approval-gated ACP run, streaming and non-streaming.  Done:
+      `test_acp_stateless_rejected_when_approval_enabled`,
+      `test_acp_non_streaming_returns_202_with_approval` (durable record
+      asserted), `test_acp_streaming_emits_approval_required_then_done`.
 
 ## P1 — robustness and security
 

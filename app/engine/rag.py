@@ -331,11 +331,16 @@ class RagRetriever:
     config: RagConfig
     store: RagStore
     embedding: EmbeddingProvider
-    degraded: bool = field(default=False)
 
-    async def retrieve(self, *, agent_name: str, principal_id: str, query: str) -> str | None:
-        """Return the delimited context block (or None when no chunks meet
-        minScore). On availability failure sets ``degraded`` (RAG-04)."""
+    async def retrieve(
+        self, *, agent_name: str, principal_id: str, query: str
+    ) -> tuple[str | None, bool]:
+        """Return the delimited context block and a degraded flag.
+
+        ``degraded`` is True when the store/embedding was unavailable
+        (RAG-04).  The flag is per-call so concurrent runs do not share
+        mutable state on the singleton retriever.
+        """
         try:
             vectors = await self.embedding.embed([query])
             hits = await self.store.search(
@@ -346,7 +351,6 @@ class RagRetriever:
                 min_score=self.config.minScore,
             )
         except Exception:  # noqa: BLE001 - RAG-04 degraded path
-            self.degraded = True
             # RAG-04: one redacted error log — never the query or any
             # document content (RAG-05).
             import logging
@@ -355,13 +359,13 @@ class RagRetriever:
                 "rag store/embedding unavailable (degraded): %s",
                 type(self.store).__name__,
             )
-            return None
+            return None, True
         if not hits:
-            return None
+            return None, False
         lines = [f"[{h.stable_id}] {h.text}" for h in hits]
         return (
             f"{RAG_CONTEXT_BEGIN}\n{UNTRUSTED_LABEL}\n" + "\n".join(lines) + f"\n{RAG_CONTEXT_END}"
-        )
+        ), False
 
     async def ingest(
         self,

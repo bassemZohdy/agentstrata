@@ -102,7 +102,6 @@ class AgentRunner:
         self._mcp = mcp
         self._rag = rag
         self._metrics = metrics  # OBS-05: prometheus/OTel instruments (optional)
-        self._run_started: float | None = None
         self._backend = backend
         # The storage namespace must match the ADK Runner's app_name so
         # sessions resolve identically on both sides (SES-09).
@@ -127,14 +126,16 @@ class AgentRunner:
         transfers: list[dict[str, str]] = []
 
         # OBS-05: the active-runs gauge spans the whole generator lifetime
-        # (including cancellation/teardown) via the wrapper's finally.
+        # (including cancellation/teardown) via the wrapper's finally.  The
+        # inner generator records the start time once admission succeeds.
+        run_started: list[float | None] = [None]
         try:
             async for event in self._execute_inner(
-                request, run_id, state, limiter, ledger, text_parts, transfers
+                request, run_id, state, limiter, ledger, text_parts, transfers, run_started
             ):
                 yield event
         finally:
-            if self._metrics is not None and self._run_started is not None:
+            if self._metrics is not None and run_started[0] is not None:
                 self._metrics.active_runs.dec()
 
     async def _execute_inner(
@@ -146,21 +147,24 @@ class AgentRunner:
         ledger: ToolLedger,
         text_parts: list[str],
         transfers: list[dict[str, str]],
+        run_started: list[float | None],
     ) -> AsyncGenerator[AgentEvent, None]:
         """The run body; the execute() wrapper guarantees the gauge dec."""
         sid = request.session_id or ""
         admit_revision = 1
         try:
             sid, admit_revision = await self._admit(request, run_id, state, ledger)
-            self._run_started = time.monotonic()
+            run_started[0] = time.monotonic()
             self._record_admitted()
+            if self._metrics is not None:
+                self._metrics.active_runs.inc()
             state.start()
             yield Iteration(index=0)
 
             errored = False
             run_deadline = limiter.deadline_remaining()
             async with asyncio.timeout(max(run_deadline, 0.001)):
-                rag_context = await self._rag_context(request)
+                rag_context, _rag_degraded = await self._rag_context(request)
                 if rag_context == "degraded":
                     if self._applied.config.rag.required:
                         # RAG-04: when rag is required the run FAILS with
@@ -225,16 +229,25 @@ class AgentRunner:
                     keep_revision=admit_revision,
                 )
                 code = error_code or "provider_error"
-                await self._commit_failure(request, sid, run_id, state.state, code, transfers)
+                await self._commit_failure(
+                    request, sid, run_id, state.state, code, transfers, run_started[0]
+                )
                 yield RunError(code=code, message=_PUBLIC_MESSAGES.get(code, code))
                 yield Done(finish_reason="error", x_agent_status=code)
             else:
                 finish, status, usage = self._finalize(state, limiter, text_parts, request)
                 if state.succeed():
-                    await self._commit_success(request, sid, run_id, text_parts, usage, transfers)
+                    await self._commit_success(
+                        request, sid, run_id, text_parts, usage, transfers, run_started[0]
+                    )
                 else:
                     await self._commit_failure(
-                        request, sid, run_id, state.state, transfers=transfers
+                        request,
+                        sid,
+                        run_id,
+                        state.state,
+                        transfers=transfers,
+                        run_started=run_started[0],
                     )
                 done_usage: dict[str, Any] = {
                     "input_tokens": limiter.account.input_tokens,
@@ -250,7 +263,14 @@ class AgentRunner:
                 )
         except CancelledError:
             self._mark_cancelled(state)
-            await self._commit_failure(request, sid, run_id, state.state, transfers=transfers)
+            await self._commit_failure(
+                request,
+                sid,
+                run_id,
+                state.state,
+                transfers=transfers,
+                run_started=run_started[0],
+            )
             raise
         except GeneratorExit:
             # Generator closed mid-run (API-08a stream teardown): persist a
@@ -259,7 +279,14 @@ class AgentRunner:
             if not state.terminal:
                 state.fail()
             with suppress(BaseException):
-                await self._commit_failure(request, sid, run_id, state.state, transfers=transfers)
+                await self._commit_failure(
+                    request,
+                    sid,
+                    run_id,
+                    state.state,
+                    transfers=transfers,
+                    run_started=run_started[0],
+                )
             raise
         except Exception as exc:  # noqa: BLE001 — transport/model errors
             logger.exception("run %s failed: %s", run_id, type(exc).__name__)
@@ -273,7 +300,13 @@ class AgentRunner:
                 state.fail()
             with suppress(BaseException):
                 await self._commit_failure(
-                    request, sid, run_id, state.state, public.code, transfers
+                    request,
+                    sid,
+                    run_id,
+                    state.state,
+                    public.code,
+                    transfers,
+                    run_started=run_started[0],
                 )
             yield RunError(code=public.code, message=public.message)
             yield Done(finish_reason="error", x_agent_status=public.code)
@@ -299,11 +332,14 @@ class AgentRunner:
         return round(cost, 6)
 
     def _record_admitted(self) -> None:
-        """OBS-05: admitted-run + LLM-call counters (low-cardinality labels)."""
+        """OBS-05: admitted-run + LLM-call counters (low-cardinality labels).
+
+        The active-runs gauge is managed in ``execute()`` so concurrent runs
+        cannot overwrite each other's start time or pairing.
+        """
         if self._metrics is None:
             return
         self._metrics.runs_admitted.add(1)
-        self._metrics.active_runs.inc()
         llm = getattr(self._applied.config, "llm", None)
         model_name = getattr(llm, "model", "") if llm is not None else ""
         self._metrics.llm_calls.add(1, {"model": model_name})
@@ -352,20 +388,25 @@ class AgentRunner:
             )
         return budget
 
-    async def _rag_context(self, request: RunRequest) -> str | None:
+    async def _rag_context(self, request: RunRequest) -> tuple[str | None, bool]:
         """RAG-02: principal-scoped retrieval for the latest user message.
-        Returns the delimited context block, "degraded" when the store was
-        unavailable (RAG-04), or None when rag is disabled/no hits."""
+
+        Returns the delimited context block (or None when disabled/no hits)
+        and a separate degraded flag so concurrent runs do not share mutable
+        state on the singleton retriever.
+        """
         if self._rag is None or not self._applied.config.rag.enabled:
-            return None
+            return None, False
         if not request.session_id:
-            return None
-        self._rag.degraded = False
-        return await self._rag.retrieve(
+            return None, False
+        context, degraded = await self._rag.retrieve(
             agent_name=self._app_name,
             principal_id=request.principal_id,
             query=request.user_message,
-        ) or ("degraded" if self._rag.degraded else None)
+        )
+        if context is None and degraded:
+            return "degraded", True
+        return context, degraded
 
     def _new_message(
         self, request: RunRequest, rag_context: str | None = None
@@ -828,6 +869,7 @@ class AgentRunner:
         text_parts: list[str],
         usage: dict[str, Any],
         transfers: list[dict[str, str]],
+        run_started: float | None,
     ) -> None:
         """ENG-06: one revision-checked transaction commits pruning + the
         complete turn + usage, and marks the run succeeded."""
@@ -870,9 +912,9 @@ class AgentRunner:
             self._metrics.tokens.add(usage.get("output_tokens", 0), {"kind": "output"})
             if cost_usd is not None:
                 self._metrics.cost_usd.add(cost_usd, {"model": self._applied.llm_model})
-            if self._run_started is not None:
+            if run_started is not None:
                 self._metrics.run_duration.record(
-                    time.monotonic() - self._run_started, {"status": "succeeded"}
+                    time.monotonic() - run_started, {"status": "succeeded"}
                 )
 
     async def _commit_failure(
@@ -883,6 +925,7 @@ class AgentRunner:
         run_state: RunState,
         error_code: str | None = None,
         transfers: list[dict[str, str]] | None = None,
+        run_started: float | None = None,
     ) -> None:
         """ENG-06: persist terminal state + actual usage, append neither the
         user message nor partial assistant text."""
@@ -905,9 +948,9 @@ class AgentRunner:
             status = run_state.value
             self._metrics.runs_completed.add(1, {"status": status})
             self._metrics.runs_failed.add(1, {"code": error_code or status})
-            if self._run_started is not None:
+            if run_started is not None:
                 self._metrics.run_duration.record(
-                    time.monotonic() - self._run_started, {"status": status}
+                    time.monotonic() - run_started, {"status": status}
                 )
 
 

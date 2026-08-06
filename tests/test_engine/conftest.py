@@ -90,7 +90,7 @@ def backend():
 
 @pytest.fixture()
 def runner_factory(applied_config, backend):
-    def make(scripts, tools=None):
+    def make(scripts, tools=None, metrics=None):
         model = ScriptedLlm(scripts)
         agent = LlmAgent(
             name=applied_config.name,
@@ -100,6 +100,9 @@ def runner_factory(applied_config, backend):
         )
         service = AdkSessionService(backend)
         adk_runner = AdkRunner(agent=agent, app_name=APP, session_service=service)
-        return AgentRunner(applied_config, adk_runner, backend, app_name=APP), model
+        return (
+            AgentRunner(applied_config, adk_runner, backend, app_name=APP, metrics=metrics),
+            model,
+        )
 
     return make

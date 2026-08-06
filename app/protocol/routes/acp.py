@@ -91,6 +91,14 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
 
         streaming = bool(body.get("stream", False))
         principal = getattr(request.state, "principal", "anonymous")
+        # HITL-01: while approval is enabled every run request MUST be
+        # stateful; reject a stateless request BEFORE any model work.
+        if config.approval.enabled and not body.get("session_id"):
+            raise PublicErrorResponse(
+                "approval_session_required",
+                "approval mode requires a session_id",
+                400,
+            )
 
         # Annex A-5: idempotency per API-06a.
         idem_key = _canonical_idempotency_key(body.get("idempotency_key"))
@@ -156,12 +164,28 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             )
 
         try:
-            text, done, _paused = await _collect_non_streaming(runner, run_request)
+            text, done, paused = await _collect_non_streaming(runner, run_request)
         finally:
             if slots is not None:
                 slots.release()
             if run_registry is not None and current_task is not None:
                 run_registry.discard(current_task)
+        if paused is not None:
+            # HITL-03: non-streaming detach — 202 with the approval
+            # reference instead of a 500 (the run is paused, not errored).
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "object": "run.pending_approval",
+                    "run_id": paused.run_id or run_request.request_id,
+                    "session_id": run_request.session_id or "",
+                    "approval_id": paused.approval_id,
+                    "tool": paused.tool_name,
+                    "expires_at": paused.expires_at,
+                    "request_id": request_id,
+                },
+                headers={"Cache-Control": "no-store"},
+            )
         if done is None:
             raise PublicErrorResponse("internal_error", "run produced no terminal event")
         if done.x_agent_status in ("iteration_limit", "output_limit"):

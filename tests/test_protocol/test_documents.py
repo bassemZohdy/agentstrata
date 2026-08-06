@@ -93,7 +93,7 @@ async def test_post_get_delete_roundtrip():
         assert "text" not in got
         assert "alpha beta" not in json_dumps(got)
         # the chunk is retrievable for the owner
-        context = await components["rag"].retrieve(
+        context, _degraded = await components["rag"].retrieve(
             agent_name="agent", principal_id="anonymous", query="alpha beta gamma delta"
         )
         assert context is not None and "alpha beta gamma delta" in context

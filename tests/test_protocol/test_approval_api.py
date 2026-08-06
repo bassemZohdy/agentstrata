@@ -72,8 +72,17 @@ def _approval_config() -> AgentConfig:
     )
 
 
-async def _build_app() -> tuple[httpx.ASGITransport, dict]:
-    config = _approval_config()
+def _approval_acp_config() -> AgentConfig:
+    """Like _approval_config() but with the ACP surface enabled (R-06)."""
+    doc = _approval_config().model_dump(by_alias=True, mode="json")
+    doc.setdefault("server", {})["protocols"] = {"acp": True}
+    return AgentConfig.model_validate(doc)
+
+
+async def _build_app(
+    config: AgentConfig | None = None,
+) -> tuple[httpx.ASGITransport, dict]:
+    config = config or _approval_config()
     applied = AppliedConfig.from_config(config)
     component = build_agent_component(config)
     backend = MemoryBackend()
@@ -319,5 +328,81 @@ async def test_delete_run_cancels_pending_approval():
         # deleting again is idempotent
         d2 = await _request(transport, "DELETE", f"/v1/runs/{run_id}")
         assert d2.status_code == 200
+    finally:
+        await components["mcp"].close()
+
+
+# -- R-06: ACP surface parity (approval-gated runs) ----------------------------
+
+
+async def test_acp_stateless_rejected_when_approval_enabled():
+    """R-06: POST /acp/runs applies the HITL-01 stateful guard like chat."""
+    transport, components = await _build_app(_approval_acp_config())
+    try:
+        r = await _request(
+            transport,
+            "POST",
+            "/acp/runs",
+            {"message": {"role": "user", "content": "hi"}},
+        )
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "approval_session_required"
+    finally:
+        await components["mcp"].close()
+
+
+async def test_acp_non_streaming_returns_202_with_approval():
+    """R-06: an approval-paused ACP run returns the annex-shaped 202
+    pending-approval response instead of a 500."""
+    transport, components = await _build_app(_approval_acp_config())
+    try:
+        r = await _request(
+            transport,
+            "POST",
+            "/acp/runs",
+            {
+                "message": {"role": "user", "content": "go"},
+                "session_id": "sess-acp-1",
+            },
+        )
+        assert r.status_code == 202
+        body = r.json()
+        assert body["object"] == "run.pending_approval"
+        assert body["approval_id"].startswith("appr-")
+        assert body["tool"] == "echo"
+        assert body["session_id"] == "sess-acp-1"
+        assert body["expires_at"]
+        # the durable record exists (HITL-02)
+        approval = await components["backend"].get_approval(
+            agent_name="agent", principal_id="anonymous", approval_id=body["approval_id"]
+        )
+        assert approval is not None and approval.pending
+    finally:
+        await components["mcp"].close()
+
+
+async def test_acp_streaming_emits_approval_required_then_done():
+    """R-06: the ACP streaming surface detaches with approval_required then
+    [DONE] (the same HITL-03 semantics as chat)."""
+    transport, components = await _build_app(_approval_acp_config())
+    try:
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+            client.stream(
+                "POST",
+                "/acp/runs",
+                json={
+                    "message": {"role": "user", "content": "go"},
+                    "session_id": "sess-acp-2",
+                    "stream": True,
+                },
+            ) as resp,
+        ):
+            assert resp.status_code == 200
+            chunks = [chunk.decode() async for chunk in resp.aiter_raw()]
+        body = "".join(chunks)
+        assert '"approval_required"' in body
+        assert '"approval_id"' in body
+        assert "data: [DONE]" in body
     finally:
         await components["mcp"].close()

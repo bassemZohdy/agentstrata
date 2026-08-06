@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -258,7 +259,9 @@ class TestRetriever:
         await r.ingest(
             agent_name="agent", principal_id="p1", document_id="doc-1", text="alpha beta gamma"
         )
-        context = await r.retrieve(agent_name="agent", principal_id="p1", query="alpha beta gamma")
+        context, _degraded = await r.retrieve(
+            agent_name="agent", principal_id="p1", query="alpha beta gamma"
+        )
         assert context is not None
         assert context.startswith(RAG_CONTEXT_BEGIN)
         assert context.endswith(RAG_CONTEXT_END)
@@ -271,7 +274,10 @@ class TestRetriever:
         await r.ingest(
             agent_name="agent", principal_id="p1", document_id="doc-1", text="alpha beta gamma"
         )
-        assert await r.retrieve(agent_name="agent", principal_id="p2", query="alpha beta") is None
+        context, _degraded = await r.retrieve(
+            agent_name="agent", principal_id="p2", query="alpha beta"
+        )
+        assert context is None
 
     @pytest.mark.asyncio
     async def test_ingest_returns_chunk_count_and_hash(self):
@@ -537,13 +543,13 @@ class TestSecurityRAG05:
             config=_rag_config().rag, store=BrokenStore(), embedding=DeterministicEmbedding()
         )
         with caplog.at_level(logging.ERROR, logger="app.engine.rag"):
-            context = await retriever.retrieve(
+            context, degraded = await retriever.retrieve(
                 agent_name="agent",
                 principal_id="p1",
                 query="SUPER-SECRET-QUERY-MARKER",
             )
         assert context is None
-        assert retriever.degraded
+        assert degraded
         logs = "\n".join(r.message for r in caplog.records)
         assert "SUPER-SECRET-QUERY-MARKER" not in logs
         assert "ConnectionError" not in logs  # no internal exception text
@@ -568,7 +574,7 @@ class TestSecurityRAG05:
         dumped = str(public)
         assert "CONFIDENTIAL-BODY-MARKER" not in dumped
         # the full text is retrievable only through the search surface
-        context = await r.retrieve(
+        context, _degraded = await r.retrieve(
             agent_name="agent",
             principal_id="p1",
             query="CONFIDENTIAL-BODY-MARKER",
@@ -719,3 +725,48 @@ class TestAuditAndReloadCleanup:
         assert result.outcome == "applied_live"
         assert slots._limit == 4
         assert limiter._limit == 30
+
+
+class TestRetrieverConcurrency:
+    """R-03: RagRetriever must not keep per-call mutable state on the singleton."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_retrievals_have_independent_degraded_flags(self):
+        """A failed retrieval for principal p1 must not mark p2's result degraded."""
+
+        class FailingForP1Store(MemoryRagStore):
+            async def search(self, *, agent_name, principal_id, **kwargs):
+                if principal_id == "p1":
+                    raise ConnectionError("down")
+                return await super().search(
+                    agent_name=agent_name, principal_id=principal_id, **kwargs
+                )
+
+        retriever = RagRetriever(
+            config=_rag_config().rag,
+            store=FailingForP1Store(),
+            embedding=DeterministicEmbedding(),
+        )
+        # ingest a document for both principals
+        await retriever.ingest(
+            agent_name="agent",
+            principal_id="p1",
+            document_id="doc-p1",
+            text="alpha beta",
+        )
+        await retriever.ingest(
+            agent_name="agent",
+            principal_id="p2",
+            document_id="doc-p2",
+            text="alpha beta",
+        )
+
+        results = await asyncio.gather(
+            retriever.retrieve(agent_name="agent", principal_id="p1", query="alpha"),
+            retriever.retrieve(agent_name="agent", principal_id="p2", query="alpha"),
+        )
+        ctx_p1, degraded_p1 = results[0]
+        ctx_p2, degraded_p2 = results[1]
+
+        assert ctx_p1 is None and degraded_p1 is True
+        assert ctx_p2 is not None and degraded_p2 is False
