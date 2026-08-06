@@ -115,6 +115,63 @@ class TestChat:
             assert r.status_code == 400
             assert r.json()["error"]["code"] == "invalid_request"
 
+    def test_oversized_body_413(self):
+        """R-09: an oversized POST is rejected with 413 (API-20)."""
+        import json as _json
+
+        with _client(maxRequestBytes=1024) as c:
+            big = _json.dumps(
+                {
+                    "model": "mock",
+                    "messages": [{"role": "user", "content": "x" * 5000}],
+                }
+            )
+            r = c.post(
+                "/v1/chat/completions",
+                content=big,
+                headers={"content-type": "application/json"},
+            )
+            assert r.status_code == 413
+            assert r.json()["error"]["code"] == "invalid_request"
+
+    async def test_read_body_aborts_at_cap_before_buffering_completes(self):
+        """R-09: the body cap is enforced WHILE streaming — the receive
+        channel is not drained past the limit (an oversized POST is not
+        absorbed in full before the 413)."""
+        import pytest
+        from fastapi import Request
+
+        from app.protocol.errors import PublicErrorResponse
+        from app.protocol.routes.chat import _read_body
+
+        class _FakeReceive:
+            def __init__(self, chunks: list[bytes]) -> None:
+                self._chunks = list(chunks)
+                self.consumed = 0
+
+            async def __call__(self):
+                if not self._chunks:
+                    return {"type": "http.request", "body": b"", "more_body": False}
+                self.consumed += 1
+                more = len(self._chunks) > 1
+                return {
+                    "type": "http.request",
+                    "body": self._chunks.pop(0),
+                    "more_body": more,
+                }
+
+        config = make_config(server={"maxRequestBytes": 1024})
+        receive = _FakeReceive([b"x" * 100] * 20)  # 2000 bytes in 100-byte chunks
+        request = Request(
+            {"type": "http", "method": "POST", "path": "/", "headers": []},
+            receive,
+        )
+        with pytest.raises(PublicErrorResponse) as excinfo:
+            await _read_body(request, config)
+        assert excinfo.value.status == 413
+        # Aborted mid-stream: the 20th chunk was never requested.
+        assert receive.consumed < 20
+
     def test_missing_messages_400(self):
         with _client() as c:
             r = c.post("/v1/chat/completions", json={"model": "mock"})

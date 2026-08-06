@@ -56,6 +56,8 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-15** Reload audit generation fix.
 - **R-18** 204 responses with empty body.
 - **R-19** Session route error mapping.
+- **R-26** Session routes now return 500 on a storage-driver outage
+  (regression introduced by the R-19 fix).
 
 ### Low intelligence — mechanical cleanup / docs / CI
 
@@ -80,6 +82,9 @@ clean pass and does not end the loop.
 | --- | --- | --- | --- |
 | 2026-08-06 | `9408092` | 527 pass, ruff + mypy clean | Commit was docs-only (CHANGELOG/PLAN/README); no R-item landed. Opened **R-24**. |
 | 2026-08-06 | `a705e22` | 532 pass, ruff + mypy clean; committed tree passes all CI steps incl. the two new ones | R-21 (8 of 11), R-22 (all), R-23 (all) landed and independently verified against the code; the 3 open R-21 items are correctly annotated as blocked on in-flight R-02/R-03. No regression. Opened **R-25** (new backoff tests have zero timing margin). |
+| 2026-08-06 | *(idle)* | not run | HEAD unchanged at `a705e22`; only uncommitted mid-edit work across 24 files. Idle interval — no review, no edits. |
+| 2026-08-06 | `dd278f4` | 548 pass, ruff + mypy clean (uncommitted work excluded) | 4 commits: R-01, R-04, R-05, R-12, R-15, R-18, R-19 all landed and independently verified (R-01/R-15/R-18 re-confirmed with the original repros). Every tick accurate. Opened **R-26** (R-19's narrowed `except` turns redis/postgres outages into 500s — verified) and one R-12 follow-up (drain snapshots `run_registry` once, so a late-registering run loses its grace). |
+| 2026-08-06 | `1fb0772` | 548 pass; ruff check, **ruff format (app+tests)**, mypy all clean; tree clean | R-06 and R-03 landed; all ticks accurate. R-03 re-verified under real concurrency (6 concurrent runs → `active_runs` back to 0, 6 durations). The iteration-2 formatting gap was resolved before commit. No regression. One R-03 loose end opened (the new degraded flag is discarded; branch still uses the sentinel string). |
 
 ## Completed work (pointer)
 
@@ -190,6 +195,22 @@ state.  Added `TestConcurrency` in `tests/test_engine/test_run.py` and
 `TestRetrieverConcurrency` in `tests/test_engine/test_rag.py`; full suite
 passes.
 
+Independently re-verified (5th review): 6 concurrent runs on one shared
+runner leave `agentbase_active_runs` at exactly 0 with 6 durations
+recorded.
+
+- [ ] *Loose end (5th review):* the new degraded flag is discarded by its
+      only caller. `runner.py:167` binds `_rag_degraded` and never reads
+      it; the branch still switches on the sentinel string
+      (`rag_context == "degraded"`, set at `runner.py:408`). The flag is
+      exactly what the refactor added, so switch the branch to it and drop
+      the sentinel. Not a live bug — but the signature
+      `tuple[str | None, bool]` permits `(context, True)` and
+      `_rag_context` passes that through unchanged (`return context,
+      degraded`), so a future "degraded store returned partial hits" path
+      would silently emit no `RagDegraded` event and, under
+      `rag.required`, would not fail the run (RAG-04).
+
 ### R-04 Storage sweep is implemented but never scheduled (SES-05, ENG-05)
 
 `StorageBackend.sweep()` and `expire_idempotency()` exist on the contract
@@ -269,13 +290,23 @@ the JWKS is fetched once and re-fetched only after a verification
 failure. A revoked or rotated-in-place key stays trusted indefinitely.
 `self._jwks_failed` (`auth.py:126,168,172`) is written and never read.
 
-- [ ] Refresh the JWKS on a `refreshSeconds` cadence with a stale-key
-      cutoff (the module docstring already promises both).
-- [ ] Remove `_jwks_failed` or wire it into the fail-closed decision.
-- [ ] Consider pinning `PyJWK(..., algorithm=...)` to the JWK's own `alg`
+- [x] Refresh the JWKS on a `refreshSeconds` cadence with a stale-key
+      cutoff (the module docstring already promises both).  Done: keys are
+      refreshed when `refresh_seconds` have passed since the last
+      successful fetch (at most once per interval — a down IdP is not
+      hammered per request); past 3× the interval without a successful
+      refresh, auth fails closed 503 `auth_unavailable`.
+- [x] Remove `_jwks_failed` or wire it into the fail-closed decision.
+      Done: removed — the empty-dict check + fetch timestamps carry the
+      fail-closed state.
+- [x] Consider pinning `PyJWK(..., algorithm=...)` to the JWK's own `alg`
       rather than the attacker-supplied header (`_verify_jwt:212`).
-- [ ] Tests: key removed from JWKS stops verifying after the refresh
-      interval without needing a failed verification first.
+      Done: `PyJWK(jwk_data, algorithm=jwk_data.get("alg"))` — key
+      construction no longer follows the attacker-controlled header alg.
+- [x] Tests: key removed from JWKS stops verifying after the refresh
+      interval without needing a failed verification first.  Done:
+      `TestJwtJwksRefresh` (cadence rotation, in-cutoff resilience,
+      fail-closed cutoff, once-per-interval gate, initial unreachable).
 
 ### R-08 Idempotency does not protect concurrent duplicates, and caches partial streams (API-06a)
 
@@ -304,10 +335,17 @@ the entire payload into memory — and only then compares against
 `server.maxRequestBytes`. `h11_max_incomplete_event_size` bounds headers,
 not the body, so an oversized POST is absorbed in full before the 413.
 
-- [ ] Enforce the cap while streaming the body (abort past the limit).
-- [ ] Apply the same bound to `documents.py:76` (`await request.json()`,
-      currently unbounded by anything but the parser).
-- [ ] Tests: an oversized body is rejected without full buffering.
+- [x] Enforce the cap while streaming the body (abort past the limit).
+      Done: `_read_body` streams `request.stream()` and raises 413 as soon
+      as the cap is crossed — the receive channel is not drained past the
+      limit.
+- [x] Apply the same bound to `documents.py` (`await request.json()`,
+      currently unbounded by anything but the parser).  Done: the
+      documents route streams with the same cap + 413.
+- [x] Tests: an oversized body is rejected without full buffering.  Done:
+      `test_oversized_body_413` (chat), `test_oversized_document_body_413`
+      (documents), `test_read_body_aborts_at_cap_before_buffering_completes`
+      (fake receive channel proves the mid-stream abort).
 
 ### R-10 Postgres backend cannot reconnect and has no pool (SES-01)
 
@@ -363,6 +401,16 @@ first second, needlessly extending pod termination.
       (all three tasks cancelled in order) +
       `test_early_drain_when_runs_finish_before_grace` (a 30 s grace
       completes in < 2 s when the run finishes in 50 ms).
+- [ ] *Follow-up (4th review):* `_drain_after_grace` snapshots
+      `run_registry` **once** at drain start. A run that passes the
+      `is_draining()` check just before the flag flips, then registers its
+      task after the snapshot, is not waited on — when the snapshotted runs
+      finish early the drain proceeds and `_cancel_inflight_runs` cancels
+      the newcomer before its grace expires (CNT-07 says in-flight runs
+      keep their deadline up to `shutdownGraceSeconds`). The window is the
+      several awaits in `chat.py` between the draining check and
+      `run_registry.add(...)`. Re-snapshot in a loop until the registry is
+      stable or the grace expires.
 
 ### R-13 WebSocket surface bypasses rate limiting; message cap counts characters (WS-01, API-20)
 
@@ -372,11 +420,21 @@ limited — `run.start` can be issued in a loop on one connection.
 against `server.maxMessageBytes`, so a multi-byte payload can be several
 times the configured byte cap.
 
-- [ ] Apply the limiter to WS connects and/or to `run.start` messages.
-- [ ] Compare `len(raw.encode("utf-8"))` against `maxMessageBytes`.
-- [ ] Decide whether `websocket.accept()` should precede the auth failure
-      close (`websocket.py:85-89`) and document the choice.
-- [ ] Tests: WS rate limiting; a multi-byte oversize message is rejected.
+- [x] Apply the limiter to WS connects and/or to `run.start` messages.
+      Done: `run.start` is gated by the shared limiter keyed by principal
+      (the HTTP middleware never sees WS frames); denials emit a
+      `rate_limited` error + the OBS-05 denial counter.
+- [x] Compare `len(raw.encode("utf-8"))` against `maxMessageBytes`.  Done.
+- [x] Decide whether `websocket.accept()` should precede the auth failure
+      close (`websocket.py:85-89`) and document the choice.  Decided:
+      KEEP accept-then-close(1008) — WS-01 normatively pins the 1008
+      close for failed auth (a pre-accept 403 would be a REQUIREMENTS
+      amendment), and close codes are the only client-visible failure
+      signal on an upgraded socket.  Comment documents the choice.
+- [x] Tests: WS rate limiting; a multi-byte oversize message is rejected.
+      Done: `test_run_start_rate_limited`,
+      `test_oversize_multibyte_message_closes` (400 emoji ≈ 1600 bytes
+      under the code-point limit → 1009).
 
 ## P2 — consistency and observability
 
@@ -636,6 +694,50 @@ regression.
       into `_backoff` instead of racing wall time, which also removes
       ~3.2 s from the suite.
 - [ ] Fix the docstring's "~4-5 re-lists" arithmetic either way.
+
+### R-26 Session routes return 500 on a storage-driver outage (regression from R-19)
+
+*Intelligence: medium — localized correctness.*
+
+The R-19 fix (`20c0e7b`) replaced `except Exception` in
+`app/protocol/routes/sessions.py` with narrow tuples:
+`create_session` catches `(BackendUnavailableError, CapacityError,
+InvalidSessionId)` and `delete_session` catches
+`(BackendUnavailableError, SessionBusy)`.
+
+The mapping itself is right, but the redis and postgres backends do
+**not** wrap driver failures in a `StorageError` — `create_session`
+calls `self._eval(...)` / `self._client.get(...)` bare, so a Redis or
+Postgres outage raises `redis.exceptions.ConnectionError` /
+`psycopg.OperationalError`. Those are no longer caught and now fall
+through to the global handler.
+
+Verified with a backend whose `create_session`/`delete_session` raise a
+non-`StorageError` exception:
+
+| Route | Before `20c0e7b` | After |
+| --- | --- | --- |
+| `POST /v1/sessions` | 503 `storage_unavailable` | **500 `internal_error`** |
+| `DELETE /v1/sessions/{id}` | 503 `storage_unavailable` | **500 `internal_error`** |
+
+This inverts the retry signal for the exact case the handler existed
+for: 503 is retryable and matches the `/readyz` outage story, 500 tells
+the client the server is broken. API-15/ENG-10 map dependency outages to
+`storage_unavailable`.
+
+- [ ] Catch `StorageError` (the common base) plus a broad fallback, or
+      restore `except Exception` with the mapper deciding — keep R-19's
+      distinct codes for the typed cases and default the rest to
+      `storage_unavailable`.
+- [ ] Preferred root fix: wrap driver exceptions at the backend boundary
+      so redis/postgres raise `BackendUnavailableError` like the memory
+      and file backends already do. That also fixes every other route
+      that touches these backends, not just sessions.
+- [ ] Note `StorageUnavailable` (`contract.py:57`) is declared but never
+      raised anywhere — decide whether it is the intended wrapper type or
+      dead code (see R-20).
+- [ ] Tests: a backend raising a non-`StorageError` yields 503 on both
+      routes.
 
 ---
 

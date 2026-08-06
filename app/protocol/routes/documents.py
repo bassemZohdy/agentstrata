@@ -72,8 +72,20 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
     async def create_document(request: Request):
         # API-06a: canonical Idempotency-Key replay over the backend.
         principal = getattr(request.state, "principal", "anonymous")
+        # API-20 (R-09): bound the body WHILE streaming — an oversized
+        # document is aborted at the cap instead of buffered in full.
+        limit = config.server.maxRequestBytes
+        chunks: list[bytes] = []
+        total = 0
         try:
-            body = await request.json()
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > limit:
+                    raise PublicErrorResponse("invalid_request", "request body too large", 413)
+                chunks.append(chunk)
+            body = json.loads(b"".join(chunks).decode("utf-8"))
+        except PublicErrorResponse:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise PublicErrorResponse("invalid_request", "invalid JSON body", 400) from exc
         if not isinstance(body, dict):

@@ -258,13 +258,20 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
 
 
 async def _read_body(request: Request, config: Any) -> dict[str, Any]:
-    """API-20: body limits are enforced by the HTTP parser; here we bound
-    the decoded size per server.maxRequestBytes."""
-    raw = await request.body()
-    if len(raw) > config.server.maxRequestBytes:
-        raise PublicErrorResponse("invalid_request", "request body too large", 413)
+    """API-20 (R-09): bound the decoded size per server.maxRequestBytes
+    WHILE streaming the body — an oversized POST is aborted as soon as the
+    limit is crossed instead of being absorbed in full first
+    (h11_max_incomplete_event_size bounds headers, not the body)."""
+    limit = config.server.maxRequestBytes
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise PublicErrorResponse("invalid_request", "request body too large", 413)
+        chunks.append(chunk)
     try:
-        data = json.loads(raw.decode("utf-8"))
+        data = json.loads(b"".join(chunks).decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise PublicErrorResponse("invalid_request", "invalid JSON body", 400) from exc
     if not isinstance(data, dict):

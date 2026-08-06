@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,17 @@ from fastapi import Request
 logger = logging.getLogger(__name__)
 
 AUTH_UNAVAILABLE_STATUS = 503
+
+# SEC-08: after a failed cadence refresh, the old JWKS stays trusted only
+# up to this many refresh intervals past the last successful fetch; beyond
+# that the provider is considered unreachable and auth fails closed.
+_STALE_CUTOFF_MULTIPLIER = 3
+
+
+def _monotonic() -> float:
+    """Clock seam for SEC-08 cadence tests (patching this never touches
+    asyncio's loop clock)."""
+    return time.monotonic()
 
 
 @dataclass
@@ -123,7 +135,11 @@ class _JwtAuth(AuthProvider):
         self._refresh_seconds = refresh_seconds
         self._timeout_seconds = timeout_seconds
         self._jwks: dict[str, Any] = {}
-        self._jwks_failed = False  # SEC-03: fail-closed on unreachable JWKS
+        # SEC-08: monotonic timestamps drive the refresh cadence and the
+        # stale-key cutoff (the previous ``_jwks_failed`` flag was never
+        # read — the empty-dict check below carries the fail-closed state).
+        self._jwks_fetched_at: float | None = None
+        self._jwks_last_attempt: float | None = None
         # Serialize concurrent refresh attempts (stampede protection); cache
         # reads outside the lock are benign dict reads.
         self._jwks_lock = asyncio.Lock()
@@ -137,6 +153,30 @@ class _JwtAuth(AuthProvider):
             return "", AuthFailure(
                 AUTH_UNAVAILABLE_STATUS, "auth_unavailable", "identity provider unavailable"
             )
+        now = _monotonic()
+        if self._jwks and self._jwks_fetched_at is not None:
+            due = now - self._jwks_fetched_at >= self._refresh_seconds
+            attempted = (
+                self._jwks_last_attempt is not None
+                and now - self._jwks_last_attempt < self._refresh_seconds
+            )
+            if due and not attempted:
+                # SEC-08: refresh on the cadence (at most once per interval,
+                # so a down IdP is not hammered per request) BEFORE verifying,
+                # so a rotated key stops being trusted without needing a
+                # failed verification first.
+                self._jwks_last_attempt = now
+                if not await self._refresh_jwks() and (
+                    now - self._jwks_fetched_at >= self._refresh_seconds * _STALE_CUTOFF_MULTIPLIER
+                ):
+                    # SEC-08 stale-key cutoff: past this bound without a
+                    # successful refresh, fail closed rather than verify
+                    # against ancient keys.
+                    return "", AuthFailure(
+                        AUTH_UNAVAILABLE_STATUS,
+                        "auth_unavailable",
+                        "identity provider unavailable",
+                    )
         payload = _verify_jwt(token, self._jwks, self._issuer, self._audience)
         # SEC-08: rotation — refresh once and retry before failing.
         if payload is None and await self._refresh_jwks():
@@ -165,11 +205,10 @@ class _JwtAuth(AuthProvider):
                 data = response.json()
             keys = data.get("keys", [])
             self._jwks = {_kid_of(k): k for k in keys if _kid_of(k)}
-            self._jwks_failed = False
+            self._jwks_fetched_at = _monotonic()
             return bool(self._jwks)
         except Exception as exc:  # noqa: BLE001
             logger.warning("JWKS refresh failed: %s", exc)
-            self._jwks_failed = True
             return False
 
 
@@ -209,7 +248,10 @@ def _verify_jwt(
         jwk_data = jwks.get(kid)
         if not jwk_data:
             return None
-        key = PyJWK(jwk_data, algorithm=header.get("alg")).key
+        # SEC-08: pin key construction to the JWK's OWN alg (falling back to
+        # kty-derived when absent) instead of the attacker-supplied header
+        # alg, closing the key-confusion surface.
+        key = PyJWK(jwk_data, algorithm=jwk_data.get("alg")).key
         payload = pyjwt.decode(
             token,
             key=key,

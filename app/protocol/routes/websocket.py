@@ -119,6 +119,25 @@ async def _session(
                 if kind == "ping":
                     await _send(websocket, {"type": "pong", "ts": msg.get("ts")})
                 elif kind == "run.start":
+                    # R-13: the HTTP middleware never sees WS frames, so the
+                    # run-start admission is rate-limited here (same limiter,
+                    # keyed by principal like the HTTP path).
+                    limiter = components.get("rate_limiter")
+                    if limiter is not None:
+                        allowed, retry_after = limiter.allow(f"p:{principal}")
+                        if not allowed:
+                            metrics_bundle = components.get("metrics")
+                            if metrics_bundle is not None:
+                                metrics_bundle.denials.add(1, {"reason": "rate_limit"})
+                            await _send(
+                                websocket,
+                                {
+                                    "type": "error",
+                                    "code": "rate_limited",
+                                    "retry_after": retry_after,
+                                },
+                            )
+                            continue
                     # Assign via a fresh name so the ``active`` narrowing
                     # survives: a failed start leaves the connection idle.
                     new_slots, new_active = await _start_run(
@@ -227,11 +246,16 @@ async def _session(
 async def _receive_loop(
     websocket: WebSocket, inbound: asyncio.Queue[dict[str, Any]], config: Any
 ) -> None:
-    """Bounded inbound parsing; oversize messages close the connection."""
+    """Bounded inbound parsing; oversize messages close the connection.
+
+    R-13: the cap is compared in UTF-8 BYTES — ``len(raw)`` counts code
+    points, so a multi-byte payload could exceed the configured byte cap
+    several times over.
+    """
     try:
         while True:
             raw = await websocket.receive_text()
-            if len(raw) > config.server.maxMessageBytes:
+            if len(raw.encode("utf-8")) > config.server.maxMessageBytes:
                 await websocket.close(code=_CLOSE_TOO_BIG)
                 return
             try:

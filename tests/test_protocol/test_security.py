@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 
 from app.security.audit import (
     audit,
@@ -51,6 +52,177 @@ class TestHardening:
         headers = hardening_headers()
         assert headers["X-Content-Type-Options"] == "nosniff"
         assert "default-src 'none'" in headers["Content-Security-Policy"]
+
+
+class TestJwtJwksRefresh:
+    """SEC-08 (R-07): JWKS refresh on the refreshSeconds cadence with a
+    stale-key cutoff and fail-closed unreachable handling.  The HTTP fetch
+    is replaced by a controllable seam (``_refresh_jwks_locked``) and the
+    clock by ``auth._monotonic`` so cadence logic is tested without
+    network or asyncio-clock interference."""
+
+    @staticmethod
+    def _keys(kid: str):
+        import json
+
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from jwt.algorithms import RSAAlgorithm
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        jwk = json.loads(RSAAlgorithm.to_jwk(key.public_key()))
+        jwk["kid"] = kid
+        jwk["alg"] = "RS256"
+        return key, jwk
+
+    @staticmethod
+    def _signed(key, kid: str, issuer: str = "iss", audience: str = "aud") -> str:
+        import jwt
+
+        return jwt.encode(
+            {"sub": "u1", "iss": issuer, "aud": audience},
+            key,
+            algorithm="RS256",
+            headers={"kid": kid},
+        )
+
+    @staticmethod
+    def _auth(monkeypatch, *, refresh_seconds: int = 60, jwks: dict | None = None):
+        import app.protocol.auth as auth_mod
+        from app.protocol.auth import _JwtAuth
+
+        auth = _JwtAuth(
+            issuer="iss",
+            audience="aud",
+            jwks_url="https://idp.example/jwks",
+            principal_claim="sub",
+            refresh_seconds=refresh_seconds,
+            timeout_seconds=5,
+        )
+        state: dict[str, Any] = {"jwks": jwks if jwks is not None else {}}
+
+        async def _fetch():
+            # Mirrors the real method's contract: a failure (IdP down or
+            # empty) leaves the old keys in place and returns False.
+            served = state["jwks"]
+            if served:
+                auth._jwks = served
+                auth._jwks_fetched_at = auth_mod._monotonic()
+                return True
+            return False
+
+        monkeypatch.setattr(auth, "_refresh_jwks_locked", _fetch)
+        return auth, state
+
+    @staticmethod
+    def _request(token: str):
+        from types import SimpleNamespace
+
+        return cast(Any, SimpleNamespace(headers={"authorization": f"Bearer {token}"}))
+
+    async def test_cadence_rotation_without_failed_verification(self, monkeypatch):
+        """SEC-08: a key removed from the JWKS stops verifying after the
+        refresh interval — no failed verification needed first."""
+        import app.protocol.auth as auth_mod
+
+        clock = {"now": 1_000.0}
+        monkeypatch.setattr(auth_mod, "_monotonic", lambda: clock["now"])
+        key_a, jwk_a = self._keys("kid-a")
+        auth, state = self._auth(monkeypatch, jwks={"kid-a": jwk_a})
+
+        token_a = self._signed(key_a, "kid-a")
+        ok, err = await auth.authenticate(self._request(token_a))
+        assert err is None and ok == "jwt:" + _jwt_principal_digest("u1")
+
+        # Rotate: the IdP drops kid-a.  Advance past the cadence.
+        key_b, jwk_b = self._keys("kid-b")
+        state["jwks"] = {"kid-b": jwk_b}
+        clock["now"] += 61  # > refresh_seconds(60)
+
+        # kid-a token now fails — rotation happened on the cadence, before
+        # any failed verification.
+        bad, err = await auth.authenticate(self._request(token_a))
+        assert err is not None and err.code == "auth_error"
+        assert bad == ""
+        # The rotated key works.
+        ok2, err2 = await auth.authenticate(self._request(self._signed(key_b, "kid-b")))
+        assert err2 is None and ok2 == "jwt:" + _jwt_principal_digest("u1")
+
+    async def test_refresh_failure_keeps_old_keys_within_cutoff(self, monkeypatch):
+        import app.protocol.auth as auth_mod
+
+        clock = {"now": 1_000.0}
+        monkeypatch.setattr(auth_mod, "_monotonic", lambda: clock["now"])
+        key_a, jwk_a = self._keys("kid-a")
+        auth, state = self._auth(monkeypatch, jwks={"kid-a": jwk_a})
+        token_a = self._signed(key_a, "kid-a")
+        assert (await auth.authenticate(self._request(token_a)))[1] is None
+
+        # IdP down at the cadence: old keys stay trusted inside the cutoff.
+        state["jwks"] = None  # fetch raises
+        clock["now"] += 61
+        ok, err = await auth.authenticate(self._request(token_a))
+        assert err is None and ok  # still verified with the stale keys
+
+    async def test_stale_key_cutoff_fails_closed(self, monkeypatch):
+        import app.protocol.auth as auth_mod
+
+        clock = {"now": 1_000.0}
+        monkeypatch.setattr(auth_mod, "_monotonic", lambda: clock["now"])
+        key_a, jwk_a = self._keys("kid-a")
+        auth, state = self._auth(monkeypatch, jwks={"kid-a": jwk_a}, refresh_seconds=10)
+        token_a = self._signed(key_a, "kid-a")
+        assert (await auth.authenticate(self._request(token_a)))[1] is None
+
+        # IdP down past 3x the interval: fail closed (503), no ancient keys.
+        state["jwks"] = None
+        clock["now"] += 31  # > 3 * refresh_seconds(10)
+        bad, err = await auth.authenticate(self._request(token_a))
+        assert bad == ""
+        assert err is not None and err.code == "auth_unavailable"
+        assert err.status == 503
+
+    async def test_refresh_attempt_gated_to_once_per_interval(self, monkeypatch):
+        import app.protocol.auth as auth_mod
+
+        clock = {"now": 1_000.0}
+        monkeypatch.setattr(auth_mod, "_monotonic", lambda: clock["now"])
+        key_a, jwk_a = self._keys("kid-a")
+        auth, state = self._auth(monkeypatch, jwks={"kid-a": jwk_a})
+        token_a = self._signed(key_a, "kid-a")
+        assert (await auth.authenticate(self._request(token_a)))[1] is None
+        attempts = {"n": 0}
+        original = auth._refresh_jwks_locked
+
+        async def _counting():
+            attempts["n"] += 1
+            return await original()
+
+        monkeypatch.setattr(auth, "_refresh_jwks_locked", _counting)
+        state["jwks"] = None
+        clock["now"] += 61  # due
+        await auth.authenticate(self._request(token_a))
+        await auth.authenticate(self._request(token_a))
+        await auth.authenticate(self._request(token_a))
+        # Due but gated: only the first request attempts a refresh.
+        assert attempts["n"] == 1
+
+    async def test_initial_unreachable_fails_closed(self, monkeypatch):
+        import app.protocol.auth as auth_mod
+
+        clock = {"now": 1_000.0}
+        monkeypatch.setattr(auth_mod, "_monotonic", lambda: clock["now"])
+        auth, state = self._auth(monkeypatch, jwks=None)  # fetch raises
+        key_a, jwk_a = self._keys("kid-a")
+        bad, err = await auth.authenticate(self._request(self._signed(key_a, "kid-a")))
+        assert bad == ""
+        assert err is not None and err.code == "auth_unavailable"
+        assert err.status == 503
+
+
+def _jwt_principal_digest(claim: str) -> str:
+    import hashlib
+
+    return hashlib.sha256("\0".join(["iss", "sub", claim]).encode("utf-8")).hexdigest()
 
 
 def _config_with(**overrides):

@@ -34,8 +34,10 @@ def _config(rag: dict | None = None) -> AgentConfig:
     return AgentConfig.model_validate(doc)
 
 
-async def _build_app(rag: dict | None = None) -> tuple[httpx.ASGITransport, dict[str, Any]]:
-    config = _config(rag)
+async def _build_app(
+    rag: dict | None = None, *, config: AgentConfig | None = None
+) -> tuple[httpx.ASGITransport, dict[str, Any]]:
+    config = config or _config(rag)
     applied = AppliedConfig.from_config(config)
     component = build_agent_component(config)
     backend = MemoryBackend()
@@ -112,6 +114,23 @@ def json_dumps(obj: Any) -> str:
     import json
 
     return json.dumps(obj)
+
+
+async def test_oversized_document_body_413():
+    """R-09: an oversized document POST is rejected with 413 (API-20) —
+    the same streaming cap as the chat surface."""
+    config = _config()
+    doc = config.model_dump(by_alias=True, mode="json")
+    doc["server"] = {"maxRequestBytes": 1024}
+    config = AgentConfig.model_validate(doc)
+    transport, components = await _build_app(config=config)
+    try:
+        big = {"text": "x" * 5000, "metadata": {"k": "v"}}
+        r = await _request(transport, "POST", "/v1/documents", big)
+        assert r.status_code == 413
+        assert r.json()["error"]["code"] == "invalid_request"
+    finally:
+        await components["mcp"].close()
 
 
 async def test_generated_id_and_owner_scoping():

@@ -91,6 +91,42 @@ class TestWebSocket:
             ws.receive_json()
         assert exc.value.code == 1009
 
+    def test_oversize_multibyte_message_closes(self):
+        """R-13: the cap counts UTF-8 BYTES — a payload under the code-point
+        limit but over the byte cap (multi-byte characters) still closes
+        with 1009."""
+        with (
+            pytest.raises(WebSocketDisconnect) as exc,
+            _ws({"protocols": {"websocket": True}, "maxMessageBytes": 1024}).websocket_connect(
+                "/v1/ws"
+            ) as ws,
+        ):
+            # 400 emoji ≈ 1600 UTF-8 bytes but only ~400 code points.
+            ws.send_text(json.dumps({"type": "ping", "emoji": "😀" * 400}, ensure_ascii=False))
+            ws.receive_json()
+        assert exc.value.code == 1009
+
+    def test_run_start_rate_limited(self):
+        """R-13: run.start is rate-limited on the connection (the HTTP
+        middleware never sees WS frames) — a third start in the window is
+        denied with a rate_limited error."""
+        client, _config, _components = _app(
+            server={
+                "protocols": {"websocket": True},
+                "rateLimit": {"enabled": True, "requestsPerMinute": 2},
+            }
+        )
+        with client.websocket_connect("/v1/ws") as ws:
+            for _ in range(2):
+                ws.send_json({"type": "run.start", "message": "hello"})
+                assert ws.receive_json()["type"] == "run.started"
+                while ws.receive_json().get("type") != "run.done":
+                    pass
+            ws.send_json({"type": "run.start", "message": "hello"})
+            msg = ws.receive_json()
+            assert msg["type"] == "error"
+            assert msg["code"] == "rate_limited"
+
     def test_auth_required(self, monkeypatch):
         monkeypatch.setenv("AGENT_WS_TEST_KEY", "secret")
         client, _config, _components = _app(
