@@ -274,6 +274,33 @@ class TestSessions:
             assert d.status_code == 409
             assert d.json()["error"]["code"] == "session_busy"
 
+    def test_driver_outage_maps_to_503(self):
+        """R-26: a raw non-StorageError driver exception (redis
+        ConnectionError / psycopg OperationalError shape) on either session
+        route yields 503 storage_unavailable — the retryable outage signal,
+        not a 500 internal_error."""
+        from app.protocol.app import create_app
+
+        class _OutageBackend:
+            async def create_session(self, **kwargs):
+                raise ConnectionError("connection refused")
+
+            async def get_session(self, **kwargs):
+                return None
+
+            async def delete_session(self, **kwargs):
+                raise ConnectionError("connection refused")
+
+        config = make_config()
+        components = {"backend": _OutageBackend(), "mcp": None}
+        with TestClient(create_app(config, components, mode="standalone")) as c:
+            p = c.post("/v1/sessions", json={})
+            assert p.status_code == 503
+            assert p.json()["error"]["code"] == "storage_unavailable"
+            d = c.delete("/v1/sessions/sid")
+            assert d.status_code == 503
+            assert d.json()["error"]["code"] == "storage_unavailable"
+
     def test_unknown_session_identical_404(self):
         with _client() as c:
             r = c.get("/v1/sessions/nonexistent")

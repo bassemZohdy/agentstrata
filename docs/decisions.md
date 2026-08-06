@@ -70,3 +70,18 @@ satisfy a requirement ID to this file.
 - **Status:** resolved (revisit only if the product name definitively
   changes — an API-group rename post-1.0 would be a breaking migration
   and a versioned spec revision).
+
+## Usage shape across surfaces (chat / ACP / WebSocket) — R-14
+
+- **Decision:** all three run surfaces emit the SAME normalized usage
+  shape — `prompt_tokens` / `completion_tokens` / `total_tokens` plus
+  `costUsd` (camelCase) when `costs.enabled` computed a cost
+  (COST-01).  `_normalize_usage()` in `app/protocol/routes/chat.py` is
+  the single implementation used by chat, ACP (annex A-4 non-streaming),
+  and the WS `run.done` payload.
+- **ACP streaming usage chunk:** confirmed against the annex — A-4 says
+  the streaming vocabulary includes an "optional usage chunk" and the
+  ACP request contract has no `stream_options` field, so the chunk stays
+  omitted on ACP streams (annex-consistent; adding the field would be a
+  versioned annex change).
+- **Status:** resolved (2026-08-06, R-14).

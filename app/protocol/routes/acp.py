@@ -21,6 +21,7 @@ from .chat import (
     _canonical_idempotency_key,
     _collect_non_streaming,
     _finish_idempotency,
+    _normalize_usage,
     _read_body,
     _stream,
 )
@@ -218,9 +219,14 @@ def _acp_completion_body(
     session_id: str | None,
     finish_reason: str,
     x_agent_status: str | None,
-    usage: dict[str, int],
+    usage: dict[str, Any],
 ) -> dict[str, Any]:
-    """Annex A-4 non-streaming run response shape."""
+    """Annex A-4 non-streaming run response shape.
+
+    R-14: the usage block is the SAME normalized shape as the chat surface
+    (prompt/completion/total_tokens + costUsd when costs.enabled computed
+    one) instead of a hand-rolled copy that dropped the cost field.
+    """
     return {
         "object": "run.completion",
         "run_id": f"run-{request_id}",
@@ -233,11 +239,7 @@ def _acp_completion_body(
                 "x_agent_status": x_agent_status,
             }
         ],
-        "usage": {
-            "prompt_tokens": usage.get("input_tokens", 0),
-            "completion_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-        },
+        "usage": _normalize_usage(usage),
         "request_id": request_id,
     }
 

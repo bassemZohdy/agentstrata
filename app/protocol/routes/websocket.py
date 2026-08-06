@@ -44,6 +44,7 @@ from ...engine.events import (
 )
 from ...engine.runner import RunRequest
 from ...security.audit import audit
+from .chat import _normalize_usage
 
 logger = logging.getLogger(__name__)
 
@@ -440,12 +441,15 @@ def _to_ws_event(event: Any, run_id: str) -> dict[str, Any]:
     if isinstance(event, RunError):
         return {"type": "run.error", "runId": run_id, "code": event.code, "message": event.message}
     if isinstance(event, Done):
+        # R-14: same normalized usage shape as the chat/ACP surfaces
+        # (prompt/completion/total_tokens + costUsd when computed) instead
+        # of the raw internal dict.
         return {
             "type": "run.done",
             "runId": run_id,
             "finishReason": event.finish_reason,
             "status": event.x_agent_status,
-            "usage": event.usage,
+            "usage": _normalize_usage(event.usage),
         }
     return {"type": "run.event", "runId": run_id}
 

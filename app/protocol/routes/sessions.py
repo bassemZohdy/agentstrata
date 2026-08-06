@@ -12,7 +12,6 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
 from ...storage.contract import (
-    BackendUnavailableError,
     CapacityError,
     InvalidSessionId,
     SessionBusy,
@@ -30,8 +29,10 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
         return getattr(request.state, "principal", "anonymous")
 
     def _session_error(exc: Exception) -> PublicErrorResponse:
-        """R-19: map distinct storage failures to their public codes instead
-        of collapsing every exception into one (API-15, ENG-10)."""
+        """R-19/R-26: map distinct storage failures to their public codes
+        (API-15, ENG-10); anything else — including a raw driver exception
+        a backend did not wrap — falls back to 503 ``storage_unavailable``
+        (retryable outage, never a 500)."""
         if isinstance(exc, CapacityError):
             return PublicErrorResponse("storage_capacity", "session capacity reached")
         if isinstance(exc, InvalidSessionId):
@@ -52,7 +53,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 principal_id=principal_of(request),
                 session_id=session_id,
             )
-        except (BackendUnavailableError, CapacityError, InvalidSessionId) as exc:
+        except Exception as exc:  # noqa: BLE001 — mapper decides (R-26)
             raise _session_error(exc) from exc
         return JSONResponse(
             status_code=200,
@@ -94,7 +95,7 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 principal_id=principal_of(request),
                 session_id=session_id,
             )
-        except (BackendUnavailableError, SessionBusy) as exc:
+        except Exception as exc:  # noqa: BLE001 — mapper decides (R-26)
             raise _session_error(exc) from exc
         if not deleted:
             return JSONResponse(

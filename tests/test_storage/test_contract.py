@@ -13,6 +13,7 @@ from datetime import UTC, timedelta
 import pytest
 
 from app.storage.contract import (
+    BackendUnavailableError,
     CapacityError,
     InvalidSessionId,
     RevisionConflict,
@@ -608,6 +609,49 @@ class TestSweep:
         )
         assert fresh_rec is not None
         assert fresh_rec.status == "created"
+
+    async def test_redis_driver_error_wraps_as_backend_unavailable(self, settings):
+        """R-26: a raw driver failure at the redis boundary surfaces as
+        BackendUnavailableError so routes map it to 503 (never a raw 500)."""
+        from app.storage.redis_backend import RedisBackend
+
+        class _BoomClient:
+            async def get(self, *args, **kwargs):
+                raise ConnectionError("redis is down")
+
+            async def set(self, *args, **kwargs):
+                raise ConnectionError("redis is down")
+
+            async def delete(self, *args, **kwargs):
+                raise ConnectionError("redis is down")
+
+            async def eval(self, *args, **kwargs):
+                raise ConnectionError("redis is down")
+
+        backend = RedisBackend(_BoomClient(), settings)
+        with pytest.raises(BackendUnavailableError):
+            await backend.create_session(agent_name=AGENT, principal_id=PRINCIPAL)
+        with pytest.raises(BackendUnavailableError):
+            await backend.delete_session(agent_name=AGENT, principal_id=PRINCIPAL, session_id="sid")
+
+    async def test_postgres_driver_error_wraps_as_backend_unavailable(self, settings):
+        """R-26: the psycopg boundary (execute/query incl. connection
+        acquisition) wraps OperationalError as BackendUnavailableError."""
+        import psycopg
+
+        from app.main import _PsycopgDb
+        from app.storage.postgres_backend import PostgresBackend
+
+        async def _broken():
+            raise psycopg.OperationalError("connection refused")
+
+        # Current _PsycopgDb contract: a coroutine object (R-10 reworks the
+        # factory shape).
+        db = _PsycopgDb(_broken())
+        backend = PostgresBackend(db, settings)
+        with pytest.raises(BackendUnavailableError):
+            await backend.create_session(agent_name=AGENT, principal_id=PRINCIPAL)
+        await db.close()
 
 
 class TestFencing:

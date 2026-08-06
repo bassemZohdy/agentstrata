@@ -49,8 +49,9 @@ def _app(
     costs: dict | None = None,
     observability: dict | None = None,
     model: Any | None = None,
+    server: dict | None = None,
 ):
-    config = make_config(observability=observability)
+    config = make_config(server=server, observability=observability)
     if costs is not None:
         # make_config builds a pydantic model; rebuild with costs injected
         from app.config.models import AgentConfig
@@ -285,6 +286,66 @@ class TestStreamingCost:
     def test_streaming_usage_chunk_omits_cost_when_disabled(self):
         client, _config, _components = _app()
         usage = self._usage_chunk(client)
+        assert "costUsd" not in usage
+        assert usage["prompt_tokens"] == 0
+        assert "input_tokens" not in usage
+
+
+class TestCrossSurfaceUsage:
+    """R-14: chat / ACP / WebSocket share one normalized usage shape
+    (prompt/completion/total_tokens + costUsd when costs computed one)."""
+
+    @staticmethod
+    def _acp_run(client, costs_enabled: bool):
+        resp = client.post(
+            "/acp/runs",
+            json={
+                "message": {"role": "user", "content": "hi"},
+                "session_id": "s-r14",
+            },
+        )
+        assert resp.status_code == 200
+        return resp.json()["usage"]
+
+    def test_acp_usage_carries_costUsd_when_enabled(self):
+        client, _config, _components = _app(
+            costs={"enabled": True}, server={"protocols": {"acp": True}}
+        )
+        usage = self._acp_run(client, costs_enabled=True)
+        assert usage["prompt_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert "costUsd" in usage
+        assert "input_tokens" not in usage
+
+    def test_acp_usage_omits_cost_when_disabled(self):
+        client, _config, _components = _app(server={"protocols": {"acp": True}})
+        usage = self._acp_run(client, costs_enabled=False)
+        assert "costUsd" not in usage
+        assert usage["prompt_tokens"] == 0
+        assert "input_tokens" not in usage
+
+    @staticmethod
+    def _ws_done_usage(client, costs_enabled: bool) -> dict:
+        with client.websocket_connect("/v1/ws") as ws:
+            ws.send_json({"type": "run.start", "message": "hi"})
+            while True:
+                msg = ws.receive_json()
+                if msg["type"] == "run.done":
+                    return msg["usage"]
+
+    def test_ws_done_usage_normalized_with_cost(self):
+        client, _config, _components = _app(
+            costs={"enabled": True}, server={"protocols": {"websocket": True}}
+        )
+        usage = self._ws_done_usage(client, costs_enabled=True)
+        assert usage["prompt_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert "costUsd" in usage
+        assert "input_tokens" not in usage
+
+    def test_ws_done_usage_omits_cost_when_disabled(self):
+        client, _config, _components = _app(server={"protocols": {"websocket": True}})
+        usage = self._ws_done_usage(client, costs_enabled=False)
         assert "costUsd" not in usage
         assert usage["prompt_tokens"] == 0
         assert "input_tokens" not in usage

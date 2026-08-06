@@ -58,6 +58,9 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-19** Session route error mapping.
 - **R-26** Session routes now return 500 on a storage-driver outage
   (regression introduced by the R-19 fix).
+- **R-27** JWKS stale-key cutoff only fires at refresh instants, so most
+  requests past the cutoff still verify against stale keys (gap in the
+  R-07 fix).
 
 ### Low intelligence — mechanical cleanup / docs / CI
 
@@ -85,6 +88,8 @@ clean pass and does not end the loop.
 | 2026-08-06 | *(idle)* | not run | HEAD unchanged at `a705e22`; only uncommitted mid-edit work across 24 files. Idle interval — no review, no edits. |
 | 2026-08-06 | `dd278f4` | 548 pass, ruff + mypy clean (uncommitted work excluded) | 4 commits: R-01, R-04, R-05, R-12, R-15, R-18, R-19 all landed and independently verified (R-01/R-15/R-18 re-confirmed with the original repros). Every tick accurate. Opened **R-26** (R-19's narrowed `except` turns redis/postgres outages into 500s — verified) and one R-12 follow-up (drain snapshots `run_registry` once, so a late-registering run loses its grace). |
 | 2026-08-06 | `1fb0772` | 548 pass; ruff check, **ruff format (app+tests)**, mypy all clean; tree clean | R-06 and R-03 landed; all ticks accurate. R-03 re-verified under real concurrency (6 concurrent runs → `active_runs` back to 0, 6 durations). The iteration-2 formatting gap was resolved before commit. No regression. One R-03 loose end opened (the new degraded flag is discarded; branch still uses the sentinel string). |
+| 2026-08-06 | *(idle ×49)* | not run | HEAD held at `1fb0772` for ~12 h. Idle intervals — no review, no edits. Activity resumed at the end of the run. |
+| 2026-08-06 | `9946770` | 565 pass, ruff + mypy clean | R-09 (streaming body cap) and R-13 (WS rate limit + UTF-8 byte cap) landed and verified. R-07 partially correct: the cadence refresh, `_jwks_failed` removal and the JWK-`alg` pinning are all right, but the stale-key cutoff leaks — opened **R-27** (measured: 77% of probes past the cutoff still verify against stale keys). Note R-26's ticks describe work that is still **uncommitted** at this HEAD, so it is not yet verified. |
 
 ## Completed work (pointer)
 
@@ -449,12 +454,22 @@ times the configured byte cap.
 
 The P5-4 finish line normalized chat only.
 
-- [ ] Route all three surfaces through one shared normalizer.
-- [ ] Decide the ACP/WS cost field name and record it in
-      `docs/decisions.md`.
-- [ ] ACP streaming passes no `include_usage` (`acp.py:141-152`) so it
+- [x] Route all three surfaces through one shared normalizer.  Done:
+      `_normalize_usage()` (chat) is now used by ACP non-streaming
+      (`_acp_completion_body`) and the WS `run.done` payload — the
+      hand-rolled ACP copy that dropped `costUsd` is gone and WS no
+      longer forwards the raw internal dict.
+- [x] Decide the ACP/WS cost field name and record it in
+      `docs/decisions.md`.  Done: `costUsd` (camelCase, the COST-01
+      extension) on all three surfaces; recorded in `docs/decisions.md`.
+- [x] ACP streaming passes no `include_usage` (`acp.py:141-152`) so it
       can never emit a usage chunk — confirm against the annex.
-- [ ] Tests: cost enabled/disabled × chat/ACP/WS.
+      Confirmed: A-4 says the streaming vocabulary has an "optional
+      usage chunk" and the ACP request contract has no `stream_options`
+      field — omitting it is annex-consistent (adding the field would be
+      a versioned annex change).  Recorded in `docs/decisions.md`.
+- [x] Tests: cost enabled/disabled × chat/ACP/WS.  Done:
+      `TestCrossSurfaceUsage` (ACP + WS, enabled/disabled each).
 
 ### R-15 Reload audit reports the wrong generations (REL-06)
 
@@ -725,19 +740,64 @@ for: 503 is retryable and matches the `/readyz` outage story, 500 tells
 the client the server is broken. API-15/ENG-10 map dependency outages to
 `storage_unavailable`.
 
-- [ ] Catch `StorageError` (the common base) plus a broad fallback, or
+- [x] Catch `StorageError` (the common base) plus a broad fallback, or
       restore `except Exception` with the mapper deciding — keep R-19's
       distinct codes for the typed cases and default the rest to
-      `storage_unavailable`.
-- [ ] Preferred root fix: wrap driver exceptions at the backend boundary
+      `storage_unavailable`.  Done: both session routes use
+      `except Exception` through `_session_error` — typed cases keep
+      their codes, everything else maps to 503 `storage_unavailable`.
+- [x] Preferred root fix: wrap driver exceptions at the backend boundary
       so redis/postgres raise `BackendUnavailableError` like the memory
       and file backends already do. That also fixes every other route
-      that touches these backends, not just sessions.
+      that touches these backends, not just sessions.  Done: redis
+      `_eval` wraps driver errors; `_PsycopgDb.execute/query` and
+      `_PsycopgTxn.__aenter__` wrap `psycopg.OperationalError`
+      (`_raise_driver_unavailable`).
 - [ ] Note `StorageUnavailable` (`contract.py:57`) is declared but never
       raised anywhere — decide whether it is the intended wrapper type or
-      dead code (see R-20).
-- [ ] Tests: a backend raising a non-`StorageError` yields 503 on both
-      routes.
+      dead code (see R-20).  *Carried into R-20's per-item decision
+      (same implement-vs-delete review).*
+- [x] Tests: a backend raising a non-`StorageError` yields 503 on both
+      routes.  Done: `test_driver_outage_maps_to_503` (both routes) +
+      redis/postgres boundary-wrap tests in the storage contract suite.
+
+### R-27 JWKS stale-key cutoff leaks: most post-cutoff requests still verify (gap in R-07, SEC-08)
+
+*Intelligence: medium — security.*
+
+In `_JwtAuth.authenticate` (`app/protocol/auth.py`) the stale-key cutoff
+is evaluated **inside** the `if due and not attempted:` branch. Once a
+refresh attempt is recorded, `attempted` stays true for the rest of the
+interval, so the whole branch — including the cutoff test — is skipped
+and verification proceeds against the stale JWKS.
+
+Net effect: the cutoff only fires at the instants a refresh is attempted
+(about once per `refreshSeconds`), not continuously. R-07's tick claims
+"past 3× the interval without a successful refresh, auth fails closed" —
+that is materially overstated.
+
+Measured with `refreshSeconds=300` (cutoff 900 s), IdP down from t=0,
+probing once a minute for 30 minutes **past** the cutoff:
+
+| Probe | Result |
+| --- | --- |
+| t=900 s | fails closed ✔ |
+| t=901 / 1000 / 1100 s | **accepted against stale keys** ✘ |
+| t=1200 s | fails closed ✔ |
+| 31 probes past cutoff | **24 accepted (77%)** |
+
+`TestJwtJwksRefresh`'s fail-closed case passes because it probes exactly
+at an attempt boundary — which is why the suite is green.
+
+- [ ] Evaluate the cutoff on **every** request, independent of whether a
+      refresh was attempted in the current window: if
+      `now - _jwks_fetched_at >= refresh_seconds * _STALE_CUTOFF_MULTIPLIER`,
+      fail closed before verifying. Keep the once-per-interval gate for the
+      *fetch attempt* only — that part is right and should not change.
+- [ ] Strengthen the test to probe **between** attempt boundaries (e.g.
+      cutoff + 0.5 × `refreshSeconds`), not just on them.
+- [ ] Re-word the R-07 tick once fixed — as written it overstates the
+      guarantee.
 
 ---
 
