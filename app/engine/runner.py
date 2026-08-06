@@ -17,7 +17,7 @@ import uuid
 from asyncio import CancelledError
 from collections.abc import AsyncGenerator
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -69,19 +69,6 @@ class RunRequest:
 
 
 @dataclass
-class RunResult:
-    run_id: str
-    state: RunState
-    finish_reason: str
-    x_agent_status: str | None
-    text: str
-    usage: dict[str, int]
-    usage_estimated: bool
-    session_id: str
-    error_code: str | None = None
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
-
-
 class AgentRunner:
     """ENG-02 façade; one instance per Applied Config generation."""
 
@@ -184,7 +171,10 @@ class AgentRunner:
                 ):
                     if state.terminal:
                         break
-                    limiter.check_deadline()
+                    # R-20 (ENG-07): each LLM->tool->LLM cycle begins with
+                    # the deadline check (begin_iteration pairs with the
+                    # end_iteration call at each tool call).
+                    limiter.begin_iteration()
                     async for agent_event in self._convert(
                         adk_event,
                         limiter,
@@ -253,6 +243,8 @@ class AgentRunner:
                     "input_tokens": limiter.account.input_tokens,
                     "output_tokens": limiter.account.output_tokens,
                 }
+                if limiter.account.estimated:
+                    done_usage["estimated"] = True
                 done_cost = self._cost_usd(done_usage)
                 if done_cost is not None:
                     done_usage["cost_usd"] = done_cost
@@ -429,14 +421,14 @@ class AgentRunner:
             # this, ADK calls the model non-streaming and the SSE surface
             # emits one big delta at the end (no first-token streaming).
             kwargs["streaming_mode"] = StreamingMode.SSE
-        if request.temperature_override is not None and self._applied.overrides_allow_temperature:
-            kwargs["temperature"] = min(
-                request.temperature_override, self._applied.overrides_temperature_max
-            )
-        if request.max_tokens_override is not None and self._applied.overrides_allow_max_tokens:
-            kwargs["max_output_tokens"] = min(
-                request.max_tokens_override, self._applied.overrides_max_tokens_max
-            )
+        # R-20: the current google-adk RunConfig rejects per-call provider
+        # knobs (temperature/max_output_tokens are extra_forbidden, and a
+        # ValidationError here degraded every overridden run to
+        # provider_error).  The override VALUES are still validated and
+        # gated per API-12; applying them to the provider call is not
+        # expressible until google-adk exposes the seam, and ENG-08's
+        # budget is enforced at the accounting boundary instead
+        # (observe_usage / can_start_another_call).
         return RunConfig(**kwargs) if kwargs else None
 
     # -- approvals (HITL-02) ------------------------------------------------------
@@ -774,8 +766,10 @@ class AgentRunner:
         run_id: str = "",
         sid: str = "",
     ) -> AsyncGenerator[AgentEvent, None]:
-        if adk_event.usage_metadata:
-            limiter.observe_usage(_usage_dict(adk_event.usage_metadata))
+        # R-20 (ENG-08): missing usage is estimated + labeled — observe_usage
+        # MUST run even when the event carries no usage metadata, or the
+        # estimate flag would never be set (missing usage never silently 0).
+        limiter.observe_usage(_usage_dict(adk_event.usage_metadata))
         # MA-04: an ADK transfer action becomes one AgentTransfer event,
         # recorded in the run audit (deduped per (from, to)).
         if adk_event.actions and adk_event.actions.transfer_to_agent:
@@ -954,11 +948,17 @@ class AgentRunner:
                 )
 
 
-def _usage(limiter: RunLimiter) -> dict[str, int]:
-    return {
+def _usage(limiter: RunLimiter) -> dict[str, Any]:
+    usage: dict[str, Any] = {
         "input_tokens": limiter.account.input_tokens,
         "output_tokens": limiter.account.output_tokens,
     }
+    # R-20 (ENG-08): missing usage is estimated and labeled — the flag rides
+    # the usage object into the committed record and the API surface
+    # (API-14: usage.estimated: true).
+    if limiter.account.estimated:
+        usage["estimated"] = True
+    return usage
 
 
 _PUBLIC_MESSAGES = {

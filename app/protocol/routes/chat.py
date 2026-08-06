@@ -369,6 +369,9 @@ def _normalize_usage(usage: dict[str, Any]) -> dict[str, Any]:
         "total_tokens": input_tokens + output_tokens,
     }
     normalized.update(_cost_usage_fields(usage))
+    # R-20 (ENG-08): missing usage is estimated and labeled (API-14).
+    if usage.get("estimated"):
+        normalized["estimated"] = True
     return normalized
 
 

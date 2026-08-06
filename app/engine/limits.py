@@ -98,16 +98,11 @@ class RunLimiter:
         return truncated
 
     # -- token budget (ENG-08) ---------------------------------------------------
-
-    def cap_output_tokens(self, requested_max: int) -> int:
-        """Known remaining budget caps max_output_tokens before each call."""
-        if self.token_budget <= 0:
-            return requested_max
-        remaining = self.token_budget - self.account.total
-        if remaining <= 0:
-            self.budget_exceeded = True
-            raise PublicError("budget_exceeded", "The token budget for this request was exceeded.")
-        return min(requested_max, remaining)
+    # R-20: the pre-call provider cap (``cap_output_tokens``) was removed —
+    # the current google-adk RunConfig cannot carry per-call
+    # max_output_tokens (extra_forbidden), so the budget is enforced at the
+    # accounting boundary: observe_usage records the overshoot and
+    # ``budget_exceeded``/``can_start_another_call`` prevent any later call.
 
     def observe_usage(self, usage: dict[str, int] | None) -> None:
         self.account.add(usage)

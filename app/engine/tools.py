@@ -1,11 +1,13 @@
 """Tool side-effect ledger (REQUIREMENTS.md ENG-09).
 
-Each ADK tool-call ID is executed at most once within a run. For a stateful
-run, a call record is persisted as ``executing`` before invocation and its
-bounded result as ``completed``/``failed`` after return; a durable ID left
-``executing`` across lost ownership becomes ``outcome_unknown`` and must not
-be invoked again. Repeated delivery of a completed ID returns the stored
-result. The runtime never automatically retries a tool.
+Each ADK tool-call ID is executed at most once within a run (the dedup
+state machine below).  Completed tool activity is also recorded in the
+run audit (ENG-06/SES-01); a DURABLE per-call record that survives lost
+ownership (the ``executing`` -> ``outcome_unknown`` cross-restart
+contract) is not persisted — the storage layer has no tool-record store,
+and a crashed process's nonterminal run is reconciled to
+``failed/run_interrupted`` by the storage sweep (ENG-05).  The runtime
+never automatically retries a tool.
 """
 
 from __future__ import annotations
@@ -26,16 +28,15 @@ class ToolRecord:
 
 
 class ToolLedger:
-    """ENG-09 dedup + side-effect records for one run.
+    """ENG-09 dedup state machine for one run (in-process only).
 
-    ``persist`` is an optional async callback ``(call_id, record) -> None``
-    used by the stateful runner to store records incrementally; stateless
-    runs keep everything in process memory (API-06 forbids durable data).
+    R-20: the durable ``persist`` callback and the cross-restart
+    reconcilers were unwired dead code and are removed — see the module
+    docstring for the scope decision.
     """
 
-    def __init__(self, persist=None) -> None:
+    def __init__(self) -> None:
         self._records: dict[str, ToolRecord] = {}
-        self._persist = persist
 
     async def begin(self, call_id: str, name: str) -> ToolRecord:
         existing = self._records.get(call_id)
@@ -46,8 +47,6 @@ class ToolLedger:
                 return existing
         record = ToolRecord(call_id=call_id, name=name)
         self._records[call_id] = record
-        if self._persist is not None:
-            await self._persist(call_id, record)
         return record
 
     def complete(self, call_id: str, result: Any) -> ToolRecord:
@@ -59,15 +58,6 @@ class ToolLedger:
         record.result = result
         return record
 
-    def fail(self, call_id: str, error: str) -> ToolRecord:
-        record = self._records.get(call_id)
-        if record is None:
-            record = ToolRecord(call_id=call_id, name="?")
-            self._records[call_id] = record
-        record.state = "failed"
-        record.error = error
-        return record
-
     def outcome_unknown(self, call_id: str) -> ToolRecord:
         """ENG-09: an executing record across lost ownership -> outcome_unknown."""
         record = self._records.get(call_id)
@@ -76,17 +66,3 @@ class ToolLedger:
             self._records[call_id] = record
         record.state = "outcome_unknown"
         return record
-
-    def record_for(self, call_id: str) -> ToolRecord | None:
-        return self._records.get(call_id)
-
-    def executing_ids(self) -> list[str]:
-        return [c for c, r in self._records.items() if r.state == "executing"]
-
-    def reconcile_executing(self) -> list[str]:
-        """ENG-05/09: after restart, orphaned executing records become
-        outcome_unknown and must not be re-invoked."""
-        ids = self.executing_ids()
-        for call_id in ids:
-            self.outcome_unknown(call_id)
-        return ids

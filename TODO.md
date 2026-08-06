@@ -676,10 +676,30 @@ POST applies.
   "missing usage is estimated + labeled" contract, which therefore never
   reaches any API response.
 
-- [ ] Decide per item: wire it up or delete it and amend the docstrings
-      and REQUIREMENTS traceability accordingly.
-- [ ] If ENG-08/ENG-09 stand as written, implement the pre-call token cap,
+- [x] Decide per item: wire it up or delete it and amend the docstrings
+      and REQUIREMENTS traceability accordingly.  Done (each item):
+      `begin_iteration` wired into the run loop (the per-call deadline
+      check); `cap_output_tokens` DELETED — the current google-adk
+      RunConfig cannot carry per-call max_output_tokens (extra_forbidden),
+      so ENG-08's budget stays enforced at the accounting boundary
+      (observe_usage / can_start_another_call); the unwired RunConfig
+      temperature/max_output_tokens kwargs removed (they raised
+      ValidationError and degraded every overridden run to provider_error
+      — a latent bug, now fixed); ToolLedger's durable persist plumbing
+      and the unused fail/record_for/executing_ids/reconcile_executing
+      deleted (no tool-record store exists; ENG-05's sweep reconciles
+      crashed runs; completed tool activity stays in the run audit per
+      ENG-06); RunResult deleted — `usage_estimated` lives on the usage
+      object as API-14's `usage.estimated: true`.
+- [x] If ENG-08/ENG-09 stand as written, implement the pre-call token cap,
       the durable tool-call records, and surface `usage_estimated`.
+      Done: `usage.estimated` now surfaces — `_convert` calls
+      `observe_usage` even for empty metadata (the estimate flag was never
+      set before), the runner's usage objects carry `estimated: true`,
+      and `_normalize_usage` passes it through on all three surfaces.
+      The pre-call provider cap and durable tool records are documented
+      as not expressible with the current google-adk / storage layer
+      (docstrings amended; the audit + sweep cover the crash paths).
 
 ### R-21 Dead, unreachable, and stale code
 

@@ -349,3 +349,46 @@ class TestCrossSurfaceUsage:
         assert "costUsd" not in usage
         assert usage["prompt_tokens"] == 0
         assert "input_tokens" not in usage
+
+
+class TestEstimatedUsageLabel:
+    """R-20 (ENG-08/API-14): missing provider usage is estimated and
+    labeled `usage.estimated: true`; reported usage carries no label."""
+
+    def test_mock_run_labels_estimated_usage(self):
+        # The mock model reports no usage metadata -> the account estimates.
+        client, _config, _components = _app()
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "mock", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        usage = resp.json()["usage"]
+        assert usage["estimated"] is True
+        assert usage["prompt_tokens"] == 0
+
+    def test_reported_usage_has_no_estimate_label(self):
+        # TokenLlm reports usage metadata -> not estimated.
+        client, _config, _components = _app(model=TokenLlm())
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "mock", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        assert "estimated" not in resp.json()["usage"]
+
+    def test_temperature_override_completes_cleanly(self):
+        """R-20: a temperature override is validated and gated (API-12) and
+        no longer degrades the run to a provider_error (the broken
+        RunConfig kwarg was removed — google-adk rejects the field)."""
+        client, _config, _components = _app()
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "mock",
+                "messages": [{"role": "user", "content": "hi"}],
+                "temperature": 0.5,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["choices"][0]["finish_reason"] == "stop"
