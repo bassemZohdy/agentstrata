@@ -71,19 +71,10 @@ TODO.md:
   — our code already uses `McpToolset`; deferral documented.
 - Host suite: **527 passed**; ruff + mypy (app, scripts, tests) clean;
   schemas zero-diff; manifest sync OK.
-- Follow-up (TRC-01): the P2 ACP acceptance-annex IDs `A-1`..`A-6` are
-  now mapped in the traceability matrix — the generator's ID regex also
+- **TRC-01:** the P2 ACP acceptance-annex IDs `A-1`..`A-6` are now
+  mapped in the traceability matrix — the generator's ID regex also
   matches single-letter annex IDs, and regeneration is deterministic
   (184 requirements mapped).
-
-### TODO.md cleanup (2026-08-06)
-
-- TODO.md now contains only the deferred scope; the resolved decisions
-  moved to a new [docs/decisions.md](docs/decisions.md) decision log
-  (NFR-06, CNT-12, MCP-08, mcp range, ACC-01, product name, google.adk
-  MCPTool) and the traceability MAPPINGS rows that pointed at "TODO.md
-  Decisions made" now point there (CNT-12, NFR-06) or to CHANGELOG
-  (STACK-02).
 
 Open deferrals (documented, not release-blocking): google.adk upstream
 MCPTool replacement; multi-agent per-sub-agent cost pricing (until P2
