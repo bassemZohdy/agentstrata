@@ -40,6 +40,10 @@ STDIO_CONNECT_TIMEOUT_SECONDS = 30.0
 BACKOFF_CAP_SECONDS = 60.0
 JITTER_MAX_SECONDS = 0.25
 
+# R-11: how often a CONNECTED handle is liveness-probed (a dead-but-
+# connected session is re-established, not trusted forever).
+_LIVENESS_PROBE_SECONDS = 30.0
+
 
 class ServerState(StrEnum):
     DISCONNECTED = "disconnected"
@@ -295,9 +299,40 @@ class ServerManager:
             handle = self._handles.get(name)
             if handle is None:
                 return
-            if not handle.connected:
-                await self._connect(handle)
+            if handle.connected:
+                # R-11: a CONNECTED handle is not blindly trusted — sleep on
+                # the liveness cadence (not a 1 s flag poll) and probe;
+                # a dead-but-connected session flips back to DISCONNECTED so
+                # the next tick reconnects and readiness reflects the loss.
+                await asyncio.sleep(_LIVENESS_PROBE_SECONDS)
+                if not await self._probe(handle):
+                    handle.state = ServerState.DISCONNECTED
+                    handle.last_error = "liveness probe failed"
+                    handle.backoff_seconds = min(
+                        handle.backoff_seconds * 2, BACKOFF_CAP_SECONDS
+                    ) + random.uniform(0, JITTER_MAX_SECONDS)
+                    await self._detach_tools(handle)
+                continue
+            await self._connect(handle)
             await asyncio.sleep(min(handle.backoff_seconds, BACKOFF_CAP_SECONDS))
+
+    async def _probe(self, handle: ServerHandle) -> bool:
+        """R-11: liveness probe — a dead-but-connected session raises here
+        (or leaves no live session) and gets reconnected; the flag alone
+        could never move CONNECTED back."""
+        try:
+            if handle.toolset is None:
+                return True
+            # A clean close leaves the session manager with no live
+            # sessions; a dead transport raises on the next call.
+            mgr = getattr(handle.toolset, "_mcp_session_manager", None)
+            sessions = getattr(mgr, "_sessions", None)
+            if sessions is not None and not sessions:
+                return False
+            await handle.toolset.list_resources()
+            return True
+        except Exception:  # noqa: BLE001 — probe failures are expected
+            return False
 
     async def _connect(self, handle: ServerHandle) -> None:
         handle.state = ServerState.CONNECTING
@@ -311,6 +346,17 @@ class ServerManager:
             filtered = apply_tool_filter(
                 raw_names, handle.tool_filter_allow, handle.tool_filter_deny
             )
+            # R-11: enforce maxTools at connect — truncate + warn (an
+            # over-limit server still connects with its first N tools).
+            if len(filtered) > handle.max_tools:
+                logger.warning(
+                    "MCP server %s exposes %d tools after filtering; "
+                    "maxTools=%d caps the attached set",
+                    handle.name,
+                    len(filtered),
+                    handle.max_tools,
+                )
+                filtered = filtered[: handle.max_tools]
             handle.tools = tools
             handle.raw_names = raw_names
             handle.filtered_names = filtered

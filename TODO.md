@@ -61,6 +61,9 @@ intelligence** items; medium/low items are left for follow-up agents.
 - **R-27** JWKS stale-key cutoff only fires at refresh instants, so most
   requests past the cutoff still verify against stale keys (gap in the
   R-07 fix).
+- **R-28** Redis driver-boundary wrap is over-broad: script/programming
+  errors are reported as dependency outages (asymmetric with the psycopg
+  wrap added in the same commit).
 
 ### Low intelligence — mechanical cleanup / docs / CI
 
@@ -90,6 +93,7 @@ clean pass and does not end the loop.
 | 2026-08-06 | `1fb0772` | 548 pass; ruff check, **ruff format (app+tests)**, mypy all clean; tree clean | R-06 and R-03 landed; all ticks accurate. R-03 re-verified under real concurrency (6 concurrent runs → `active_runs` back to 0, 6 durations). The iteration-2 formatting gap was resolved before commit. No regression. One R-03 loose end opened (the new degraded flag is discarded; branch still uses the sentinel string). |
 | 2026-08-06 | *(idle ×49)* | not run | HEAD held at `1fb0772` for ~12 h. Idle intervals — no review, no edits. Activity resumed at the end of the run. |
 | 2026-08-06 | `9946770` | 565 pass, ruff + mypy clean | R-09 (streaming body cap) and R-13 (WS rate limit + UTF-8 byte cap) landed and verified. R-07 partially correct: the cadence refresh, `_jwks_failed` removal and the JWK-`alg` pinning are all right, but the stale-key cutoff leaks — opened **R-27** (measured: 77% of probes past the cutoff still verify against stale keys). Note R-26's ticks describe work that is still **uncommitted** at this HEAD, so it is not yet verified. |
+| 2026-08-06 | `fed1185` | HEAD tree 565 pass, ruff + mypy clean (verified on an extracted copy — the main working tree has 4 failures from uncommitted R-02 work) | R-14 verified across all three surfaces (chat/ACP/WS now emit identical `prompt/completion/total_tokens` + `costUsd`). **R-26 confirmed fixed** with the original repro (both routes → 503 `storage_unavailable`); ticks accurate. Opened **R-28** — the redis boundary wrap catches bare `Exception`, so a Lua script bug reports as an outage, while the psycopg wrap in the same commit correctly re-raises code bugs. Note: `32ea6c1` is a broken commit — its own tests fail without the boundary files that landed in `fed1185` (self-disclosed). |
 
 ## Completed work (pointer)
 
@@ -390,12 +394,25 @@ serves every concurrent request.
 - `ServerHandle.max_tools` (`manager.py:63`) is populated from
   `server.maxTools` (`manager.py:172`) and never enforced anywhere.
 
-- [ ] Add a liveness probe (or catch transport errors at call time) that
-      transitions a dead handle to `DISCONNECTED`.
-- [ ] Sleep on an event rather than polling a flag when connected.
-- [ ] Enforce `maxTools` at connect (truncate + warn, or fail the server).
-- [ ] Tests: a dropped session reconnects; a server exceeding `maxTools`
-      is capped.
+- [x] Add a liveness probe (or catch transport errors at call time) that
+      transitions a dead handle to `DISCONNECTED`.  Done: `_probe` checks
+      the session manager's live sessions and calls `list_resources()`;
+      the reconcile loop probes CONNECTED handles on a cadence
+      (`_LIVENESS_PROBE_SECONDS`, 30 s) and flips dead ones back to
+      DISCONNECTED with backoff + detach, so readiness reflects the loss
+      and the next tick reconnects.
+- [x] Sleep on an event rather than polling a flag when connected.  Done:
+      the connected branch sleeps the liveness cadence instead of the 1 s
+      flag poll (the flag is only re-checked when a probe is due).
+- [x] Enforce `maxTools` at connect (truncate + warn, or fail the server).
+      Done: the filtered tool set is truncated to `maxTools` with a
+      warning (an over-limit server still connects with its first N
+      tools); the cap propagates to final names + attached tools.
+- [x] Tests: a dropped session reconnects; a server exceeding `maxTools`
+      is capped.  Done: `test_dead_session_detected_and_reconnected`
+      (real stdio server, session killed → probe fails → DISCONNECTED →
+      re-established) and `test_max_tools_capped_at_connect` (spike server
+      now exposes echo + count; maxTools=1 caps the attached set).
 
 ### R-12 Shutdown leaks background tasks and always waits the full grace (CNT-07)
 
@@ -810,6 +827,43 @@ at an attempt boundary — which is why the suite is green.
       cutoff + 0.5 × `refreshSeconds`), not just on them.
 - [ ] Re-word the R-07 tick once fixed — as written it overstates the
       guarantee.
+
+### R-28 Redis driver-boundary wrap is over-broad (asymmetric with psycopg, from the R-26 fix)
+
+*Intelligence: medium — localized correctness.*
+
+`fed1185` added driver-boundary wrapping on both backends, but the two
+sides differ in breadth:
+
+- `app/main.py::_raise_driver_unavailable` — **correct**: wraps only
+  `psycopg.OperationalError`; everything else re-raises unchanged, with
+  the docstring calling this out ("Non-connection errors (code bugs) keep
+  propagating as-is").
+- `app/storage/redis_backend.py::_eval` — catches bare `Exception` and
+  wraps **everything** as `BackendUnavailableError`.
+
+Verified:
+
+| Raised | Result |
+| --- | --- |
+| psycopg `OperationalError` | `BackendUnavailableError` ✔ |
+| psycopg `ProgrammingError` | propagates ✔ |
+| redis `ResponseError` (Lua compile error) | **`BackendUnavailableError`** ✘ |
+
+The redis backend drives several Lua scripts (session create, admit_run,
+the R-04 sweep, fence lease ops). A bug in any of them — or a `DataError`
+from a malformed argument — now surfaces as 503 `storage_unavailable`:
+clients are told to retry a deterministic failure that can never
+succeed, and operators see an outage signal instead of an error. The
+correct pattern is already in the same commit, on the psycopg side.
+
+- [ ] Narrow the `_eval` catch to redis's connection/timeout family
+      (`redis.exceptions.ConnectionError`, `TimeoutError`,
+      `BusyLoadingError`), re-raising `ResponseError`/`DataError` and the
+      rest — mirroring `_raise_driver_unavailable`.
+- [ ] Consider one shared helper so the two boundaries cannot drift again.
+- [ ] Tests: a script/response error propagates rather than mapping to
+      503; a connection error still maps.
 
 ---
 

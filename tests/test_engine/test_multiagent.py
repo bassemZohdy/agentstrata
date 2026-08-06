@@ -259,7 +259,7 @@ async def test_tool_isolation_per_toolservers():
             # check races the async attach under slow emulation)
             if (
                 mcp.readiness()
-                and root_now >= {"echo", "beta_echo"}
+                and root_now >= {"echo", "count", "beta_echo", "beta_count"}
                 and component.sub_agents[0].tools
             ):
                 break
@@ -268,11 +268,13 @@ async def test_tool_isolation_per_toolservers():
         worker = component.sub_agents[0]
         worker_names = sorted(getattr(t, "name", "") for t in worker.tools)
         # collision-safe final names (MCP-03): the first server (alpha) keeps
-        # the raw 'echo'; beta's copy is disambiguated to beta_echo.
-        assert root_names == ["beta_echo", "echo"], root_names
-        assert worker_names == ["echo"], worker_names
-        # the sub-agent cannot see the beta server's tool at all (MA-03)
+        # the raw 'echo'/'count'; beta's copies are disambiguated to
+        # beta_echo/beta_count.
+        assert root_names == ["beta_count", "beta_echo", "count", "echo"], root_names
+        assert worker_names == ["count", "echo"], worker_names
+        # the sub-agent cannot see the beta server's tools at all (MA-03)
         assert "beta_echo" not in worker_names
+        assert "beta_count" not in worker_names
     finally:
         await mcp.close()
 
@@ -488,6 +490,7 @@ async def test_session_replay_does_not_replay_transfer_as_user_message():
     session = await backend.get_session(
         agent_name="agent", principal_id="p1", session_id=req1.session_id
     )
+    assert session is not None
     roles = [e.get("role") for e in (session.events or [])]
     # exactly one real user message and one final model turn; the transfer is
     # stored only as role-less function events, never as a user-visible

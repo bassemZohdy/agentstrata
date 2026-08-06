@@ -116,3 +116,86 @@ async def asyncio_sleep(seconds: float) -> None:
     import asyncio
 
     await asyncio.sleep(seconds)
+
+
+class TestLivenessAndMaxTools:
+    """R-11: dead-but-connected sessions are detected and re-established;
+    maxTools caps the attached tool set at connect."""
+
+    @pytest.mark.asyncio
+    async def test_dead_session_detected_and_reconnected(self, monkeypatch):
+        import app.engine.mcp.manager as manager_mod
+
+        # Probe cadence: fast for the test (30 s in production).
+        monkeypatch.setattr(manager_mod, "_LIVENESS_PROBE_SECONDS", 0.05)
+        applied = _config_with_servers(
+            [
+                {
+                    "name": "echo",
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": [SERVER_SCRIPT],
+                    "required": True,
+                }
+            ]
+        )
+        manager = ServerManager(applied)
+        manager.configure(applied.config.tools.mcpServers)
+        await manager.start()
+        handle = manager.handle("echo")
+        assert handle is not None
+        deadline = time.monotonic() + MCP_CONNECT_WINDOW
+        while time.monotonic() < deadline and not handle.connected:
+            await asyncio_sleep(0.05)
+        assert handle.connected
+
+        # Simulate the session dying: close the toolset out from under the
+        # manager (the stdio process goes with it).
+        assert handle.toolset is not None
+        await handle.toolset.close()
+        assert await manager._probe(handle) is False
+
+        # Detection: the reconciler's next tick flips the handle away from
+        # CONNECTED (the flag alone could never move it before R-11).
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and handle.connected:
+            await asyncio_sleep(0.02)
+        assert not handle.connected
+
+        # Re-establishment: the reconciler spawns a fresh connection.
+        deadline = time.monotonic() + MCP_CONNECT_WINDOW
+        while time.monotonic() < deadline and not handle.connected:
+            await asyncio_sleep(0.05)
+        assert handle.connected
+        assert manager.readiness()
+        await manager.close()
+
+    @pytest.mark.asyncio
+    async def test_max_tools_capped_at_connect(self):
+        """The spike server now exposes echo + count; maxTools=1 caps the
+        attached (filtered/final) tool set with the server still
+        connecting."""
+        applied = _config_with_servers(
+            [
+                {
+                    "name": "echo",
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": [SERVER_SCRIPT],
+                    "required": True,
+                    "maxTools": 1,
+                }
+            ]
+        )
+        manager = ServerManager(applied)
+        manager.configure(applied.config.tools.mcpServers)
+        await manager.start()
+        handle = manager.handle("echo")
+        assert handle is not None
+        deadline = time.monotonic() + MCP_CONNECT_WINDOW
+        while time.monotonic() < deadline and not handle.connected:
+            await asyncio_sleep(0.05)
+        assert handle.connected
+        assert len(handle.filtered_names) == 1
+        assert len(handle.final_names) == 1
+        await manager.close()
