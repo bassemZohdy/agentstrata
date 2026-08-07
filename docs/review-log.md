@@ -39,3 +39,61 @@ The per-item detail of the completed 2026-08-06 review backlog
 verification notes) is summarized in [CHANGELOG.md](../CHANGELOG.md) under
 the "2026-08-06 review backlog — closed" entry. Open stragglers remain
 tracked in [TODO.md](../TODO.md).
+
+## Archive — planned-scope (E1/E2) reference
+
+Archived verbatim from TODO.md on 2026-08-07 when the planned scope
+(E1 + E2) completed and the backlog was retired.  The per-task "Done"
+records are in CHANGELOG.md ("E1: env-first configuration — DONE",
+"E2: full provider coverage — DONE"); the classification index and
+baseline below are reference material preserved for future env/config
+work.
+
+# Planned scope — E1 + E2 complete (2026-08-07)
+*Restored 2026-08-07 by the review loop: the `# Planned scope` heading,
+this preamble, the Baseline section, and the `## E1` heading below were
+dropped incidentally by `6af55be` (a straggler-closing commit), which
+left the seven open E1 tasks sitting under the "Open 2026-08-06 review
+items (all closed)" heading. Text recovered verbatim from `820290d`;
+none of that commit's own content was touched.*
+
+Requested 2026-08-06. Two epics. **Both are requirements-impacting**:
+they change documented surfaces (CFG-07/CFG-08 env binding, LLM-01
+provider set), so each needs a REQUIREMENTS.md amendment and a
+`docs/decisions.md` entry *before* implementation, per the project's own
+change policy. Neither is a pure dependency bump.
+
+## Intelligence classification — open work
+
+Every open task carries a level (High = architectural / concurrency /
+contract design; Medium = localized correctness / security; Low =
+mechanical cleanup / docs / CI).
+
+| Level | Tasks |
+| --- | --- |
+| **High** | **E1-3** collection env-binding (a new frozen binding surface + CFG-07 ambiguity), **E2-2** per-provider credential contracts (SEC-04 secret shapes + redaction), **E2-5** model capability registry (data model + refresh policy), **E2-7** per-sub-agent cost pricing (cost attribution across the agent tree; closes MA-02), **E2-8** fallback chains (interacts with LLM-03 retry + COST-01 attribution) |
+| **Medium** | **E1-2** minimum viable env set, **E1-4** short aliases (frozen surface), **E1-5** provider key auto-detection (SEC-03 fail-closed), **E2-1** provider enum expansion (published enum; stability policy), **E2-3** OpenAI-compatible provider, **E2-4** per-provider cross-field validation, **E2-6** default pricing catalog, **E2-9** embedding parity (interlocks R-16) |
+| **Low** | **E1-1** env-var catalog + CI gate, **E1-6** binding diagnostics, **E1-7** documentation, **E2-10** verification and documentation |
+
+## Baseline — what already exists (do not rebuild)
+
+Read this first; roughly half of "config via env" is already shipped.
+
+- **Tier 5 env binding works today.** `app/config/resolver.py` derives
+  `AGENT_*` variable names from the Pydantic schema
+  (`_env_alias`/`_build_binding_index`, `models.py:iter_schema_fields`),
+  binds them relaxed/schema-aware, reserves
+  `AGENT_PROFILE`/`AGENT_CONFIG_DIR`/`AGENT_APPLICATION_JSON`/`AGENT_BUNDLED_DIR`,
+  warns on unmatched variables with a nearest-path hint, and raises
+  `AmbiguousEnvError` when one variable matches two schema paths.
+- **Zero-file boot already works.** Tier 1 `config/agent.yaml` supplies
+  `name`, `engine.systemInstruction`, and a gemini binding, so
+  `docker run -e GEMINI_API_KEY=… agentbase` runs with no mounted file.
+- **Multi-provider already exists via LiteLLM.** `Provider` =
+  `gemini | openai | anthropic | ollama | litellm`;
+  `connectors.py:_llm_model_string` prefixes openai/anthropic/ollama and
+  passes `litellm` through verbatim, so arbitrary LiteLLM model strings
+  are *already* reachable through the `litellm` escape hatch.
+- **`llm.extra`** is a CFG-13 passthrough map into the LiteLLM kwargs.
+
+The gaps below are what is genuinely missing.
