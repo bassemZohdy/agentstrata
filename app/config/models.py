@@ -124,6 +124,16 @@ class VertexConfig(BaseModel):
     location: str = "us-central1"
 
 
+# LLM-04 (E1-5): deterministic per-provider credential-variable names for
+# opt-in inference (llm.autoApiKeyEnv). Providers without a key contract
+# are absent from the table.
+INFERRED_API_KEY_ENV: dict[str, str] = {
+    "gemini": "GEMINI_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
+
 class Llm(BaseModel):
     model_config = BASE_CONFIG
 
@@ -131,6 +141,7 @@ class Llm(BaseModel):
     model: str = Field(min_length=1, max_length=256)
     apiKeyEnv: str | None = _SECRET_REF
     apiKeyFile: str | None = _SECRET_REF
+    autoApiKeyEnv: bool = Field(default=False)
     baseUrl: str = ""
     contextWindowTokens: int = Field(default=0, ge=0)
     vertex: VertexConfig = Field(default_factory=VertexConfig)

@@ -32,6 +32,20 @@ The JSON Schema for documents lives in `schemas/agent.schema.json`; the
 ConfigMap overlay variant in `schemas/agent-overlay.schema.json` (all fields
 optional) — both generated, never hand-edited.
 
+**Env-only configuration (E1, CFG-16):** a working runtime needs no config
+file — the only required leaves are `name`, `engine.systemInstruction`, and
+`llm.model` (plus the provider credential), all env-bindable.  Short
+aliases `AGENT_MODEL` / `AGENT_INSTRUCTION` / `AGENT_PROVIDER` /
+`AGENT_API_KEY` lose to the canonical names.  `llm.autoApiKeyEnv` (opt-in)
+infers the credential variable name per provider (LLM-04); an
+inferred-but-absent variable fails boot — never a silent keyless start.
+Collections (`tools.mcpServers`, `agents`, `costs.models`) are not
+env-bindable per item; supply them via `AGENT_APPLICATION_JSON` — a
+list-index-shaped `AGENT_*` variable is warned with that hint (CFG-08).
+The full catalog of variables, defaults, and secret markers:
+`docs/env-reference.md` (or `--print-env`).  Unmatched variables are
+warned individually plus one boot summary line (CFG-18).
+
 ## Running locally
 
 ```bash
@@ -185,6 +199,41 @@ then `manifests/deployment.yaml`. Reloads are categorized
 restart-required updates are rejected with the last-known-good retained.
 Replicas reconcile independently — per-pod `/health` reports the local
 generation/hash (REL-04/K8S-07).
+
+**Env-only Kubernetes example (E1):** the Deployment below configures the
+runtime entirely from environment variables — no ConfigMap, no mounted
+file.  The credential variable is inferred (`llm.autoApiKeyEnv`), so the
+only secrets are the key itself and the API-key auth value:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: agentbase, labels: { app: agentbase } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: agentbase } }
+  template:
+    metadata: { labels: { app: agentbase } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: agentbase
+          image: agentbase:latest
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: AGENT_NAME, value: "k8s-env-agent" }
+            - { name: AGENT_INSTRUCTION, value: "You are a terse assistant." }
+            - { name: AGENT_PROVIDER, value: "gemini" }
+            - { name: AGENT_MODEL, value: "gemini-2.5-flash" }
+            - { name: AGENT_LLM_AUTO_API_KEY_ENV, value: "true" }
+            - name: GEMINI_API_KEY
+              valueFrom: { secretKeyRef: { name: agentbase-secrets, key: gemini-api-key } }
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 } }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 } }
+```
+
+For multi-server MCP or multi-agent setups, keep the file-free story with
+`AGENT_APPLICATION_JSON` (tier 6) instead of a mounted ConfigMap.
 
 ## Observability
 

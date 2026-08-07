@@ -43,6 +43,10 @@ jobs:
         run: |
           .venv/bin/python scripts/gen-schemas.py
           git diff --exit-code -- schemas/
+      - name: Env-reference zero-diff (CFG-17)
+        run: |
+          .venv/bin/python scripts/gen-env-reference.py
+          git diff --exit-code -- docs/env-reference.md
 
   lockfile:
     name: Lockfile hash verification

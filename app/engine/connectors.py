@@ -13,6 +13,7 @@ file-backed re-resolve per request vs env process-start snapshot (LLM-02).
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import random
 from collections.abc import AsyncGenerator, Callable
@@ -114,6 +115,20 @@ def _llm_model_string(provider: str, model: str) -> str:
     return model  # litellm: verbatim escape hatch
 
 
+def _credential_ref(llm_cfg: Any) -> tuple[str | None, str | None]:
+    """LLM-04 (E1-5): the effective credential ref — explicit
+    apiKeyEnv/apiKeyFile always win; otherwise the opt-in inferred
+    variable name.  Returns (env_var, file)."""
+    if llm_cfg.apiKeyEnv or llm_cfg.apiKeyFile:
+        return llm_cfg.apiKeyEnv, llm_cfg.apiKeyFile
+    if getattr(llm_cfg, "autoApiKeyEnv", False):
+        from ..config.validate import effective_api_key_env
+
+        inferred = effective_api_key_env({"llm": llm_cfg.model_dump(by_alias=True, mode="json")})
+        return inferred, None
+    return None, None
+
+
 def build_llm(
     llm_cfg: Any,
     secrets: SecretResolver | None = None,
@@ -134,17 +149,24 @@ def build_llm(
                     "location": llm_cfg.vertex.location,
                 },
             )
-        api_key = secrets.resolve(SecretRef(llm_cfg.apiKeyEnv, llm_cfg.apiKeyFile))
+        env_ref, file_ref = _credential_ref(llm_cfg)
+        api_key = secrets.resolve(SecretRef(env_ref, file_ref))
         client_kwargs: dict[str, Any] = {}
         if api_key:
             client_kwargs["api_key"] = api_key
         if llm_cfg.baseUrl:
             client_kwargs["http_options"] = {"base_url": llm_cfg.baseUrl}
+        if env_ref:
+            logging.getLogger("agentbase.engine").info(
+                "llm credential: gemini via %s",
+                env_ref,  # OBS-03: name only
+            )
         return Gemini(model=model, client_kwargs=client_kwargs or None)
 
     # LLM-01 LiteLLM bridge
     kwargs: dict[str, Any] = {}
-    api_key = secrets.resolve(SecretRef(llm_cfg.apiKeyEnv, llm_cfg.apiKeyFile))
+    env_ref, file_ref = _credential_ref(llm_cfg)
+    api_key = secrets.resolve(SecretRef(env_ref, file_ref))
     if api_key:
         kwargs["api_key"] = api_key
     if provider == "ollama":
@@ -153,6 +175,12 @@ def build_llm(
         kwargs["base_url"] = llm_cfg.baseUrl
     if llm_cfg.extra:
         kwargs.update(llm_cfg.extra)
+    if env_ref:
+        logging.getLogger("agentbase.engine").info(
+            "llm credential: %s via %s",
+            provider,
+            env_ref,  # OBS-03: name only
+        )
     return LiteLlm(model=_llm_model_string(provider, model), **kwargs)
 
 

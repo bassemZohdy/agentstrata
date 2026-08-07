@@ -8,6 +8,47 @@ docs/release.md.
 
 ## [Unreleased]
 
+### E1: env-first configuration — DONE (2026-08-07)
+
+REQUIREMENTS 2.6 amendment (CFG-07 item 4 aliases, CFG-08 signpost,
+CFG-10b/16/17/18, LLM-04) + decisions.md records. 619 host tests;
+ruff + mypy clean; schemas, env-reference, and traceability all
+deterministic (189 IDs).
+
+- **E1-1 — Env-var catalog (CFG-10b/17):** `--print-env` prints every
+  bindable path with its canonical `AGENT_*` name, aliases, type,
+  default (or `required`), and SEC-02 secret marker — schema-derived,
+  no config resolution, mutually exclusive with --validate/--dump.
+  `scripts/gen-env-reference.py` generates `docs/env-reference.md`
+  (committed, CI zero-diff).  The catalog doubles as the required-leaf
+  audit: exactly `name`, `engine`, `engine.systemInstruction`, `llm`,
+  `llm.model` are required; optional secret refs render `null`.
+- **E1-2 — Minimum viable env set (CFG-16):** tier 1 is skipped when
+  the bundled `agent.yaml` is absent, so an empty `AGENT_BUNDLED_DIR`
+  boots from env alone (name + instruction + model + credential);
+  `name` stays required (SCH-02: default changes are schema-major);
+  decision recorded.  Tests: env-only boot, missing-leaf failure,
+  collection config from env alone.
+- **E1-3 — Collections stay JSON-only (decision c):** list-index-shaped
+  `AGENT_*` variables now warn that items are not env-bindable and name
+  `AGENT_APPLICATION_JSON` (CFG-08); decision in decisions.md.
+- **E1-4 — Short aliases (CFG-07 item 4, frozen):** `AGENT_MODEL`,
+  `AGENT_INSTRUCTION`, `AGENT_API_KEY`, `AGENT_PROVIDER` — canonical
+  names win regardless of OS env order; aliases share the ambiguity
+  index.  Alias set recorded in decisions.md.
+- **E1-5 — Credential inference (LLM-04):** `llm.autoApiKeyEnv` (opt-in)
+  infers the key variable per provider (gemini/openai/anthropic;
+  ollama/litellm/vertex infer nothing); inferred-but-absent fails boot
+  naming the variable (SEC-03 fail-closed); explicit refs win; the
+  connector's OBS-03 line names the variable, never the value.
+- **E1-6 — Binding diagnostics (CFG-18):** env-bound provenance names
+  the specific variable (`# tier 5: env:AGENT_LLM_MODEL`, aliases name
+  the alias var, resets keep their flag); unmatched-`AGENT_*` warnings
+  get one boot summary line.
+- **E1-7 — Docs:** README zero-file quick start; deployment.md env-only
+  config section + env-only Kubernetes example; traceability
+  regenerated.
+
 ### 2026-08-06 review stragglers — closed (2026-08-07)
 
 The six remaining open items from the 2026-08-06 review backlog, closed

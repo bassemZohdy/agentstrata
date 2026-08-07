@@ -31,7 +31,7 @@ class TestCanonical:
 
     def test_reset_labeled(self):
         out = dump_for(env={"AGENT_SERVER_PORT": "null"})
-        assert "port: 8080  # tier 5: env (reset-to-default)" in out
+        assert "port: 8080  # tier 5: env:AGENT_SERVER_PORT (reset-to-default)" in out
 
     def test_derived_labeled(self):
         out = dump_for()

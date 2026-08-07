@@ -50,12 +50,16 @@ verified by the Milestone 8 acceptance/chaos run.
 | CFG-09 | app/config/resolver.py::parse_scalar |
 | CFG-10 | app/config/resolver.py::parse_cli_values; app/config/cli.py |
 | CFG-10a | app/config/cli.py::run (--validate); tests/test_config/test_cli.py |
+| CFG-10b | app/config/cli.py::run (--print-env); app/config/env_catalog.py |
 | CFG-11 | app/config/dump.py; tests/test_config/test_dump.py |
 | CFG-11a | app/config/cli.py (--version/--help) |
 | CFG-12 | app/config/validate.py::validate_resolution |
 | CFG-13 | app/config/validate.py::_shape_walk |
 | CFG-14 | app/config/validate.py::_cross_field |
 | CFG-15 | app/main.py::run (boot order) |
+| CFG-16 | resolver.py::load_file_tiers (tier-1 skip); test_env_epic.py (env-only boot) |
+| CFG-17 | app/config/env_catalog.py; cli.py::run (--print-env); scripts/gen-env-reference.py |
+| CFG-18 | app/config/resolver.py::bind_env (env:<VAR>); cli.py::run (unmatched summary) |
 | CNT-01 | Dockerfile (digest-pinned base, --require-hashes venv) |
 | CNT-02 | Dockerfile (multi-arch buildx); docs/release.md (buildx QEMU manifest) |
 | CNT-03 | Dockerfile USER 10001:0 |
@@ -104,6 +108,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | LLM-01 | app/engine/connectors.py::build_llm |
 | LLM-02 | app/engine/connectors.py (CredentialHealth/SecretResolver) |
 | LLM-03 | app/engine/connectors.py::RetryableLlm |
+| LLM-04 | models.py INFERRED_API_KEY_ENV; validate.py fail-closed |
 | MA-01 | app/config/models.py (agents[]); tests/test_config/test_validation.py |
 | MA-02 | app/engine/agent.py (coordinator/sub_agents); tests/test_engine/test_multiagent.py |
 | MA-03 | app/engine/mcp/manager.py (tool_targets); tests/test_engine/test_multiagent.py |

@@ -387,6 +387,11 @@
           "default": null,
           "title": "Apikeyfile"
         },
+        "autoApiKeyEnv": {
+          "default": false,
+          "title": "Autoapikeyenv",
+          "type": "boolean"
+        },
         "baseUrl": {
           "default": "",
           "title": "Baseurl",

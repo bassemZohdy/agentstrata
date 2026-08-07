@@ -345,6 +345,15 @@ def run(argv: list[str] | None = None) -> int:
     config = result.config
     env = dict(os.environ)
 
+    # LLM-04 (E1-5): opt-in credential-variable inference is fail-closed —
+    # an inferred-but-absent variable is a boot error naming the variable.
+    from .config.validate import auto_api_key_error
+
+    api_key_error = auto_api_key_error(config, env)
+    if api_key_error is not None:
+        print(f"configuration error: {api_key_error}", file=sys.stderr)
+        return EX_CONFIG
+
     # CFG-15: capability validation already done; MODE selection.
     try:
         selected_mode, mode_warnings = mode_mod.select_mode(config, env)

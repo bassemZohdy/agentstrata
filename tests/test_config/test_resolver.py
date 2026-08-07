@@ -160,9 +160,11 @@ class TestEnvBinding:
         assert any("AGENT_LLM_MODL" in w and "closest" in w for w in r.warnings)
 
     def test_unmatched_sensitive_var_value_not_logged(self):
-        r = resolve(env={"AGENT_API_KEY": "supersecret"}, bundled_dir="config", argv=[])
+        # E1-4: AGENT_API_KEY is now a valid alias — use a genuinely
+        # unmatched sensitive name for the CFG-08 value-redaction check.
+        r = resolve(env={"AGENT_CUSTOMER_API_TOKEN": "supersecret"}, bundled_dir="config", argv=[])
         assert not any("supersecret" in w for w in r.warnings)
-        assert any("AGENT_API_KEY" in w for w in r.warnings)
+        assert any("AGENT_CUSTOMER_API_TOKEN" in w for w in r.warnings)
 
     def test_reserved_vars_not_warned(self):
         r = resolve(

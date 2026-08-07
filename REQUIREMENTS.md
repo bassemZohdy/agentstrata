@@ -21,6 +21,7 @@
 | 2.2 | Scope pass: dropped WebSocket API and the Kubernetes CRD path (ConfigMap watching only) as premature transports/surfaces; storage remains configurable across all four backends with a shared contract test plus an extra fencing proof for the multi-replica ones; replaced the internal file-tree/pytest-tooling/release-governance sections (§§17-19, GATE-01, STACK-02) with outcome-based deliverables, acceptance criteria, and traceability requirements — this document states what the runtime must do, not how it is built or tested |
 | 2.3 | Final consistency pass: removed a stale "phase gate" reference to the deleted GATE-01, de-duplicated the `docker-compose.yaml` deliverable description against CNT-09, added the OpenAI SDK compatibility matrix to the deliverables list, and clarified the image-size measurement rule |
 | 2.4 | Fixed a real contradiction: DEL-01 claimed internal code organization was entirely free, but CNT-04/CNT-10 fix the entrypoint/healthcheck module path (`app.main`/`app.healthcheck`) so Docker has a concrete command to invoke. DEL-01 now names that one narrow exception. |
+| 2.6 | E1 env-first configuration: CFG-07 gains a closed short-alias table (`AGENT_MODEL`, `AGENT_INSTRUCTION`, `AGENT_API_KEY`, `AGENT_PROVIDER`; canonical names win; aliases participate in ambiguity detection); CFG-08 signposts `AGENT_APPLICATION_JSON` for list-index-shaped variables; CFG-10 adds `--print-env` (schema-derived env-var catalog, no config resolution); new CFG-16 (minimum viable env set — `name`, `engine.systemInstruction`, `llm.model` are the only required leaves; env-only boot guaranteed), CFG-17 (`--print-env` catalog deliverable + generated `docs/env-reference.md` + CI zero-diff), CFG-18 (boot binding diagnostics: env-bound provenance names the variable; unmatched-`AGENT_*` warnings promoted to a summary line); `llm.autoApiKeyEnv` (LLM-04, opt-in per-provider credential-variable inference, SEC-03 fail-closed) |
 | 2.5 | STACK-02 phase-scope decision: `maxTransportMessageBytes` enforcement is phased — Streamable HTTP and legacy SSE get the pre-parse cap in the P1 release (bounded-read seam exists via httpx injection on the locked stack); the stdio transport's pre-parse cap is deferred until a google-adk release supports the mcp 2.x `Transport` protocol seam (google-adk 2.6.1 pins `mcp>=1.24,<2`; mcp 1.29.0's `stdio_client` has no bounded-read injection point). MCP-08 now carries this note. |
 
 **Section index**
@@ -151,7 +152,7 @@ Specifically, a P1 build MUST reject non-empty `agents`, `server.protocols.acp: 
 
 | Tier | Source | Notes |
 | --- | --- | --- |
-| 1 | Bundled base file `/app/config/agent.yaml` | Shipped in image; MUST exist |
+| 1 | Bundled base file `/app/config/agent.yaml` | Shipped in image; skipped if absent (CFG-16 env-only boot) |
 | 2 | Bundled profile file `/app/config/agent-{profile}.yaml` | Skipped if absent |
 | 3 | Mounted base file — first existing of `{configDir}/agent.yaml`, `{configDir}/agent.yml`, `{configDir}/agent.json`, `{configDir}/config.yaml`, checked in that order | Only the first match is loaded; skipped if none |
 | 4 | Mounted profile file — first existing of `{configDir}/agent-{profile}.yaml`, `{configDir}/agent-{profile}.yml`, `{configDir}/agent-{profile}.json`, checked in that order | Only the first match is loaded; skipped if none |
@@ -183,18 +184,21 @@ Specifically, a P1 build MUST reject non-empty `agents`, `server.protocols.acp: 
 1. Enumerate schema-defined leaf paths, plus whole list/model/passthrough-map paths; list indexes and individual passthrough keys are not bindable.
 2. Build a canonical environment alias by converting each camel-case path segment to upper snake case and joining segments with `_` after `AGENT_`.
 3. Compare the supplied suffix and aliases case-insensitively after removing underscores. A unique match binds; zero matches follows CFG-08; more than one match is a fatal ambiguity.
+4. Short aliases: a closed, published table maps `AGENT_MODEL` → `llm.model`, `AGENT_INSTRUCTION` → `engine.systemInstruction`, `AGENT_API_KEY` → `llm.apiKeyEnv`, and `AGENT_PROVIDER` → `llm.provider`. A canonical name always wins over an alias for the same target path, regardless of OS enumeration order; aliases otherwise participate in ambiguity detection like any other binding.
 
 Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `AGENT_LLM_MODEL` to `llm.model`. If multiple environment variables bind the same target path, resolution MUST fail rather than depend on OS enumeration order.
 
-**CFG-08** — An `AGENT_*` variable that matches no schema path MUST log a warning naming the variable and at most three closest paths, then be ignored. Reserved resolver variables — `AGENT_PROFILE`, `AGENT_CONFIG_DIR`, and `AGENT_APPLICATION_JSON` — are exempt. A variable that almost matches a security-sensitive path (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`) MUST be named in the warning but its value MUST never be logged.
+**CFG-08** — An `AGENT_*` variable that matches no schema path MUST log a warning naming the variable and at most three closest paths, then be ignored. Reserved resolver variables — `AGENT_PROFILE`, `AGENT_CONFIG_DIR`, and `AGENT_APPLICATION_JSON` — are exempt. A variable that almost matches a security-sensitive path (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`) MUST be named in the warning but its value MUST never be logged. A variable shaped like a list-index path (suffix contains `_<digits>_` or ends in `_<digits>`) MUST additionally state that collection items are not env-bindable and name `AGENT_APPLICATION_JSON` as the collection transport (E1-3 decision: JSON remains the only per-item path).
 
 **CFG-09 (values)** — Lists, nested models, and passthrough maps MUST be supplied as JSON values. Scalars use target-aware parsing: booleans accept only case-insensitive `true` or `false`; integers use base 10; floats MUST be finite; enums use their documented literal values; strings remain unchanged. The case-insensitive literal `null` invokes CFG-06 for every type. Empty strings are valid only for string fields. A failure MUST exit 78 and name the source, path, and expected type without echoing a value from a secret-sensitive path.
 
 ### 3.4 CLI flags
 
-**CFG-10** — The entrypoint MUST accept `--<dotted.path>=<value>` for any bindable schema path, plus `--profile <name>`, `--config-dir <absolute-path>`, `--dump-config`, `--validate`, `--version`, and `--help`. Dotted-path values follow CFG-09. If the same dotted path occurs more than once, the last CLI occurrence wins and a warning names the path. Unknown paths, positional arguments, missing values, and malformed flags exit 64 (EX_USAGE) with the closest valid paths.
+**CFG-10** — The entrypoint MUST accept `--<dotted.path>=<value>` for any bindable schema path, plus `--profile <name>`, `--config-dir <absolute-path>`, `--print-env`, `--dump-config`, `--validate`, `--version`, and `--help`. Dotted-path values follow CFG-09. If the same dotted path occurs more than once, the last CLI occurrence wins and a warning names the path. Unknown paths, positional arguments, missing values, and malformed flags exit 64 (EX_USAGE) with the closest valid paths.
 
-**CFG-10a (`--validate`)** — Resolve and validate tiers 1–7 without starting the server, opening network connections, reading Kubernetes, or resolving referenced secret contents. On success print exactly `OK\n` to stdout and exit 0. On configuration failure print the CFG-12 aggregate report to stderr and exit 78. `--validate` and `--dump-config` are mutually exclusive.
+**CFG-10a (`--validate`)** — Resolve and validate tiers 1–7 without starting the server, opening network connections, reading Kubernetes, or resolving referenced secret contents. On success print exactly `OK\n` to stdout and exit 0. On configuration failure print the CFG-12 aggregate report to stderr and exit 78. `--validate`, `--dump-config`, and `--print-env` are mutually exclusive.
+
+**CFG-10b (`--print-env`)** — Print the schema-derived environment-variable catalog (CFG-17) to stdout and exit 0 WITHOUT resolving or validating configuration — the catalog is a property of the schema alone, so a broken deployment config must not hide it. One row per bindable path: canonical `AGENT_*` name (aliases listed alongside their target), dotted path, value type, default (or `required`), and a `secret` marker per SEC-02. Stdout is stable UTF-8 text with no timestamps; diagnostics go to stderr.
 
 **CFG-11 (`--dump-config`)** — Resolve and validate tiers 1–7, recursively mask secrets per SEC-02, then print canonical YAML and exit without starting components. Canonical output MUST use schema field order, lexicographically sorted passthrough-map keys, stable scalar quoting, UTF-8, LF endings, one final newline, and no timestamps. Every leaf (including list-item leaves) MUST have a winning-source comment such as `temperature: 0.2  # tier 7: cli`; defaulted and reset values MUST be labeled. Stdout contains only YAML; diagnostics go to stderr. Identical inputs MUST produce byte-identical output.
 
@@ -224,6 +228,12 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 - Capability validation follows CAP-01 after schema validation and before any secret or network access.
 
 **CFG-15 (validation order)** — Boot order MUST be: parse bootstrap flags → read tiers 1–7 → merge/reset → schema and cross-field validation → capability validation → establish the fail-closed auth state required by SEC-03 → construct components → bind the server → start dependency reconcilers. No listening socket may open before configuration/capability validation and API-key validation complete.
+
+**CFG-16 (minimum viable env set)** — A working runtime MUST be achievable from environment variables alone with no config file present: the only required schema leaves are `name`, `engine.systemInstruction`, and `llm.model` (plus the chosen provider's credential, per SEC-03/LLM-04), and every one of them is env-bindable. All other leaves have schema defaults. `AGENT_BUNDLED_DIR` pointing at an empty directory therefore boots when the required leaves are supplied via env (E1-2 decision: schema defaults stand alone; tier 1 remains the release-tested operational default per BASE-01, not a load-bearing requirement).
+
+**CFG-17 (env-var catalog)** — `--print-env` (CFG-10b) MUST emit every bindable path with its canonical `AGENT_*` name, short aliases, type, default, and SEC-02 secret marker. The repository MUST ship `docs/env-reference.md` generated from the same catalog code and keep it zero-diff in CI (mirroring the SCH-02 gate).
+
+**CFG-18 (binding diagnostics)** — Every env-bound leaf's provenance MUST name the specific variable (`# tier 5: env:AGENT_LLM_MODEL`), not just the tier. Unmatched `AGENT_*` variables MUST additionally be counted in a single boot summary line after the individual CFG-08 warnings.
 
 ---
 
@@ -277,6 +287,7 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 | `provider` | enum | `"gemini"` | `gemini \| openai \| anthropic \| ollama \| litellm` |
 | `model` | str | — **required** | 1..256 code points; MUST NOT be validated against a hardcoded model list |
 | `apiKey(Env/File)` | secret ref pair | unset | |
+| `autoApiKeyEnv` | bool | `false` | Opt-in per-provider credential-variable inference (LLM-04) |
 | `baseUrl` | str | `""` | Required for `ollama` (CFG-14); optional custom endpoint otherwise |
 | `contextWindowTokens` | int | `0` | `0` = unknown; otherwise `> engine.maxTokens` and used by ENG-04 |
 | `vertex.enabled` | bool | `false` | `gemini` only: use Vertex AI with Application Default Credentials instead of API key |
@@ -287,6 +298,8 @@ Thus `AGENT_ENGINE_SYSTEM_INSTRUCTION` binds to `engine.systemInstruction` and `
 **LLM-01** — `provider: gemini` with `vertex.enabled: false` MUST use ADK's native Gemini model with the API key. `vertex.enabled: true` MUST use ADC (no key required). All other providers MUST be constructed via ADK's LiteLLM bridge with the LiteLLM model string formed as: `openai` → `openai/{model}`, `anthropic` → `anthropic/{model}`, `ollama` → `ollama_chat/{model}` (with `api_base = baseUrl`), `litellm` → `{model}` used verbatim (escape hatch for any LiteLLM-supported provider).
 **LLM-02** — Missing or invalid model credentials MUST NOT crash boot unless those credentials also protect runtime authentication under SEC-03. A missing required credential sets health `llm.status: "unavailable"`; present but untested credentials start `"unknown"`; a successful call sets `"available"`; a provider authentication failure sets `"unavailable"`. Each request re-resolves a file-backed point-of-use credential, so that unavailable state is not sticky after projected-file rotation; env-backed values remain the process-start snapshot under SEC-04 and require restart. A still-missing/invalid credential fails that request with `provider_auth` without secret detail (health-status implications are governed by API-03).
 **LLM-03** — A provider call that fails before any response delta MAY be retried at most twice for transport errors, HTTP 429, or HTTP 5xx. Backoff is 1 s then 2 s plus 0–250 ms jitter and MUST honor a longer valid `Retry-After`, all within the run deadline. Once a delta has been emitted or a tool call has begun, that call MUST NOT be automatically replayed. Provider authentication, invalid requests, content-policy failures, and quota/billing failures are not retried. There is no cross-model fallback.
+
+**LLM-04 (credential-variable inference, opt-in)** — When `llm.autoApiKeyEnv` is `true` and neither `llm.apiKeyEnv` nor `llm.apiKeyFile` is set, the runtime MUST infer the credential variable name from a deterministic per-provider table: `gemini` → `GEMINI_API_KEY`, `openai` → `OPENAI_API_KEY`, `anthropic` → `ANTHROPIC_API_KEY`; providers without a key contract (`ollama`, `litellm`, vertex ADC) MUST NOT infer. An inferred-but-absent variable is a boot validation error naming the variable (SEC-03 fail-closed, never a silent keyless start). Explicit `apiKeyEnv`/`apiKeyFile` always wins over inference. The OBS-03 startup line MUST name the variable used, never its value.
 
 #### `tools.mcpServers[]`
 

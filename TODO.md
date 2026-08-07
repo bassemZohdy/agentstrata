@@ -7,8 +7,9 @@ review-loop follow-ups, and the six stragglers (R-03/R-12/R-19/R-21/
 R-25/R-33) all landed; see CHANGELOG.md ("2026-08-06 review backlog —
 closed" and "2026-08-06 review stragglers — closed"). Per-commit
 verification narratives are in [docs/review-log.md](docs/review-log.md).
-This file tracks only what is **still open**: the two planned-scope
-epics (E1, E2) below. Resolved decisions live in
+This file tracks only what is **still open**: the planned-scope epic
+E2 (full provider coverage) below — E1 (env-first configuration) was
+completed on 2026-08-07. Resolved decisions live in
 [docs/decisions.md](docs/decisions.md); requirement IDs trace to
 [REQUIREMENTS.md](REQUIREMENTS.md); build order and rationale are in
 [PLAN.md](PLAN.md).
@@ -21,7 +22,7 @@ verification narratives, `9408092` → `6af55be`) lives in
 
 ---
 
-# Planned scope — minimal configuration + full model coverage
+# Planned scope — E1 done (env-first configuration); E2 open (full provider coverage)
 *Restored 2026-08-07 by the review loop: the `# Planned scope` heading,
 this preamble, the Baseline section, and the `## E1` heading below were
 dropped incidentally by `6af55be` (a straggler-closing commit), which
@@ -77,97 +78,76 @@ names and sane defaults — no YAML authoring required.
 
 ### E1-1 Publish the env-var catalog (currently undocumented)
 
-The variable names are derivable only by reading the resolver. No doc,
-README table, or CLI command lists them; `AGENT_LLM_MODEL` appears
-nowhere in `docs/` or `README.md`.
-
-- [ ] Add a `--print-env` (or `--dump-env`) CLI action to
-      `app/config/cli.py` that emits every bindable path with its
-      `AGENT_*` name, type, default, and whether it is secret.
-- [ ] Generate `docs/env-reference.md` from the schema via a script in
-      `scripts/` (mirroring `scripts/gen-schemas.py`).
-- [ ] Add a CI zero-diff gate for the generated reference, exactly like
-      the existing "Schema zero-diff (SCH-02, DEL-02)" step.
-- [ ] Redact secret-bearing entries per SEC-02 (`is_sensitive_key`).
+- [x] Done: `--print-env` (CFG-10b) emits every bindable path with its
+      canonical `AGENT_*` name, short aliases, type, default (or
+      `required`), and SEC-02 secret marker — schema-derived, no config
+      resolution, mutually exclusive with --validate/--dump-config.
+      `scripts/gen-env-reference.py` generates `docs/env-reference.md`
+      from the SAME catalog code (CFG-17); CI zero-diff step added
+      next to the schema gate.  The required-leaf audit (E1-2) is
+      visible in the catalog: exactly `name`, `engine`,
+      `engine.systemInstruction`, `llm`, `llm.model` are `required`;
+      optional secret refs show `null` defaults.
 
 ### E1-2 Guarantee and document the minimum viable env set
 
-- [ ] Audit every schema leaf for a usable default; list the ones with
-      no default (today `llm.model` and `name` are the load-bearing ones,
-      supplied by tier 1 rather than by field defaults).
-- [ ] Decide whether schema defaults should stand alone without tier 1,
-      so `AGENT_BUNDLED_DIR` pointing nowhere still boots.
-- [ ] Document the true minimum per provider (e.g. gemini: one API key;
-      openai: key + model) in README Quick start.
-- [ ] Test: boot with **only** env vars and no config file at all.
+- [x] Done: tier 1 is now SKIPPED when the bundled `agent.yaml` is
+      absent (CFG-16; the release image still ships it per BASE-01), so
+      `AGENT_BUNDLED_DIR` pointing at an empty directory boots from the
+      three required leaves + credential supplied via env.  Decision
+      recorded in `docs/decisions.md` (schema defaults stand alone;
+      `name` stays required — SCH-02 treats changing defaults as a
+      schema-major change).  Tests: env-only boot (empty bundled dir),
+      missing-required-leaf failure, collection config via
+      `AGENT_APPLICATION_JSON` from env alone.
 
 ### E1-3 Collection config is not env-bindable
 
-`iter_schema_fields` marks list-of-model and passthrough keys
-non-bindable, so `tools.mcpServers`, `agents`, and `costs.models` cannot
-be set by discrete env vars — only wholesale through
-`AGENT_APPLICATION_JSON`.
-
-- [ ] Choose one: (a) an indexed convention
-      (`AGENT_TOOLS_MCPSERVERS_0_NAME=…`), (b) a compact per-entry DSL
-      (`AGENT_MCP_SERVERS="fs=stdio:npx -y @mcp/fs"`), or (c) keep JSON
-      as the only path.
-- [ ] If (c), make the unmatched-variable warning name
-      `AGENT_APPLICATION_JSON` explicitly so the dead end is signposted.
-- [ ] Preserve CFG-07 ambiguity detection under whichever scheme wins.
-- [ ] Tests: multi-server MCP + multi-agent config from env alone.
+- [x] Done: decision (c) — JSON (`AGENT_APPLICATION_JSON`) remains the
+      only per-item path; recorded in `docs/decisions.md` + CFG-08.  A
+      list-index-shaped `AGENT_*` variable now warns that collection
+      items are not env-bindable and names `AGENT_APPLICATION_JSON`.
+      CFG-07 ambiguity detection untouched (aliases share the index).
+      Tests: signpost warning; multi-server MCP from env alone.
 
 ### E1-4 Short aliases for the high-traffic knobs
 
-`AGENT_ENGINE_SYSTEM_INSTRUCTION` and `AGENT_LLM_MODEL` are long; a
-minimal-config story wants `AGENT_MODEL`, `AGENT_INSTRUCTION`,
-`AGENT_API_KEY`, `AGENT_PROVIDER`.
-
-- [ ] Define a small, closed alias table (not a heuristic) mapping short
-      names to schema paths.
-- [ ] Aliases must lose to the fully-qualified name and must participate
-      in `AmbiguousEnvError`.
-- [ ] Record the alias set in `docs/decisions.md` — it is a frozen
-      surface once published.
-- [ ] Tests: alias binds, alias+canonical conflict, alias precedence.
+- [x] Done: closed table `AGENT_MODEL` / `AGENT_INSTRUCTION` /
+      `AGENT_API_KEY` / `AGENT_PROVIDER` (CFG-07 item 4, frozen —
+      recorded in `docs/decisions.md`).  Canonical names win over
+      aliases regardless of OS env order; aliases participate in
+      ambiguity detection via the shared binding index.  Tests:
+      alias binds, canonical-wins both orders, alias api-key bind,
+      unique-bind-no-ambiguity.
 
 ### E1-5 Provider key auto-detection (opt-in)
 
-Today `llm.apiKeyEnv` must name the variable. A minimal setup would infer
-`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`GEMINI_API_KEY` from the provider.
-
-- [ ] Per-provider default `apiKeyEnv` when unset (deterministic table,
-      no scanning of the environment).
-- [ ] Keep SEC-03 fail-closed: an inferred-but-absent key still fails
-      validation at boot with a clear message.
-- [ ] Emit an OBS-03 startup line naming the *variable* used, never the
-      value.
-- [ ] Tests: inference per provider; explicit config always wins.
+- [x] Done: `llm.autoApiKeyEnv` (default false, LLM-04) — deterministic
+      inference table (`gemini` → `GEMINI_API_KEY`, `openai` →
+      `OPENAI_API_KEY`, `anthropic` → `ANTHROPIC_API_KEY`; `ollama` /
+      `litellm` / vertex-ADC infer nothing).  Inferred-but-absent
+      variable fails boot with the variable name (SEC-03 fail-closed,
+      CLI + runtime main); explicit refs always win; the OBS-03
+      connector log names the variable, never the value.  Tests:
+      table per provider, absent → exit 78, present → exit 0, connector
+      resolves the inferred name.
 
 ### E1-6 Binding diagnostics
 
-- [ ] Extend `--dump-config` provenance (already tracks tier + source) to
-      a human-readable "what bound from where" report for env tiers.
-- [ ] Promote unmatched-`AGENT_*` warnings to a boot summary line rather
-      than scattered warnings.
-- [ ] Tests: provenance shows tier 5/6/7 attribution correctly.
+- [x] Done: every env-bound leaf's provenance names the SPECIFIC
+      variable (`# tier 5: env:AGENT_LLM_MODEL`, aliases name the alias
+      var; null resets keep their reset flag) — CFG-18.  Unmatched
+      `AGENT_*` warnings get one boot summary line after the individual
+      CFG-08 warnings.  Tests: provenance var naming, summary line
+      absent/present.
 
 ### E1-7 Documentation
 
-- [ ] README: a "zero-file agent" quick start next to the existing
-      8-tier table.
-- [ ] `docs/deployment.md`: env-only Kubernetes/Compose examples.
-- [ ] Update `docs/traceability.md` for CFG-07/CFG-08 once the surface
-      changes.
-
-## E2 — Full LLM model and integration coverage
-
-Goal: every mainstream provider is first-class and validated, not just
-reachable through the `litellm` verbatim escape hatch.
-
-**Sequencing note:** E2-1 through E2-4 are one unit — adding providers
-without their credential contracts and cross-field validation produces
-configs that pass validation and fail at first token.
+- [x] Done: README "Zero-file agent" quick start (aliases + inferred
+      credential examples, link to docs/env-reference.md); deployment.md
+      env-only configuration section + env-only Kubernetes Deployment
+      example; traceability regenerated for CFG-10b/16/17/18 + LLM-04
+      (189 IDs mapped).
 
 ### E2-1 Expand the first-class provider set (LLM-01)
 

@@ -1,11 +1,11 @@
 """CLI surface (REQUIREMENTS.md CFG-10, CFG-10a, CFG-11, CFG-11a).
 
 Entrypoint accepts ``--<dotted.path>=<value>`` for any bindable schema path
-plus the bootstrap flags ``--profile``, ``--config-dir``, ``--dump-config``,
-``--validate``, ``--version``, and ``--help``. Exit codes: 0 ok, 64
-EX_USAGE (unknown paths / positional args / malformed flags), 78 EX_CONFIG
-(configuration failure). ``--validate`` and ``--dump-config`` are mutually
-exclusive.
+plus the bootstrap flags ``--profile``, ``--config-dir``, ``--print-env``,
+``--dump-config``, ``--validate``, ``--version``, and ``--help``. Exit
+codes: 0 ok, 64 EX_USAGE (unknown paths / positional args / malformed
+flags), 78 EX_CONFIG (configuration failure). ``--validate``,
+``--dump-config``, and ``--print-env`` are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ BOOTSTRAP_FLAGS = (
     "--config-dir <absolute-path>",
     "--validate",
     "--dump-config",
+    "--print-env",
     "--version",
     "--help",
 )
@@ -42,6 +43,7 @@ Bootstrap flags:
   --config-dir <path>         Absolute config directory (tier 3/4, default /etc/agent)
   --validate                  Resolve + validate tiers 1-7, print OK, exit without starting
   --dump-config               Resolve + validate, print canonical masked YAML, exit
+  --print-env                 Print the schema-derived AGENT_* catalog (CFG-17) and exit
   --version                   Print runtime version and exit without loading config
   --help                      Show this help and exit
 
@@ -57,11 +59,13 @@ Exit codes:
 
 
 def _bootstrap(argv: list[str]) -> tuple[str | None, str | None, str | None, str | None]:
-    """Extract --profile/--config-dir/--validate/--dump-config/--version/--help.
+    """Extract --profile/--config-dir/--validate/--dump-config/--print-env/
+    --version/--help.
 
     Returns (profile, config_dir, action, help_flag). Dotted-path and
-    positional arguments are left untouched for tier-7 parsing. ``--validate``
-    and ``--dump-config`` are mutually exclusive (CFG-10a).
+    positional arguments are left untouched for tier-7 parsing.
+    ``--validate``, ``--dump-config``, and ``--print-env`` are mutually
+    exclusive (CFG-10a/10b).
     """
     profile: str | None = None
     config_dir: str | None = None
@@ -69,6 +73,7 @@ def _bootstrap(argv: list[str]) -> tuple[str | None, str | None, str | None, str
     help_flag: str | None = None
     has_validate = False
     has_dump = False
+    has_print_env = False
     for arg in argv:
         if arg == "--validate":
             action = "validate"
@@ -76,6 +81,9 @@ def _bootstrap(argv: list[str]) -> tuple[str | None, str | None, str | None, str
         elif arg == "--dump-config":
             action = "dump"
             has_dump = True
+        elif arg == "--print-env":
+            action = "print-env"
+            has_print_env = True
         elif arg == "--version":
             action = "version"
         elif arg == "--help" or arg == "-h":
@@ -95,8 +103,8 @@ def _bootstrap(argv: list[str]) -> tuple[str | None, str | None, str | None, str
             profile = argv[i + 1]
         if arg == "--config-dir" and i + 1 < len(argv):
             config_dir = argv[i + 1]
-    if has_validate and has_dump:
-        raise UsageError("--validate and --dump-config are mutually exclusive")
+    if sum((has_validate, has_dump, has_print_env)) > 1:
+        raise UsageError("--validate, --dump-config and --print-env are mutually exclusive")
     return profile, config_dir, action, help_flag
 
 
@@ -108,6 +116,7 @@ def _check_usage(argv: list[str]) -> None:
         if arg in (
             "--validate",
             "--dump-config",
+            "--print-env",
             "--version",
             "--help",
             "-h",
@@ -124,7 +133,15 @@ def _check_usage(argv: list[str]) -> None:
             continue
         if arg.startswith("--") and "=" in arg:
             path = arg[2:].split("=", 1)[0]
-            if path in ("profile", "config-dir", "validate", "dump-config", "version", "help"):
+            if path in (
+                "profile",
+                "config-dir",
+                "validate",
+                "dump-config",
+                "print-env",
+                "version",
+                "help",
+            ):
                 raise UsageError(f"flag {path!r} does not take a value")
             i += 1
             continue  # dotted paths validated by the resolver
@@ -202,6 +219,13 @@ def run(
     if action == "version":
         print(_version_string())
         return EX_OK
+    # CFG-10b: the catalog is schema-derived — no config resolution, so a
+    # broken deployment config cannot hide it.
+    if action == "print-env":
+        from .env_catalog import render_catalog
+
+        sys.stdout.write(render_catalog())
+        return EX_OK
 
     try:
         res = resolve(
@@ -223,6 +247,18 @@ def run(
 
     for warning in result.warnings:
         print(f"warning: {warning}", file=sys.stderr)
+    # CFG-18 (E1-6): one boot summary line after the individual CFG-08
+    # warnings so unmatched-variable volume is visible at a glance.
+    unmatched = sum(
+        1
+        for w in result.warnings
+        if w.startswith("environment variable AGENT_") and "matches no schema path" in w
+    )
+    if unmatched:
+        print(
+            f"warning: {unmatched} unmatched AGENT_* variable(s) ignored (CFG-08)",
+            file=sys.stderr,
+        )
 
     if action == "validate":
         if result.ok:
@@ -249,6 +285,14 @@ def run(
     # MODE-01..04 selection is part of boot; expose it here for the runtime.
     if result.config is None:
         raise RuntimeError("validated config unexpectedly None")
+    # LLM-04 (E1-5): opt-in credential-variable inference is fail-closed —
+    # an inferred-but-absent variable is a boot error naming the variable.
+    from .validate import auto_api_key_error
+
+    api_key_error = auto_api_key_error(result.config, dict(__import__("os").environ))
+    if api_key_error is not None:
+        print(f"configuration error: {api_key_error}", file=sys.stderr)
+        return EX_CONFIG
     try:
         selected_mode, mode_warnings = mode_mod.select_mode(
             result.config, dict(__import__("os").environ)

@@ -243,9 +243,13 @@ def load_file_tiers(
     docs: list[tuple[int, dict[str, Any], str]] = []
     warnings: list[str] = []
 
-    # Tier 1 — bundled base (MUST exist, CFG-01).
+    # Tier 1 — bundled base (CFG-01; E1-2/CFG-16: skipped when absent so
+    # env-only boot works — the release image still ships it per BASE-01).
     tier1 = Path(bundled_dir) / "agent.yaml"
-    docs.append((1, parse.parse_file(tier1), str(tier1)))
+    if tier1.is_file():
+        docs.append((1, parse.parse_file(tier1), str(tier1)))
+    else:
+        warnings.append(f"bundled config {tier1} not found; continuing with tiers 2-7 (CFG-16)")
 
     # Tier 2 — bundled profile (skipped if absent).
     if profile:
@@ -281,15 +285,58 @@ def load_file_tiers(
 # ---------------------------------------------------------------------------
 
 
+# E1-4 (CFG-07 item 4): closed short-alias table — FROZEN once
+# published.  Keys are the env-var suffix after ``AGENT_``; values are
+# target schema paths.  Canonical names win over aliases (bind_env).
+ENV_ALIASES: dict[str, str] = {
+    "MODEL": "llm.model",
+    "INSTRUCTION": "engine.systemInstruction",
+    "API_KEY": "llm.apiKeyEnv",
+    "PROVIDER": "llm.provider",
+}
+
+
 def _build_binding_index() -> dict[str, list[tuple[str, str, str, Any]]]:
-    """Map stripped env alias -> [(canonical env name, path, kind, ann)]."""
+    """Map stripped env alias -> [(canonical env name, path, kind, ann)].
+
+    Includes the closed short-alias table (E1-4, CFG-07 item 4) — the
+    alias entries are ordinary index entries, so they participate in
+    ambiguity detection; canonical-wins is enforced by ``bind_env``.
+    """
     index: dict[str, list[tuple[str, str, str, Any]]] = {}
+    by_path: dict[str, tuple[str, Any]] = {}
     for path, kind, ann, bindable in iter_schema_fields(AgentConfig):
         if not bindable:
             continue  # CFG-07: list-item paths are not bindable
         alias = camel_to_env_alias(path)
         index.setdefault(_strip(alias.removeprefix("AGENT_")), []).append((alias, path, kind, ann))
+        by_path[path] = (kind, ann)
+    for short, target in ENV_ALIASES.items():
+        kind, ann = by_path[target]
+        index.setdefault(_strip(short), []).append((f"AGENT_{short}", target, kind, ann))
     return index
+
+
+def _canonically_bound_paths(env: dict[str, str], index: dict) -> set[str]:
+    """Paths for which a CANONICAL AGENT_* variable exists in the env.
+
+    CFG-07 item 4: a canonical name always wins over an alias for the
+    same target path, regardless of OS enumeration order — so alias
+    entries for these paths are skipped in bind_env.
+    """
+    bound: set[str] = set()
+    for var in env:
+        if not var.upper().startswith("AGENT_") or var.upper() in {r.upper() for r in RESERVED_ENV}:
+            continue
+        suffix = var[len("AGENT_") :]
+        candidates = index.get(_strip(suffix), [])
+        for _, path, _, _ in candidates:
+            # canonical name = the schema-derived env alias of the target
+            # path — an exact-match var whose name IS that alias; alias
+            # entries (AGENT_MODEL etc.) never count as canonical.
+            if var.upper() == camel_to_env_alias(path).upper():
+                bound.add(path)
+    return bound
 
 
 def bind_env(
@@ -305,6 +352,7 @@ def bind_env(
     var_to_path: dict[str, str] = {}
     index = _build_binding_index()
     all_paths = [p for p, _, _, _ in iter_schema_fields(AgentConfig)]
+    canonical_bound = _canonically_bound_paths(env, index)
 
     for var, value in env.items():
         if not var.upper().startswith("AGENT_") or var.upper() in {r.upper() for r in RESERVED_ENV}:
@@ -320,16 +368,34 @@ def bind_env(
                 warnings.append(
                     f"environment variable {var} matches no schema path{hint}; value not logged"
                 )
+            elif _looks_like_list_index(suffix):
+                # E1-3 (CFG-08): collection items are not env-bindable —
+                # signpost the JSON transport so the dead end is explicit.
+                warnings.append(
+                    f"environment variable {var} matches no schema path{hint}; "
+                    f"collection items are not env-bindable — use "
+                    f"AGENT_APPLICATION_JSON instead"
+                )
             else:
                 warnings.append(f"environment variable {var} matches no schema path{hint}; ignored")
             continue
         if len(candidates) > 1:
             targets = sorted({c[1] for c in candidates})
             raise AmbiguousEnvError(f"environment variable {var} is ambiguous: binds {targets}")
-        alias, path, kind, ann = candidates[0]
+        _, path, kind, ann = candidates[0]
+        if path in canonical_bound and var.upper() != camel_to_env_alias(path).upper():
+            # E1-4 (CFG-07 item 4): an alias loses to the canonical name
+            # for the same target path, regardless of env order.
+            continue
         _set_path(doc, path, value, kind, ann, source=f"env:{var}", warnings=warnings)
         var_to_path[var] = path
     return doc, var_to_path
+
+
+def _looks_like_list_index(suffix: str) -> bool:
+    """CFG-08 (E1-3): ``…_0_NAME`` / ``…_0`` — the shape an indexed
+    collection convention would use."""
+    return bool(re.search(r"_\d+($|_)", suffix))
 
 
 def _set_path(
@@ -431,8 +497,18 @@ def resolve(
         _apply_tier(merged, prov, doc, tier, source)
 
     # Tier 5 — environment.
-    env_doc, _ = bind_env(env, warnings)
+    env_doc, var_to_path = bind_env(env, warnings)
     _apply_tier(merged, prov, env_doc, 5, "env")
+    # CFG-18 (E1-6): name the SPECIFIC variable in every env-bound leaf's
+    # provenance (`# tier 5: env:AGENT_LLM_MODEL`), not just the tier.
+    for var, path in var_to_path.items():
+        source = f"env:{var}"
+        for leaf in list(prov):
+            if leaf == path or leaf.startswith(path + "."):
+                # CFG-06 null resets keep their reset flag (label reads
+                # "reset-to-default"); only the source names the variable.
+                existing = prov[leaf]
+                prov[leaf] = Provenance(tier=5, reset=existing.reset, source=source)
 
     # Tier 6 — AGENT_APPLICATION_JSON (invalid JSON is fatal, CFG-01).
     inline = env.get("AGENT_APPLICATION_JSON")

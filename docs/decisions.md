@@ -113,3 +113,55 @@ satisfy a requirement ID to this file.
 - **Status:** resolved (2026-08-06, R-33).  Tests:
   `tests/test_engine/test_overrides.py` + `TestOverrideApplication` in
   test_api.py (seam applies + strips labels; caps rejected end to end).
+
+## E1 — env-first configuration decisions (2026-08-07)
+
+### E1-2: schema defaults stand alone; tier 1 stays the operational default
+
+- **Decision:** the required schema leaves stay required — `name`,
+  `engine.systemInstruction`, `llm.model` (all env-bindable) — and
+  `AGENT_BUNDLED_DIR` pointing at an empty directory boots when they are
+  supplied via env (CFG-16).  `name` was NOT given a schema default:
+  SCH-02 treats changing defaults as a schema-major change, and the
+  bundled tier-1 `config/agent.yaml` already supplies the release-tested
+  values (BASE-01).  Everything else has schema defaults, so the
+  minimum viable env set is three leaves + the provider credential.
+- **Status:** resolved (E1-2).
+
+### E1-3: collections stay JSON-only, with an explicit signpost
+
+- **Decision:** option (c) — `AGENT_APPLICATION_JSON` remains the only
+  per-item path for collections (`tools.mcpServers`, `agents`,
+  `costs.models`).  Indexed-convention (a) and per-entry-DSL (b) would
+  each become a frozen binding surface maintained forever, with nested
+  list-of-model fields (e.g. `mcpServers[].args`) making (a) explode
+  combinatorially and (b) adding a mini-language to parse and validate.
+  JSON is the config's native form and already reachable from env
+  alone.  CFG-08 now signposts the dead end: a list-index-shaped
+  `AGENT_*` variable (suffix contains `_<digits>_` / ends `_<digits>`)
+  warns that collection items are not env-bindable and names
+  `AGENT_APPLICATION_JSON`.
+- **Status:** resolved (E1-3); recorded in REQUIREMENTS 2.6 (CFG-08).
+
+### E1-4: short-alias table (frozen surface)
+
+- **Decision:** the closed alias table is exactly four entries —
+  `AGENT_MODEL` → `llm.model`, `AGENT_INSTRUCTION` →
+  `engine.systemInstruction`, `AGENT_API_KEY` → `llm.apiKeyEnv`,
+  `AGENT_PROVIDER` → `llm.provider`.  Canonical names always win over
+  aliases for the same target path (regardless of OS env order); aliases
+  participate in ambiguity detection.  This set is FROZEN once
+  published — additions are possible, removals are not (CFG-07 item 4).
+- **Status:** resolved (E1-4).
+
+### E1-5: opt-in credential-variable inference
+
+- **Decision:** new `llm.autoApiKeyEnv: bool = false` (opt-in per
+  LLM-04).  When enabled and no `apiKeyEnv`/`apiKeyFile` is set, the
+  variable name is inferred from a deterministic table (`gemini` →
+  `GEMINI_API_KEY`, `openai` → `OPENAI_API_KEY`, `anthropic` →
+  `ANTHROPIC_API_KEY`; `ollama`/`litellm`/vertex-ADC infer nothing).
+  An inferred-but-absent variable fails boot validation naming the
+  variable (SEC-03 fail-closed) — never a silent keyless start.  The
+  OBS-03 startup line names the variable, never the value.
+- **Status:** resolved (E1-5).

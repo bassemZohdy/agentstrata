@@ -30,6 +30,36 @@ Or bring up the full stack — runtime plus Redis, PostgreSQL, and a sample MCP 
 docker compose up -d --build    # runtime: http://localhost:8080
 ```
 
+**Zero-file agent (E1):** no config file needed at all — the three required
+leaves plus a credential are all env-bindable (CFG-16). Short aliases
+`AGENT_MODEL` / `AGENT_INSTRUCTION` / `AGENT_PROVIDER` / `AGENT_API_KEY`
+lose to the canonical names (CFG-07):
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e AGENT_NAME=my-agent \
+  -e AGENT_INSTRUCTION="You are a terse assistant." \
+  -e AGENT_PROVIDER=openai \
+  -e AGENT_MODEL=gpt-4o-mini \
+  -e AGENT_API_KEY=OPENAI_API_KEY \
+  -e OPENAI_API_KEY=... \
+  agentbase:latest
+```
+
+or let the credential variable be inferred (`llm.autoApiKeyEnv`, opt-in —
+an inferred-but-absent variable fails boot, SEC-03):
+
+```bash
+docker run --rm -p 8080:8080 -e GEMINI_API_KEY=... \
+  -e AGENT_NAME=my-agent -e AGENT_INSTRUCTION="Be terse." \
+  -e AGENT_MODEL=gemini-2.5-flash -e AGENT_LLM_AUTO_API_KEY_ENV=true \
+  agentbase:latest
+```
+
+The full `AGENT_*` catalog (every bindable variable, default, and secret
+marker) is in [docs/env-reference.md](docs/env-reference.md); `--print-env`
+prints it from the schema.
+
 ## How you configure it
 
 Everything is one Agent Definition, merged from **8 precedence tiers** (highest tier that supplies a leaf wins):

@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..security import redact
 from . import models
-from .models import AgentConfig
+from .models import INFERRED_API_KEY_ENV, AgentConfig
 from .resolver import Resolution
 
 # Schema defaults as a camelCase document. Built by validating a minimal
@@ -395,6 +395,49 @@ def _capability(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def effective_api_key_env(doc: dict[str, Any]) -> str | None:
+    """LLM-04 (E1-5): the credential VARIABLE NAME that will be used.
+
+    Explicit ``llm.apiKeyEnv``/``llm.apiKeyFile`` always win; otherwise,
+    when ``llm.autoApiKeyEnv`` is on, the deterministic per-provider
+    table applies.  Returns ``None`` when no env ref applies (provider
+    without a key contract, vertex ADC, or inference disabled).
+    """
+    llm_raw = doc.get("llm")
+    llm: dict[str, Any] = llm_raw if isinstance(llm_raw, dict) else {}
+    if llm.get("apiKeyEnv") or llm.get("apiKeyFile"):
+        return None
+    if not llm.get("autoApiKeyEnv"):
+        return None
+    provider = llm.get("provider")
+    vertex_raw = llm.get("vertex")
+    vertex: dict[str, Any] = vertex_raw if isinstance(vertex_raw, dict) else {}
+    if provider == "gemini" and vertex.get("enabled"):
+        return None  # ADC — no key
+    return INFERRED_API_KEY_ENV.get(str(provider)) if provider else None
+
+
+def auto_api_key_error(config: AgentConfig, env: dict[str, str]) -> str | None:
+    """LLM-04/SEC-03 fail-closed check: returns an error message (or None)
+    when opt-in inference names a credential variable that is not set —
+    boot MUST fail, never start keyless."""
+    llm = config.llm
+    if not llm.autoApiKeyEnv or llm.apiKeyEnv or llm.apiKeyFile:
+        return None
+    inferred = effective_api_key_env(config.model_dump(by_alias=True, mode="json"))
+    if inferred is None:
+        return (
+            f"llm.autoApiKeyEnv: provider {llm.provider.value!r} has no "
+            f"credential-variable contract (LLM-04)"
+        )
+    if inferred not in env:
+        return (
+            f"llm.autoApiKeyEnv: inferred credential variable {inferred} is "
+            f"not set (SEC-03 fail-closed)"
+        )
+    return None
 
 
 def validate_resolution(res: Resolution) -> ValidationResult:
