@@ -44,6 +44,13 @@ deterministic):
   silently clamped.  Decision recorded in `docs/decisions.md`.  Tests:
   `tests/test_engine/test_overrides.py` + `TestOverrideApplication`.
 
+- **Docs cleanup (2026-08-07):** the six closed sections were retired
+  from TODO.md — this entry is their record; TODO.md now tracks only the
+  planned-scope epics (E1, E2) and deferred scope.  The review log
+  gained the `6af55be` incident row (the commit incidentally dropped the
+  planned-scope headings; restored verbatim by the review loop and
+  re-verified).
+
 ### 2026-08-06 review backlog (R-01…R-32) — closed
 
 Full-project review backlog from 2026-08-06: **closed**. 27 items plus
