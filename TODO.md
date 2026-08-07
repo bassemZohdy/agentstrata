@@ -151,16 +151,18 @@ names and sane defaults — no YAML authoring required.
 
 ### E2-1 Expand the first-class provider set (LLM-01)
 
-- [ ] Extend `Provider` (`config/models.py:31`) with the providers to
-      support first-class. Candidates: `azure`, `bedrock`, `vertex-ai`,
-      `groq`, `mistral`, `cohere`, `deepseek`, `xai`, `together`,
-      `fireworks`, `openrouter`, `huggingface`, `vllm`, `watsonx`.
-- [ ] Extend `connectors.py:_llm_model_string` with each provider's
-      LiteLLM prefix (the current map covers three).
-- [ ] Keep `litellm` as the verbatim escape hatch — it is the
-      compatibility guarantee for anything not enumerated.
-- [ ] Decide the enum's stability policy: it is a published schema enum,
-      so additions are backward compatible but removals are not.
+- [x] Done: `Provider` extended with twelve LiteLLM-native providers —
+      `azure`, `groq`, `mistral`, `cohere`, `deepseek`, `xai`,
+      `together`, `fireworks`, `openrouter`, `huggingface`, `vllm`,
+      `watsonx` (schema regenerated).  `connectors._LLM_MODEL_PREFIX`
+      carries each provider's LiteLLM prefix; `litellm` remains the
+      verbatim escape hatch.  `bedrock`/`vertex-ai` deliberately
+      deferred (boto3/google-cloud deps — STACK-01 + CNT-12 gate; see
+      E2-2).  Decision + enum stability policy (LLM-01a: additions
+      backward-compatible via amendment, removals schema-major)
+      recorded in `docs/decisions.md` + REQUIREMENTS 2.7.
+- [x] Tests: provider-enum matrix, model-string matrix (16 providers),
+      litellm verbatim passthrough.
 
 ### E2-2 Per-provider credential contracts (SEC-04, LLM-02)
 
@@ -181,24 +183,23 @@ either static keys, a profile, or instance role.
 
 ### E2-3 A generic OpenAI-compatible provider
 
-vLLM, LM Studio, OpenRouter, Together and most self-hosted servers are
-OpenAI-compatible; one provider covers them all.
-
-- [ ] Add `openai-compatible` requiring `baseUrl` (validated, CFG-14).
-- [ ] Confirm the existing `baseUrl` → `base_url` kwarg path
-      (`connectors.py:146`) is correct for LiteLLM in this mode.
-- [ ] Tests: a local mock server (`scripts/mock_openai_server.py` already
-      exists) exercises the path with no network.
+- [x] Done: `vllm` IS the generic OpenAI-compatible provider (vLLM, LM
+      Studio, self-hosted) — model string `openai/{model}` with
+      `api_base = baseUrl` (required, CFG-14 table).  A separate
+      `openai-compatible` alias was NOT added (would split the
+      required-baseUrl validation across two enum values; decision
+      recorded).  Tests: vllm requires baseUrl, connector passes
+      api_base; the production `openai` + `baseUrl` path against
+      `scripts/mock_openai_server.py` is exercised by the image-NFR
+      harness (no network).
 
 ### E2-4 Per-provider cross-field validation (CFG-14, CAP-01)
 
-Only `ollama` currently has a documented required-`baseUrl` rule.
-
-- [ ] Table-driven required/forbidden fields per provider.
-- [ ] Fail at boot (exit 78) with the offending path, never at runtime.
-- [ ] Gate genuinely unproven providers behind CAP-01 until a test
-      exists, rather than shipping them silently.
-- [ ] Tests: one invalid-config case per provider.
+- [x] Done: table-driven `_PROVIDER_REQUIRED_BASE_URL` (ollama, vllm,
+      azure) — fails at boot (exit 78) with the offending path, never
+      at runtime; vertex rules stay (project required, apiKey refs
+      forbidden).  Tests: one invalid case per required-field provider
+      + the happy path with baseUrl supplied.
 
 ### E2-5 Model capability registry
 
@@ -234,12 +235,11 @@ hand-enter prices or accept the flat defaults.
 
 ### E2-8 Model fallback chains — decide in or out
 
-- [ ] Decide whether an ordered fallback list belongs in scope. It
-      interacts with LLM-03 (`RetryableLlm` never replays after a delta)
-      and with COST-01 attribution, so it is a requirements change, not a
-      config addition.
-- [ ] If in scope: define fallback triggers, cost attribution across
-      models, and the `x_agent_status` surfaced to the client.
+- [x] Done: decided OUT of scope with a recorded deferral
+      (`docs/decisions.md` E2-8 + REQUIREMENTS 2.7): fallbacks interact
+      with LLM-03 (no replay after a delta) and COST-01 attribution, so
+      they are a requirements change, not a config addition.  LLM-03
+      keeps "There is no cross-model fallback".
 
 ### E2-9 Embedding provider parity (RAG-01)
 

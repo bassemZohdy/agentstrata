@@ -105,14 +105,33 @@ class CredentialHealth:
         return {"status": self._state}
 
 
+# E2-1 (LLM-01): LiteLLM model-string prefixes per provider.  ``litellm``
+# stays the verbatim escape hatch for anything not enumerated.
+_LLM_MODEL_PREFIX: dict[str, str] = {
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "ollama": "ollama_chat",
+    "azure": "azure",
+    "groq": "groq",
+    "mistral": "mistral",
+    "cohere": "cohere",
+    "deepseek": "deepseek",
+    "xai": "xai",
+    "together": "together_ai",
+    "fireworks": "fireworks_ai",
+    "openrouter": "openrouter",
+    "huggingface": "huggingface",
+    # E2-3: vllm is the generic OpenAI-compatible provider.
+    "vllm": "openai",
+    "watsonx": "watsonx",
+}
+
+
 def _llm_model_string(provider: str, model: str) -> str:
-    if provider == "openai":
-        return f"openai/{model}"
-    if provider == "anthropic":
-        return f"anthropic/{model}"
-    if provider == "ollama":
-        return f"ollama_chat/{model}"
-    return model  # litellm: verbatim escape hatch
+    prefix = _LLM_MODEL_PREFIX.get(provider)
+    if prefix is None:
+        return model  # litellm: verbatim escape hatch
+    return f"{prefix}/{model}"
 
 
 def _credential_ref(llm_cfg: Any) -> tuple[str | None, str | None]:
@@ -169,8 +188,11 @@ def build_llm(
     api_key = secrets.resolve(SecretRef(env_ref, file_ref))
     if api_key:
         kwargs["api_key"] = api_key
-    if provider == "ollama":
-        kwargs["api_base"] = llm_cfg.baseUrl  # required (CFG-14)
+    if provider in ("ollama", "vllm", "azure"):
+        # CFG-14: baseUrl is required for ollama (api_base), vllm (the
+        # OpenAI-compatible provider, E2-3) and azure (the endpoint).
+        # azure's api_version rides in llm.extra (E2-2).
+        kwargs["api_base"] = llm_cfg.baseUrl
     elif llm_cfg.baseUrl:
         kwargs["base_url"] = llm_cfg.baseUrl
     if llm_cfg.extra:

@@ -566,6 +566,18 @@ spec:
                 - anthropic
                 - ollama
                 - litellm
+                - azure
+                - groq
+                - mistral
+                - cohere
+                - deepseek
+                - xai
+                - together
+                - fireworks
+                - openrouter
+                - huggingface
+                - vllm
+                - watsonx
                 title: Provider
                 type: string
               RagConfig:

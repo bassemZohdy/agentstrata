@@ -351,3 +351,106 @@ def test_unmatched_vars_boot_summary(capsys):
         # monkeypatched env below instead.
     )
     assert code == 0
+
+
+# -- E2-1/E2-3: provider coverage (LLM-01/LLM-01a) -----------------------------
+
+
+def test_provider_enum_extended():
+    from app.config.models import Provider
+
+    expected = {
+        "azure",
+        "groq",
+        "mistral",
+        "cohere",
+        "deepseek",
+        "xai",
+        "together",
+        "fireworks",
+        "openrouter",
+        "huggingface",
+        "vllm",
+        "watsonx",
+    }
+    values = {p.value for p in Provider}
+    assert expected <= values
+    # bedrock/vertex-ai deliberately deferred (E2-2, STACK-01)
+    assert "bedrock" not in values
+
+
+def test_model_string_matrix():
+    from app.engine.connectors import _llm_model_string
+
+    cases = {
+        "openai": "openai/gpt-4o",
+        "anthropic": "anthropic/claude-3-5-sonnet",
+        "ollama": "ollama_chat/llama3",
+        "azure": "azure/gpt-4o",
+        "groq": "groq/llama-3.3-70b",
+        "mistral": "mistral/mistral-large",
+        "cohere": "cohere/command-r",
+        "deepseek": "deepseek/deepseek-chat",
+        "xai": "xai/grok-2",
+        "together": "together_ai/llama-3.3-70b",
+        "fireworks": "fireworks_ai/llama-3.1-8b",
+        "openrouter": "openrouter/anthropic/claude-3.5",
+        "huggingface": "huggingface/mistralai/Mistral-7B",
+        "vllm": "openai/meta-llama-3.1-8b",  # E2-3: OpenAI-compatible
+        "watsonx": "watsonx/ibm-granite",
+    }
+    for provider, expected in cases.items():
+        assert _llm_model_string(provider, expected.split("/", 1)[1]) == expected, provider
+    # litellm: verbatim escape hatch — the WHOLE model string passes through
+    assert _llm_model_string("litellm", "verbatim/anything") == "verbatim/anything"
+
+
+def test_vllm_and_azure_require_base_url():
+    bundled = _empty_bundled_dir()
+    for provider in ("vllm", "azure"):
+        r = _resolve_env(
+            {
+                "AGENT_NAME": "a",
+                "AGENT_ENGINE_SYSTEM_INSTRUCTION": "i",
+                "AGENT_LLM_MODEL": "m",
+                "AGENT_LLM_PROVIDER": provider,
+            },
+            bundled,
+        )
+        assert not r.ok
+        assert any("llm.baseUrl" in i.path for i in r.issues), provider
+
+    r = _resolve_env(
+        {
+            "AGENT_NAME": "a",
+            "AGENT_ENGINE_SYSTEM_INSTRUCTION": "i",
+            "AGENT_LLM_MODEL": "m",
+            "AGENT_LLM_PROVIDER": "vllm",
+            "AGENT_LLM_BASE_URL": "http://localhost:8000/v1",
+        },
+        bundled,
+    )
+    assert r.ok, r.issues
+
+
+def test_build_llm_vllm_uses_api_base():
+    """E2-3: the vllm path passes api_base (OpenAI-compatible)."""
+    from types import SimpleNamespace
+
+    import app.engine.connectors as c
+
+    llm = SimpleNamespace(
+        provider=SimpleNamespace(value="vllm"),
+        model="m",
+        apiKeyEnv=None,
+        apiKeyFile=None,
+        autoApiKeyEnv=False,
+        baseUrl="http://localhost:8000/v1",
+        vertex=SimpleNamespace(enabled=False),
+        extra={},
+        model_dump=lambda **kw: {"provider": "vllm", "baseUrl": "http://localhost:8000/v1"},
+    )
+    secrets = c.SecretResolver({})
+    lite = c.build_llm(llm, secrets=secrets)
+    assert lite is not None
+    assert "openai/m" in str(getattr(lite, "model", ""))

@@ -34,6 +34,20 @@ class Provider(StrEnum):
     ANTHROPIC = "anthropic"
     OLLAMA = "ollama"
     LITELLM = "litellm"
+    # E2-1 (LLM-01/LLM-01a): LiteLLM-native first-class providers — no
+    # new dependencies; bedrock/vertex-ai stay deferred (E2-2, STACK-01).
+    AZURE = "azure"
+    GROQ = "groq"
+    MISTRAL = "mistral"
+    COHERE = "cohere"
+    DEEPSEEK = "deepseek"
+    XAI = "xai"
+    TOGETHER = "together"
+    FIREWORKS = "fireworks"
+    OPENROUTER = "openrouter"
+    HUGGINGFACE = "huggingface"
+    VLLM = "vllm"
+    WATSONX = "watsonx"
 
 
 class StreamingMode(StrEnum):

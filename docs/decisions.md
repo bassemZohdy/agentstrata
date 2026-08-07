@@ -165,3 +165,46 @@ satisfy a requirement ID to this file.
   variable (SEC-03 fail-closed) — never a silent keyless start.  The
   OBS-03 startup line names the variable, never the value.
 - **Status:** resolved (E1-5).
+
+## E2 — provider coverage decisions (2026-08-07)
+
+### E2-1: first-class provider set + enum stability policy (LLM-01)
+
+- **Decision:** extend `Provider` with the twelve providers that need no
+  new dependencies (all LiteLLM-native): `azure`, `groq`, `mistral`,
+  `cohere`, `deepseek`, `xai`, `together`, `fireworks`, `openrouter`,
+  `huggingface`, `vllm`, `watsonx` — each with its documented LiteLLM
+  model-string prefix.  `bedrock` and `vertex-ai` are DELIBERATELY
+  deferred: they pull `boto3` / `google-cloud-aiplatform` (a STACK-01
+  manifest + lock change subject to the CNT-12 vulnerability gate) and
+  multi-field credential contracts (E2-2); reachable today via the
+  `litellm` verbatim escape hatch.  The `litellm` escape hatch stays —
+  it is the compatibility guarantee for anything not enumerated.
+- **Stability policy:** `Provider` is a published schema enum —
+  additions are backward compatible and require only a REQUIREMENTS
+  amendment; removals are schema-major breaking changes and MUST NOT
+  happen pre-1.0 without an amendment.  Recorded in REQUIREMENTS 2.7.
+- **Status:** resolved (E2-1).
+
+### E2-3: the generic OpenAI-compatible provider is `vllm`
+
+- **Decision:** `vllm` IS the generic OpenAI-compatible provider (vLLM,
+  LM Studio, and most self-hosted servers speak the OpenAI wire
+  protocol): model string `openai/{model}` + `api_base = baseUrl`
+  (required, CFG-14).  `openrouter`/`together` etc. keep their own
+  LiteLLM prefixes.  A separate `openai-compatible` alias is NOT added —
+  `vllm` covers the surface and adding a synonym would split the
+  required-`baseUrl` validation across two enum values.
+- **Status:** resolved (E2-3).
+
+### E2-8: model fallback chains — decided OUT of scope
+
+- **Decision:** ordered fallback chains are NOT implemented (deferred,
+  not rejected): they interact with LLM-03 (the retry wrapper never
+  replays after a delta) and COST-01 attribution (which model's price
+  applies), so they are a requirements change, not a config addition.
+  The decision is recorded here and in REQUIREMENTS (LLM-03 keeps "There
+  is no cross-model fallback").  Revisit only as a standalone
+  requirements amendment with fallback triggers + cost attribution
+  defined first.
+- **Status:** resolved — deferred with record (E2-8).

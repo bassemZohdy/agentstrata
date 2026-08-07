@@ -106,6 +106,7 @@ verified by the Milestone 8 acceptance/chaos run.
 | K8S-11 | k8s_operator/reconcile.py + kube.py + loop.py; tests/test_operator/test_operator.py |
 | K8S-12 | tests/test_operator/test_operator.py |
 | LLM-01 | app/engine/connectors.py::build_llm |
+| LLM-01a | app/config/models.py::Provider (enum stability; REQUIREMENTS 2.7) |
 | LLM-02 | app/engine/connectors.py (CredentialHealth/SecretResolver) |
 | LLM-03 | app/engine/connectors.py::RetryableLlm |
 | LLM-04 | models.py INFERRED_API_KEY_ENV; validate.py fail-closed |

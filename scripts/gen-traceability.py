@@ -91,6 +91,7 @@ MAPPINGS: dict[str, str] = {
     "SES-09": "app/storage/adk_adapter.py; tests/test_storage/test_adk_adapter.py",
     # Milestone 3
     "LLM-01": "app/engine/connectors.py::build_llm",
+    "LLM-01a": "app/config/models.py::Provider (enum stability; REQUIREMENTS 2.7)",
     "LLM-02": "app/engine/connectors.py (CredentialHealth/SecretResolver)",
     "LLM-03": "app/engine/connectors.py::RetryableLlm",
     "LLM-04": "models.py INFERRED_API_KEY_ENV; validate.py fail-closed",

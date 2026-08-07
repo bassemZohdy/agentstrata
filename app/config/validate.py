@@ -326,8 +326,11 @@ def _cross_field(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
             "at least one protocol must be enabled (health-only runtime is invalid)",
         )
 
-    if doc.get("llm.provider") == "ollama" and not doc.get("llm.baseUrl"):
-        issue("llm.baseUrl", "ollama provider requires baseUrl")
+    # E2-4 (CFG-14): table-driven per-provider required fields — fail at
+    # boot (exit 78) with the offending path, never at runtime.
+    for required_provider, message in _PROVIDER_REQUIRED_BASE_URL.items():
+        if doc.get("llm.provider") == required_provider and not doc.get("llm.baseUrl"):
+            issue("llm.baseUrl", message)
     if doc.get("llm.vertex.enabled"):
         if doc.get("llm.provider") != "gemini":
             issue("llm.vertex.enabled", "vertex requires provider 'gemini'")
@@ -438,6 +441,15 @@ def auto_api_key_error(config: AgentConfig, env: dict[str, str]) -> str | None:
             f"not set (SEC-03 fail-closed)"
         )
     return None
+
+
+# E2-4 (CFG-14): providers whose baseUrl is required, with the exact
+# boot-issue message (table-driven — add a provider here, not an if).
+_PROVIDER_REQUIRED_BASE_URL: dict[str, str] = {
+    "ollama": "ollama provider requires baseUrl",
+    "vllm": "vllm (OpenAI-compatible, E2-3) requires baseUrl",
+    "azure": "azure provider requires baseUrl (endpoint)",
+}
 
 
 def validate_resolution(res: Resolution) -> ValidationResult:
