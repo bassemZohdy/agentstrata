@@ -51,6 +51,11 @@ dependencies (bedrock/vertex-ai deferred by decision — STACK-01 gate).
 
 With this, the TODO.md planned scope is complete — the backlog is empty.
 
+- **Backlog retired (2026-08-07):** TODO.md now contains only pointers —
+  every section (review items + planned scope) was completed; this
+  entry, the review-backlog entries above, and the archived
+  planned-scope reference in `docs/review-log.md` are their records.
+
 ### E1: env-first configuration — DONE (2026-08-07)
 
 REQUIREMENTS 2.6 amendment (CFG-07 item 4 aliases, CFG-08 signpost,
