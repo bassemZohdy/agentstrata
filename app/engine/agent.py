@@ -15,6 +15,7 @@ from google.adk.agents import LlmAgent
 from google.genai import types
 
 from .connectors import RetryableLlm, build_llm
+from .model_catalog import context_window_default
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,10 @@ class AppliedConfig:
     overrides_max_tokens_max: int
     llm_provider: str
     llm_model: str
+    # E2-7 (MA-02): effective (provider, model) per agent — the root plus
+    # every sub-agent with its deep-merged llm block.  Used for per-agent
+    # cost pricing; absent entries fall back to the root.
+    agent_llm_models: dict[str, tuple[str, str]] = field(default_factory=dict)
     costs_enabled: bool = False
     costs_default_input: float = 0.0
     costs_default_output: float = 0.0
@@ -64,7 +69,7 @@ class AppliedConfig:
             max_iterations=engine.maxIterations,
             history_max_messages=engine.historyMaxMessages,
             history_max_bytes=engine.historyMaxBytes,
-            context_window_tokens=llm.contextWindowTokens,
+            context_window_tokens=(llm.contextWindowTokens or context_window_default(llm.model)),
             token_budget_per_request=engine.tokenBudget.perRequest,
             token_budget_per_session=engine.tokenBudget.perSession,
             overrides_allow_temperature=engine.overrides.allowTemperature,
@@ -73,6 +78,10 @@ class AppliedConfig:
             overrides_max_tokens_max=engine.overrides.maxTokensMax,
             llm_provider=llm.provider.value,
             llm_model=llm.model,
+            agent_llm_models={
+                name: (llm_block.provider.value, llm_block.model)
+                for name, llm_block in _effective_agents(config)
+            },
             costs_enabled=bool(config.costs.enabled),
             costs_default_input=config.costs.defaultInputPerMillion,
             costs_default_output=config.costs.defaultOutputPerMillion,
@@ -99,6 +108,16 @@ class AgentComponent:
     model: RetryableLlm
     sub_agents: tuple[LlmAgent, ...] = ()
     tool_targets: tuple[tuple[LlmAgent, list[str] | None], ...] = ()
+
+
+def _effective_agents(config: Any) -> list[tuple[str, Any]]:
+    """E2-7: (agent name, effective llm block) for the root and every
+    sub-agent (the sub-agent's optional llm block deep-merged over the
+    root's — the same MA-02 semantics build_agent_component uses)."""
+    entries = [(config.name, config.llm)]
+    for agent_def in config.agents:
+        entries.append((agent_def.name, _merge_llm(config.llm, agent_def.llm)))
+    return entries
 
 
 def _merge_llm(root: Any, override: Any | None) -> Any:

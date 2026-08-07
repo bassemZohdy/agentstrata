@@ -95,6 +95,8 @@ MAPPINGS: dict[str, str] = {
     "LLM-02": "app/engine/connectors.py (CredentialHealth/SecretResolver)",
     "LLM-03": "app/engine/connectors.py::RetryableLlm",
     "LLM-04": "models.py INFERRED_API_KEY_ENV; validate.py fail-closed",
+    "LLM-05": "app/engine/model_catalog.py; validate.py (tools gate); agent.py (context default)",
+    "LLM-06": "models.py RagEmbeddingProvider; rag.py::build_embedding",
     "ENG-01": "app/engine/agent.py",
     "ENG-02": "app/engine/runner.py::AgentRunner; app/engine/events.py",
     "ENG-03": "app/engine/runner.py::_admit (order)",

@@ -208,3 +208,20 @@ satisfy a requirement ID to this file.
   requirements amendment with fallback triggers + cost attribution
   defined first.
 - **Status:** resolved — deferred with record (E2-8).
+
+### E2-2: multi-field credentials — reuse `llm.extra` with SEC-02 redaction
+
+- **Decision:** NO new per-provider credential sub-block.  Multi-field
+  provider credentials (azure `api_version`, future bedrock
+  `awsSecretAccessKey`, etc.) ride in the existing `llm.extra`
+  passthrough map — it already reaches the LiteLLM kwargs verbatim and
+  stays valid for every provider; a sub-block would duplicate
+  `apiKeyEnv`/`apiKeyFile` resolution semantics (SEC-04 file-over-env,
+  rotation) for each provider and freeze one more schema surface.
+  SEC-02 redaction widened to cover the new key names
+  (`accesskey`/`secretkey` suffixes — `awsSecretAccessKey`,
+  `awsSecretKey` now mask in dumps; `azureApiKey` was already covered).
+  `bedrock`/`vertex-ai` remain deferred (STACK-01 lock + CNT-12 gate) —
+  the E2-2 checklist's per-provider secret routing applies when they
+  land, through `llm.extra` + SecretResolver.
+- **Status:** resolved (E2-2).

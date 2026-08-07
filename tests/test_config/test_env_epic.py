@@ -454,3 +454,130 @@ def test_build_llm_vllm_uses_api_base():
     lite = c.build_llm(llm, secrets=secrets)
     assert lite is not None
     assert "openai/m" in str(getattr(lite, "model", ""))
+
+
+# -- E2-5: capability registry (LLM-05) ---------------------------------------
+
+
+def test_context_window_defaults_from_registry():
+    """E2-5: llm.contextWindowTokens 0 (unknown) defaults from the catalog
+    so ENG-04 trimming works without manual tuning."""
+
+    from app.config.models import AgentConfig
+    from app.engine.agent import AppliedConfig
+    from app.engine.model_catalog import MODEL_CAPABILITIES
+
+    config = AgentConfig.model_validate(
+        {
+            "name": "agent",
+            "engine": {"systemInstruction": "i"},
+            "llm": {"provider": "openai", "model": "gpt-4o"},
+        }
+    )
+    applied = AppliedConfig.from_config(config)
+    assert applied.context_window_tokens == MODEL_CAPABILITIES["gpt-4o"].context_window_tokens
+    # explicit config always wins over the registry
+    config2 = AgentConfig.model_validate(
+        {
+            "name": "agent",
+            "engine": {"systemInstruction": "i"},
+            "llm": {"provider": "openai", "model": "gpt-4o", "contextWindowTokens": 999},
+        }
+    )
+    assert AppliedConfig.from_config(config2).context_window_tokens == 999
+    # unknown model stays 0 (never invented)
+    config3 = AgentConfig.model_validate(
+        {
+            "name": "agent",
+            "engine": {"systemInstruction": "i"},
+            "llm": {"provider": "litellm", "model": "vendor/whatever"},
+        }
+    )
+    assert AppliedConfig.from_config(config3).context_window_tokens == 0
+
+
+def test_tools_incapable_model_rejected_when_tools_configured(monkeypatch):
+    from app.engine.model_catalog import MODEL_CAPABILITIES, ModelCapability
+
+    monkeypatch.setitem(MODEL_CAPABILITIES, "no-tools-model", ModelCapability(4096, tools=False))
+    bundled = _empty_bundled_dir()
+    r = _resolve_env(
+        {
+            "AGENT_NAME": "a",
+            "AGENT_ENGINE_SYSTEM_INSTRUCTION": "i",
+            "AGENT_LLM_MODEL": "no-tools-model",
+            "AGENT_APPLICATION_JSON": (
+                '{"tools":{"mcpServers":[{"name":"fs","transport":"stdio",'
+                '"command":"npx","args":["-y","@mcp/fs"]}]}}'
+            ),
+        },
+        bundled,
+    )
+    assert not r.ok
+    assert any("llm.model" in i.path for i in r.issues)
+
+
+def test_tools_incapable_model_ok_without_tools(monkeypatch):
+    from app.engine.model_catalog import MODEL_CAPABILITIES, ModelCapability
+
+    monkeypatch.setitem(MODEL_CAPABILITIES, "no-tools-model", ModelCapability(4096, tools=False))
+    bundled = _empty_bundled_dir()
+    r = _resolve_env(
+        {
+            "AGENT_NAME": "a",
+            "AGENT_ENGINE_SYSTEM_INSTRUCTION": "i",
+            "AGENT_LLM_MODEL": "no-tools-model",
+        },
+        bundled,
+    )
+    assert r.ok, r.issues
+
+
+def test_unknown_model_never_rejected():
+    bundled = _empty_bundled_dir()
+    r = _resolve_env(
+        {
+            "AGENT_NAME": "a",
+            "AGENT_ENGINE_SYSTEM_INSTRUCTION": "i",
+            "AGENT_LLM_MODEL": "brand-new-model-2099",
+            "AGENT_APPLICATION_JSON": (
+                '{"tools":{"mcpServers":[{"name":"fs","transport":"stdio",'
+                '"command":"npx","args":["-y","@mcp/fs"]}]}}'
+            ),
+        },
+        bundled,
+    )
+    assert r.ok, r.issues  # unknown != unsupported
+
+
+# -- E2-9: embedding provider parity (RAG-01) ---------------------------------
+
+
+def test_embedding_provider_enum_extended():
+    from app.config.models import RagEmbeddingProvider
+
+    values = {p.value for p in RagEmbeddingProvider}
+    assert {"azure", "cohere", "mistral", "huggingface", "watsonx"} <= values
+
+
+def test_lite_llm_embedding_model_string():
+    from types import SimpleNamespace
+
+    from app.engine.rag_connectors import LiteLlmEmbedding
+
+    for provider, expected_prefix in (
+        ("azure", "azure"),
+        ("cohere", "cohere"),
+        ("mistral", "mistral"),
+        ("huggingface", "huggingface"),
+        ("watsonx", "watsonx"),
+    ):
+        emb = LiteLlmEmbedding(
+            SimpleNamespace(
+                provider=SimpleNamespace(value=provider),
+                model="emb-model",
+                apiKeyEnv=None,
+                apiKeyFile=None,
+            )
+        )
+        assert emb.model == f"{expected_prefix}/emb-model", provider

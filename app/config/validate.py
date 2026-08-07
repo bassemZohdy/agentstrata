@@ -341,6 +341,24 @@ def _cross_field(doc: _Doc, res: Resolution, issues: list[ConfigIssue]) -> None:
     elif doc.raw("llm.vertex.project") or doc.get("llm.vertex.location") != "us-central1":
         issue("llm.vertex.enabled", "non-default vertex fields require vertex.enabled: true")
 
+    # E2-5 (LLM-05): a model KNOWN without tool calling is rejected at
+    # boot when MCP tools are configured; unknown models are never
+    # rejected (a stale registry must not block valid deployments).
+    from app.engine.model_catalog import capabilities_for
+
+    model = doc.get("llm.model")
+    entry = capabilities_for(str(model)) if model else None
+    tools_configured = bool(doc.get("tools.mcpServers")) or bool(
+        doc.get("agents")
+        and any(a.get("toolServers") for a in doc.get("agents", []) if isinstance(a, dict))
+    )
+    if entry is not None and not entry.tools and tools_configured:
+        issue(
+            "llm.model",
+            f"model {model} does not support tool calling (E2-5 registry); "
+            "remove the MCP tool configuration or choose a tool-capable model",
+        )
+
     ctx = doc.get("llm.contextWindowTokens")
     max_tokens = doc.get("engine.maxTokens")
     if ctx and max_tokens and ctx <= max_tokens:

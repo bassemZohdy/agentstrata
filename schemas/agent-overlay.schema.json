@@ -802,7 +802,12 @@
     "RagEmbeddingProvider": {
       "enum": [
         "gemini",
-        "openai"
+        "openai",
+        "azure",
+        "cohere",
+        "mistral",
+        "huggingface",
+        "watsonx"
       ],
       "title": "RagEmbeddingProvider",
       "type": "string"

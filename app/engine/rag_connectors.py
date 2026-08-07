@@ -602,3 +602,49 @@ def _json_literal(value: dict[str, Any]) -> str:
     import json
 
     return json.dumps(value, sort_keys=True)
+
+
+class LiteLlmEmbedding:
+    """E2-9 (RAG-01): embedding via LiteLLM's bridge for the expanded
+    provider set (azure/cohere/mistral/huggingface/watsonx).  Model
+    string uses the same prefix table as the LLM connectors
+    (``_LLM_MODEL_PREFIX``); the key rides the SEC-04 Env/File refs."""
+
+    def __init__(self, cfg: Any) -> None:
+        try:
+            import litellm  # type: ignore[import-untyped]  # noqa: F401
+        except ImportError as exc:
+            raise ConfigError(
+                "rag.embedding provider requires the litellm package; "
+                "install it to use this provider"
+            ) from exc
+        from .connectors import _LLM_MODEL_PREFIX
+
+        prefix = _LLM_MODEL_PREFIX.get(cfg.provider.value) or cfg.provider.value
+        self.model = f"{prefix}/{cfg.model}"
+        self._api_key_env = cfg.apiKeyEnv
+        self._api_key_file = cfg.apiKeyFile
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        import litellm  # type: ignore[import-untyped]
+
+        api_key = self._resolve_key() or None
+        result = await litellm.aembedding(
+            model=self.model,
+            input=texts,
+            api_key=api_key,
+        )
+        return [d["embedding"] for d in result.data]
+
+    def _resolve_key(self) -> str:
+        if self._api_key_file:
+            try:
+                with open(self._api_key_file, encoding="utf-8") as fh:
+                    return fh.read().strip()
+            except OSError:
+                return ""
+        if self._api_key_env:
+            import os
+
+            return os.environ.get(self._api_key_env, "")
+        return ""

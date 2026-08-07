@@ -20,6 +20,10 @@ _SENSITIVE_SUFFIXES = (
     "password",
     "credential",
     "privatekey",
+    # E2-2: per-provider multi-field credentials (Bedrock et al.) —
+    # awsSecretAccessKey / awsSecretKey must be redacted in dumps.
+    "accesskey",
+    "secretkey",
     "connectionstring",
 )
 _REF_SUFFIXES = ("env", "file", "ref")

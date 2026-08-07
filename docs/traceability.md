@@ -110,6 +110,8 @@ verified by the Milestone 8 acceptance/chaos run.
 | LLM-02 | app/engine/connectors.py (CredentialHealth/SecretResolver) |
 | LLM-03 | app/engine/connectors.py::RetryableLlm |
 | LLM-04 | models.py INFERRED_API_KEY_ENV; validate.py fail-closed |
+| LLM-05 | app/engine/model_catalog.py; validate.py (tools gate); agent.py (context default) |
+| LLM-06 | models.py RagEmbeddingProvider; rag.py::build_embedding |
 | MA-01 | app/config/models.py (agents[]); tests/test_config/test_validation.py |
 | MA-02 | app/engine/agent.py (coordinator/sub_agents); tests/test_engine/test_multiagent.py |
 | MA-03 | app/engine/mcp/manager.py (tool_targets); tests/test_engine/test_multiagent.py |

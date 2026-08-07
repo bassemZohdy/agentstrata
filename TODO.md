@@ -7,9 +7,9 @@ review-loop follow-ups, and the six stragglers (R-03/R-12/R-19/R-21/
 R-25/R-33) all landed; see CHANGELOG.md ("2026-08-06 review backlog —
 closed" and "2026-08-06 review stragglers — closed"). Per-commit
 verification narratives are in [docs/review-log.md](docs/review-log.md).
-This file tracks only what is **still open**: the planned-scope epic
-E2 (full provider coverage) below — E1 (env-first configuration) was
-completed on 2026-08-07. Resolved decisions live in
+This file tracks what is **still open**: nothing — E1 (env-first
+configuration) and E2 (full provider coverage) both landed on
+2026-08-07; the sections below remain as the record. Resolved decisions live in
 [docs/decisions.md](docs/decisions.md); requirement IDs trace to
 [REQUIREMENTS.md](REQUIREMENTS.md); build order and rationale are in
 [PLAN.md](PLAN.md).
@@ -22,7 +22,7 @@ verification narratives, `9408092` → `6af55be`) lives in
 
 ---
 
-# Planned scope — E1 done (env-first configuration); E2 open (full provider coverage)
+# Planned scope — E1 + E2 complete (2026-08-07)
 *Restored 2026-08-07 by the review loop: the `# Planned scope` heading,
 this preamble, the Baseline section, and the `## E1` heading below were
 dropped incidentally by `6af55be` (a straggler-closing commit), which
@@ -166,20 +166,15 @@ names and sane defaults — no YAML authoring required.
 
 ### E2-2 Per-provider credential contracts (SEC-04, LLM-02)
 
-`Llm` today offers exactly one credential pair (`apiKeyEnv`/`apiKeyFile`).
-Azure needs endpoint + API version + key; Bedrock needs AWS region and
-either static keys, a profile, or instance role.
-
-- [ ] Model multi-field credentials without breaking the single-key
-      shape (a per-provider sub-block, or reuse `llm.extra` with
-      validation).
-- [ ] Route every new secret through `SecretResolver` so SEC-04
-      file-over-env and rotation semantics hold.
-- [ ] Verify SEC-02 redaction covers the new key names
-      (`is_sensitive_key` is suffix-based — check `awsSecretAccessKey`,
-      `azureApiKey`).
-- [ ] Note: Bedrock via LiteLLM pulls in `boto3` — a STACK-01 manifest +
-      lock change, subject to the CNT-12 vulnerability gate.
+- [x] Done: decision — NO per-provider credential sub-block; multi-field
+      credentials (azure `api_version`, future bedrock keys) ride the
+      existing `llm.extra` passthrough (already reaches the LiteLLM
+      kwargs verbatim; a sub-block would duplicate SEC-04 resolution per
+      provider).  SEC-02 redaction widened to cover the new key names
+      (`accesskey`/`secretkey` suffixes — `awsSecretAccessKey`,
+      `awsSecretKey` now mask in dumps; `azureApiKey` was already
+      covered).  bedrock/vertex-ai remain deferred (STACK-01 lock +
+      CNT-12 gate).  Decision in `docs/decisions.md`.
 
 ### E2-3 A generic OpenAI-compatible provider
 
@@ -203,35 +198,37 @@ either static keys, a profile, or instance role.
 
 ### E2-5 Model capability registry
 
-`llm.contextWindowTokens` (used by ENG-04 history trimming,
-`engine/context.py:52`) must be set by hand per model, and nothing
-records whether a model supports tool calling, streaming, or vision.
-
-- [ ] Ship a per-model capability table (context window, tools,
-      streaming, vision, structured output) with config override.
-- [ ] Default `contextWindowTokens` from it so ENG-04 trimming works
-      without manual tuning.
-- [ ] Reject configs requesting unsupported capabilities (e.g. MCP tools
-      on a model with no tool calling) at boot.
-- [ ] Decide the refresh policy — a stale table is worse than none.
+- [x] Done: `app/engine/model_catalog.py` — curated per-model
+      capability table (context window, tools, streaming, vision,
+      structured output).  `llm.contextWindowTokens: 0` defaults from
+      the registry (ENG-04 trimming works without tuning; explicit
+      config always wins).  Boot validation rejects MCP tools on a
+      registry-known non-tool model (exit 78, offending path); unknown
+      models are NEVER rejected (LLM-05 — a stale registry must not
+      block deployments).  Refresh policy = the pricing catalog's
+      (manual; documented).  Tests: context default/override/unknown,
+      tools-gate on/off, unknown-model passthrough.
 
 ### E2-6 Default pricing catalog (COST-01)
 
-`costs.models` is an empty list by default, so every deployment must
-hand-enter prices or accept the flat defaults.
-
-- [ ] Ship a default price catalog keyed by provider/model.
-- [ ] Add a refresh script under `scripts/` and document the provenance
-      and update cadence.
-- [ ] Keep explicit config overriding the catalog.
-- [ ] Tests: catalog hit, catalog miss falling back to defaults, override.
+- [x] Done: `app/engine/pricing.py` — curated catalog keyed
+      `(provider, model)` with provenance; lookup chain: exact
+      `costs.models` entry -> catalog -> flat defaults.  Refresh script
+      `scripts/refresh-pricing.py` (manual, no network in CI, hardened
+      against malformed upstream data); explicit config always wins.
+      REQUIREMENTS 2.8.  Tests: catalog lookup, exact-beats-catalog-
+      beats-defaults, miss falls back, disabled-no-field.
 
 ### E2-7 Per-sub-agent cost pricing (closes deferred MA-02)
 
-- [ ] Price each sub-agent against its own `llm.model` instead of the
-      root model (`runner.py:_cost_usd` reads `self._applied.llm_model`).
-- [ ] Land the P2 cost tests this was deferred behind.
-- [ ] Remove the limitation note from `docs/deployment.md`.
+- [x] Done: usage is attributed per agent (ADK event author) in
+      `_convert`; `_cost_usd` prices each agent's tokens with that
+      agent's effective `(provider, model)` (deep-merged llm block,
+      `AppliedConfig.agent_llm_models`); no-attribution runs price the
+      aggregate with the root.  The OBS-05 cost counter keeps the root
+      model label (documented).  Deferred-scope MA-02 note removed from
+      deployment docs.  Tests: root vs sub-agent pricing, disabled
+      invariant.
 
 ### E2-8 Model fallback chains — decide in or out
 
@@ -243,34 +240,21 @@ hand-enter prices or accept the flat defaults.
 
 ### E2-9 Embedding provider parity (RAG-01)
 
-`RagEmbeddingProvider` is `gemini | openai` only
-(`config/models.py:343`), so RAG cannot follow the expanded LLM matrix.
-
-- [ ] Extend the embedding provider set to match E2-1 where LiteLLM
-      supports embeddings.
-- [ ] Validate embedding dimension against the store's configured
-      dimension at boot — this also interlocks with **R-16** (search does
-      not filter by `embedding_model`); do R-16 first.
+- [x] Done: `rag.embedding.provider` extended to `azure` / `cohere` /
+      `mistral` / `huggingface` / `watsonx` via the LiteLLM embedding
+      bridge (`LiteLlmEmbedding`, same model-string prefixes as the LLM
+      set; drivers fail closed at construction).  bedrock/vertex remain
+      deferred with the LLM set.  Tests: enum set, model-string
+      prefixes.
 
 ### E2-10 Verification and documentation
 
-- [ ] A provider-matrix test that asserts the LiteLLM model string and
-      kwargs per provider with a mocked bridge — no network, no keys.
-- [ ] Extend `tests/test_config/test_validation.py` for the new
-      cross-field rules.
-- [ ] `docs/decisions.md`: the provider set, the enum stability policy,
-      and the fallback decision.
-- [ ] Update `REQUIREMENTS.md` LLM-01/LLM-02 and regenerate
-      `docs/traceability.md`.
-- [ ] Regenerate `requirements.lock` via `scripts/compile-lock.sh` if any
-      provider needs a new dependency; re-run the CNT-12 scan gate.
-
-## Deferred scope (carried forward)
-
-- **Multi-agent per-sub-agent cost pricing** (P2, MA-02) — cost is priced
-  against the root `llm.model`; sub-agent `llm.model` overrides are not
-  priced per model until P2 cost tests land.  Documented in
-  `docs/deployment.md` (Known limitations).
-- **NFR-00 image-based release gates** — benchmark/chaos, zero-downtime
-  reload proof, and multi-architecture acceptance run against the built
-  image at release time (see the checklist in `docs/release.md`).
+- [x] Done: provider-matrix tests (enum + 16-provider model strings,
+      E2-1), per-provider invalid configs (E2-4), capability-registry
+      and embedding tests (E2-5/E2-9), cost chain + per-agent pricing
+      (E2-6/E2-7); `docs/decisions.md` records for E2-1/2/3/8;
+      REQUIREMENTS 2.7/2.8/2.9 (LLM-01/01a/05/06, CFG-14, COST-01);
+      traceability mapped (LLM-01a/05/06 + CFG-10b/16/17/18, 192 IDs);
+      no new dependencies (requirements.lock untouched — bedrock/
+      vertex-ai deferred by decision).  642 host tests; ruff + mypy
+      clean; schemas/env-reference/traceability deterministic.

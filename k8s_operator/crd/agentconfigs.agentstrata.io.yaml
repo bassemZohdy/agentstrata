@@ -659,6 +659,11 @@ spec:
                 enum:
                 - gemini
                 - openai
+                - azure
+                - cohere
+                - mistral
+                - huggingface
+                - watsonx
                 title: RagEmbeddingProvider
                 type: string
               RagStore:

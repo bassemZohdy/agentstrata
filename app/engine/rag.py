@@ -327,10 +327,17 @@ def build_embedding(cfg: RagConfig) -> EmbeddingProvider:
     the configured provider's driver is missing — no silent degradation.
     DeterministicEmbedding is the ACC-01 substitute for tests/offline dev
     only, constructed directly."""
-    if cfg.embedding.provider.value == "openai":
-        from .rag_connectors import OpenAIEmbedding
+    provider = cfg.embedding.provider.value
+    if provider in ("openai", "azure", "cohere", "mistral", "huggingface", "watsonx"):
+        # E2-9: LiteLLM-native embedding providers (openai stays on the
+        # SDK path below; the rest go through LiteLLM's embedding bridge).
+        if provider == "openai":
+            from .rag_connectors import OpenAIEmbedding
 
-        return OpenAIEmbedding(cfg.embedding)
+            return OpenAIEmbedding(cfg.embedding)
+        from .rag_connectors import LiteLlmEmbedding
+
+        return LiteLlmEmbedding(cfg.embedding)
     from .rag_connectors import GeminiEmbedding
 
     return GeminiEmbedding(cfg.embedding)

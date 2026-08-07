@@ -371,6 +371,13 @@ class RagStoreType(StrEnum):
 class RagEmbeddingProvider(StrEnum):
     GEMINI = "gemini"
     OPENAI = "openai"
+    # E2-9 (RAG-01): LiteLLM-native embedding providers (parity with the
+    # LLM matrix; bedrock/vertex-ai stay deferred with the LLM set).
+    AZURE = "azure"
+    COHERE = "cohere"
+    MISTRAL = "mistral"
+    HUGGINGFACE = "huggingface"
+    WATSONX = "watsonx"
 
 
 class RagStore(BaseModel):

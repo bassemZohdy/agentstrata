@@ -49,6 +49,7 @@ from .events import (
     sanitize_error,
 )
 from .limits import RunLimiter
+from .pricing import catalog_price
 from .tools import ToolLedger
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,9 @@ class AgentRunner:
 
             errored = False
             run_deadline = limiter.deadline_remaining()
+            # E2-7 (MA-02): per-agent usage buckets for cost attribution —
+            # keyed by the ADK event author (agent name).
+            usage_by_agent: dict[str, dict[str, int]] = {}
             async with asyncio.timeout(max(run_deadline, 0.001)):
                 rag_context, rag_degraded = await self._rag_context(request)
                 if rag_degraded:
@@ -182,6 +186,7 @@ class AgentRunner:
                         ledger,
                         text_parts,
                         transfers,
+                        usage_by_agent=usage_by_agent,
                         request=request,
                         run_id=run_id,
                         sid=sid,
@@ -229,7 +234,14 @@ class AgentRunner:
                 finish, status, usage = self._finalize(limiter)
                 if state.succeed():
                     await self._commit_success(
-                        request, sid, run_id, text_parts, usage, transfers, run_started[0]
+                        request,
+                        sid,
+                        run_id,
+                        text_parts,
+                        usage,
+                        transfers,
+                        run_started[0],
+                        usage_by_agent,
                     )
                 else:
                     await self._commit_failure(
@@ -246,7 +258,7 @@ class AgentRunner:
                 }
                 if limiter.account.estimated:
                     done_usage["estimated"] = True
-                done_cost = self._cost_usd(done_usage)
+                done_cost = self._cost_usd(done_usage, usage_by_agent)
                 if done_cost is not None:
                     done_usage["cost_usd"] = done_cost
                 yield Done(
@@ -306,23 +318,52 @@ class AgentRunner:
 
     # -- admission (ENG-03 order; auth/rate-limit stubbed until M5) -----------------
 
-    def _cost_usd(self, usage: dict[str, Any]) -> float | None:
-        """COST-01: per-request cost in USD from the token counts.
+    def _cost_usd(
+        self,
+        usage: dict[str, Any],
+        usage_by_agent: dict[str, dict[str, int]] | None = None,
+    ) -> float | None:
+        """COST-01 + E2-6/E2-7: per-request cost in USD from the token
+        counts.
 
         Returns None when costs are disabled (the caller then omits the
-        field entirely — zero surface change). Prices are USD per 1M
-        tokens; the exact ``llm.model`` entry wins, else the defaults.
+        field entirely — zero surface change).  Price chain per agent:
+        exact ``costs.models`` entry → the shipped default price catalog
+        (E2-6, keyed (provider, model)) → flat defaults.  With per-agent
+        usage attribution (E2-7), each agent's tokens are priced with
+        that agent's effective (provider, model); otherwise the root
+        prices the aggregate.
         """
         if not self._applied.costs_enabled:
             return None
-        input_tokens = usage.get("input_tokens", 0)
-        output_tokens = usage.get("output_tokens", 0)
-        input_price, output_price = self._applied.costs_models.get(
-            self._applied.llm_model,
-            (self._applied.costs_default_input, self._applied.costs_default_output),
-        )
-        cost = (input_tokens * input_price + output_tokens * output_price) / 1_000_000.0
-        return round(cost, 6)
+
+        def prices_for(provider: str, model: str) -> tuple[float, float]:
+            exact = self._applied.costs_models.get(model)
+            if exact is not None:
+                return exact
+            catalog = catalog_price(provider, model)
+            if catalog is not None:
+                return catalog
+            return (self._applied.costs_default_input, self._applied.costs_default_output)
+
+        buckets = usage_by_agent or {}
+        if not buckets:
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
+            in_p, out_p = prices_for(self._applied.llm_provider, self._applied.llm_model)
+            cost = (input_tokens * in_p + output_tokens * out_p) / 1_000_000.0
+            return round(cost, 6)
+
+        total = 0.0
+        for agent, bucket in buckets.items():
+            provider, model = self._applied.agent_llm_models.get(
+                agent, (self._applied.llm_provider, self._applied.llm_model)
+            )
+            in_p, out_p = prices_for(provider, model)
+            total += (
+                bucket.get("input_tokens", 0) * in_p + bucket.get("output_tokens", 0) * out_p
+            ) / 1_000_000.0
+        return round(total, 6)
 
     def _record_admitted(self) -> None:
         """OBS-05: admitted-run + LLM-call counters (low-cardinality labels).
@@ -769,6 +810,7 @@ class AgentRunner:
         ledger: ToolLedger,
         text_parts: list[str],
         transfers: list[dict[str, str]],
+        usage_by_agent: dict[str, dict[str, int]] | None = None,
         request: RunRequest | None = None,
         run_id: str = "",
         sid: str = "",
@@ -776,7 +818,17 @@ class AgentRunner:
         # R-20 (ENG-08): missing usage is estimated + labeled — observe_usage
         # MUST run even when the event carries no usage metadata, or the
         # estimate flag would never be set (missing usage never silently 0).
-        limiter.observe_usage(_usage_dict(adk_event.usage_metadata))
+        usage_dict = _usage_dict(adk_event.usage_metadata)
+        limiter.observe_usage(usage_dict)
+        # E2-7 (MA-02): attribute the event's tokens to its authoring agent
+        # so per-agent models price their own tokens (COST-01/E2-7).
+        if usage_by_agent is not None and (
+            usage_dict.get("input_tokens") or usage_dict.get("output_tokens")
+        ):
+            author = adk_event.author or self._app_name
+            bucket = usage_by_agent.setdefault(author, {"input_tokens": 0, "output_tokens": 0})
+            bucket["input_tokens"] += usage_dict.get("input_tokens", 0)
+            bucket["output_tokens"] += usage_dict.get("output_tokens", 0)
         # MA-04: an ADK transfer action becomes one AgentTransfer event,
         # recorded in the run audit (deduped per (from, to)).
         if adk_event.actions and adk_event.actions.transfer_to_agent:
@@ -868,6 +920,7 @@ class AgentRunner:
         usage: dict[str, Any],
         transfers: list[dict[str, str]],
         run_started: float | None,
+        usage_by_agent: dict[str, dict[str, int]] | None = None,
     ) -> None:
         """ENG-06: one revision-checked transaction commits pruning + the
         complete turn + usage, and marks the run succeeded."""
@@ -887,7 +940,7 @@ class AgentRunner:
         # COST-01: the per-request cost rides in the committed run usage and
         # the run outcome (when costs.enabled; otherwise absent). Session
         # usage stays token-only (it feeds the ENG-08 budget accumulator).
-        cost_usd = self._cost_usd(usage)
+        cost_usd = self._cost_usd(usage, usage_by_agent)
         run_usage = usage
         if cost_usd is not None:
             run_usage = {**usage, "cost_usd": cost_usd}

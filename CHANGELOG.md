@@ -8,6 +8,49 @@ docs/release.md.
 
 ## [Unreleased]
 
+### E2: full provider coverage — DONE (2026-08-07)
+
+REQUIREMENTS 2.7/2.8/2.9 amendments (LLM-01/01a/05/06, CFG-14, COST-01)
++ decisions.md records. 642 host tests; ruff + mypy clean; schemas,
+env-reference, and traceability deterministic (192 IDs); no new
+dependencies (bedrock/vertex-ai deferred by decision — STACK-01 gate).
+
+- **E2-1 — Provider set (LLM-01/01a):** +12 LiteLLM-native providers
+  (azure, groq, mistral, cohere, deepseek, xai, together, fireworks,
+  openrouter, huggingface, vllm, watsonx) with a prefix table in
+  connectors; enum stability policy published (additions backward
+  compatible via amendment, removals schema-major).  Schema regenerated.
+- **E2-2 — Credentials:** decision — multi-field credentials reuse
+  `llm.extra` (no per-provider sub-block); SEC-02 redaction widened
+  (`accesskey`/`secretkey` suffixes — awsSecretAccessKey/awsSecretKey
+  now mask).
+- **E2-3 — OpenAI-compatible provider:** `vllm` (model string
+  `openai/{model}`, `api_base = baseUrl`, required).
+- **E2-4 — Cross-field validation:** table-driven required fields
+  (ollama/vllm/azure baseUrl) — boot exit 78 with the offending path.
+- **E2-5 — Capability registry (LLM-05):** `app/engine/model_catalog.py`
+  (context window/tools/streaming/vision/structured output);
+  `contextWindowTokens` defaults from it; MCP-tools-on-non-tool-model
+  rejected at boot; unknown models never rejected (stale table must not
+  block deployments).
+- **E2-6 — Pricing catalog (COST-01):** `app/engine/pricing.py` +
+  `scripts/refresh-pricing.py`; chain: exact costs.models entry →
+  catalog → flat defaults.
+- **E2-7 — Per-sub-agent pricing (MA-02 closed):** usage attributed per
+  ADK event author; each agent's tokens priced with its deep-merged
+  `(provider, model)`; no-attribution runs price the aggregate with the
+  root.
+- **E2-8 — Fallback chains:** decided OUT of scope with a recorded
+  deferral (LLM-03 keeps "no cross-model fallback").
+- **E2-9 — Embedding parity (RAG-01):** `rag.embedding.provider` +
+  azure/cohere/mistral/huggingface/watsonx via the LiteLLM embedding
+  bridge (fail-closed drivers).
+- **E2-10 — Verification/docs:** provider-matrix + per-provider +
+  registry + cost tests; decisions.md + REQUIREMENTS + traceability
+  (192 IDs); no lockfile change.
+
+With this, the TODO.md planned scope is complete — the backlog is empty.
+
 ### E1: env-first configuration — DONE (2026-08-07)
 
 REQUIREMENTS 2.6 amendment (CFG-07 item 4 aliases, CFG-08 signpost,
