@@ -530,3 +530,192 @@ class TestSlotAdmissionSafety:
             r3 = c.post("/v1/chat/completions", json=payload)
             assert r3.status_code == 200
             assert gate._in_flight == 0
+
+
+class TestIdempotencyCapacity:
+    """R-19 follow-up: a configured maxIdempotencyRecordsPerSession limit
+    is a client-visible capacity condition — chat and ACP map the
+    admission CapacityError to 503 storage_capacity (was 500), releasing
+    the slot in the process."""
+
+    def test_chat_admission_capacity_maps_to_503(self):
+        from app.protocol.app import RunSlotGate
+        from app.storage.contract import CapacityError
+
+        class _CapacityBackend:
+            def __init__(self, inner) -> None:
+                self._inner = inner
+
+            async def create_idempotency(self, **kwargs):
+                raise CapacityError("max idempotency records reached")
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        from app.observability.otel import Observability
+        from app.protocol.app import create_app
+
+        from .conftest import build_components, make_config
+
+        config = make_config()
+        obs = Observability(config)
+        components = build_components(config, obs)
+        components["backend"] = _CapacityBackend(components["backend"])
+        app = create_app(config, components, mode="standalone")
+        gate = components["run_slots"]
+        assert isinstance(gate, RunSlotGate)
+        with TestClient(app) as c:
+            for _ in range(2):
+                r = c.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "mock",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "idempotency_key": "k-cap",
+                    },
+                )
+                assert r.status_code == 503
+                assert r.json()["error"]["code"] == "storage_capacity"
+            assert gate._in_flight == 0  # no slot leaked
+
+    def test_acp_admission_capacity_maps_to_503(self):
+        from app.protocol.app import RunSlotGate
+        from app.storage.contract import CapacityError
+
+        class _CapacityBackend:
+            def __init__(self, inner) -> None:
+                self._inner = inner
+
+            async def create_idempotency(self, **kwargs):
+                raise CapacityError("max idempotency records reached")
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        from app.observability.otel import Observability
+        from app.protocol.app import create_app
+
+        from .conftest import build_components, make_config
+
+        config = make_config(server={"protocols": {"acp": True}})
+        obs = Observability(config)
+        components = build_components(config, obs)
+        components["backend"] = _CapacityBackend(components["backend"])
+        app = create_app(config, components, mode="standalone")
+        gate = components["run_slots"]
+        assert isinstance(gate, RunSlotGate)
+        with TestClient(app) as c:
+            r = c.post(
+                "/acp/runs",
+                json={
+                    "message": {"role": "user", "content": "hi"},
+                    "idempotency_key": "k-cap-acp",
+                },
+            )
+            assert r.status_code == 503
+            assert r.json()["error"]["code"] == "storage_capacity"
+            assert gate._in_flight == 0
+
+
+class TestOverrideApplication:
+    """R-33 (API-12): a temperature/max_tokens override on the request is
+    APPLIED to the provider call (via the RunConfig.labels ->
+    RetryableLlm seam), and above-cap values are rejected with 400
+    override_not_allowed instead of being silently clamped."""
+
+    def test_temperature_override_applied_end_to_end(self):
+        from google.adk.models import BaseLlm
+        from google.adk.models.llm_request import LlmRequest
+        from google.genai import types
+
+        from app.engine.connectors import RetryableLlm
+
+        class _CapturingLlm(BaseLlm):
+            model: str = "mock"
+
+            def __init__(self) -> None:
+                super().__init__(model="mock")
+                self._seen: list[LlmRequest] = []
+
+            @property
+            def seen(self) -> list[LlmRequest]:
+                return self._seen
+
+            async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False):
+                self._seen.append(llm_request)
+                yield types.LlmResponse(
+                    content=types.Content(role="model", parts=[types.Part(text="hello")])
+                )
+
+        from app.observability.otel import Observability
+        from app.protocol.app import create_app
+
+        from .conftest import build_components, make_config
+
+        capturing = _CapturingLlm()
+        config = make_config()
+        obs = Observability(config)
+        components = build_components(config, obs, model=RetryableLlm(capturing))
+        app = create_app(config, components, mode="standalone")
+        with TestClient(app) as c:
+            r = c.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "mock",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "temperature": 0.1,
+                    "max_tokens": 123,
+                },
+            )
+            assert r.status_code == 200, r.text
+        assert capturing.seen, "provider was never called"
+        req = capturing.seen[0]
+        assert req.config.temperature == 0.1
+        assert req.config.max_output_tokens == 123
+        # synthetic transport labels never reach the provider
+        assert "x-agentstrata-temperature" not in (req.config.labels or {})
+        assert "x-agentstrata-max-tokens" not in (req.config.labels or {})
+
+    def test_above_cap_temperature_rejected(self):
+        from app.observability.otel import Observability
+        from app.protocol.app import create_app
+
+        from .conftest import build_components, make_config
+
+        config = make_config()
+        obs = Observability(config)
+        components = build_components(config, obs)
+        app = create_app(config, components, mode="standalone")
+        with TestClient(app) as c:
+            r = c.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "mock",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "temperature": 99,
+                },
+            )
+            assert r.status_code == 400
+            assert r.json()["error"]["code"] == "override_not_allowed"
+
+    def test_above_cap_max_tokens_rejected(self):
+        from app.observability.otel import Observability
+        from app.protocol.app import create_app
+
+        from .conftest import build_components, make_config
+
+        config = make_config()
+        obs = Observability(config)
+        components = build_components(config, obs)
+        app = create_app(config, components, mode="standalone")
+        with TestClient(app) as c:
+            r = c.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "mock",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 999999999,
+                },
+            )
+            assert r.status_code == 400
+            assert r.json()["error"]["code"] == "override_not_allowed"

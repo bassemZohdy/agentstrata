@@ -85,3 +85,31 @@ satisfy a requirement ID to this file.
   omitted on ACP streams (annex-consistent; adding the field would be a
   versioned annex change).
 - **Status:** resolved (2026-08-06, R-14).
+
+## Per-request override transport — R-33 (API-12)
+
+- **Problem:** `temperature` / `max_tokens` overrides were validated and
+  gated but silently discarded — the R-20 removal of the
+  `RunConfig(temperature=…)` kwargs fixed a real latent bug
+  (`ValidationError` on the current google-adk degraded every overridden
+  run to `provider_error`) but left API-12 half-honoured: a caller
+  tuning temperature got a clean 200 and silently different sampling.
+- **Decision:** APPLY the overrides to the provider call (option a of
+  the R-33 record — not a spec amendment).  Transport: the values ride
+  in `RunConfig.labels` (ADK merges run-config labels into the per-step
+  `LlmRequest.config.labels` in the basic flow), and the existing
+  `RetryableLlm` wrapper — already in the call path — applies them to
+  `GenerateContentConfig.temperature` / `.max_output_tokens` and strips
+  the synthetic labels before the provider call.  Labels travel with
+  the invocation, so concurrent runs never share override state (the
+  R-03 singleton lesson).  The R-20 note's premise ("not expressible
+  until google-adk exposes the seam") was too pessimistic — the seam
+  exists and is public.
+- **Cap enforcement:** values must satisfy the base schema + the
+  configured override maximum; above-cap or non-finite values return
+  400 `override_not_allowed` (API-12), never silently clamped — now
+  that overrides actually reach the provider, an unchecked value would
+  be forwarded as-is.
+- **Status:** resolved (2026-08-06, R-33).  Tests:
+  `tests/test_engine/test_overrides.py` + `TestOverrideApplication` in
+  test_api.py (seam applies + strips labels; caps rejected end to end).

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
 
@@ -27,11 +28,20 @@ BACKOFF_CAP_SECONDS = 30.0
 JITTER_MAX_SECONDS = 0.25
 
 
-async def _backoff(failures: int) -> None:
-    """Sleep ``base * 2**(failures-1)`` capped, plus uniform jitter."""
+async def _backoff(
+    failures: int,
+    *,
+    sleeper: Callable[[float], Awaitable[None]] | None = None,
+) -> None:
+    """Sleep ``base * 2**(failures-1)`` capped, plus uniform jitter.
+
+    ``sleeper`` is injectable so tests are deterministic (R-25) instead
+    of racing wall time; production uses ``asyncio.sleep``.
+    """
     delay = min(BACKOFF_BASE_SECONDS * (2 ** (failures - 1)), BACKOFF_CAP_SECONDS)
     delay += random.uniform(0.0, JITTER_MAX_SECONDS)
-    await asyncio.sleep(delay)
+    sleep = sleeper if sleeper is not None else asyncio.sleep
+    await sleep(delay)
 
 
 async def run_operator(
@@ -40,6 +50,7 @@ async def run_operator(
     resync_seconds: int,
     *,
     stop_event: asyncio.Event | None = None,
+    backoff_sleeper: Callable[[float], Awaitable[None]] | None = None,
 ) -> None:
     """Reconcile-all, then watch until the stop event (tests) or forever.
 
@@ -58,7 +69,7 @@ async def run_operator(
         except Exception as exc:  # noqa: BLE001 — the loop must survive
             failures += 1
             logger.exception("reconcile-all failed: %s", type(exc).__name__)
-            await _backoff(failures)
+            await _backoff(failures, sleeper=backoff_sleeper)
             continue
         try:
             await _watch_loop(kube, namespace, resync_seconds, stop_event)
@@ -66,7 +77,7 @@ async def run_operator(
         except Exception as exc:  # noqa: BLE001 — re-list on watch loss
             failures += 1
             logger.warning("watch lost (%s); re-listing", type(exc).__name__)
-            await _backoff(failures)
+            await _backoff(failures, sleeper=backoff_sleeper)
 
 
 async def _watch_loop(

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -31,7 +32,7 @@ from ...engine.events import (
     ToolResult,
 )
 from ...engine.runner import RunRequest
-from ...storage.contract import BackendUnavailableError
+from ...storage.contract import BackendUnavailableError, CapacityError
 from ..errors import PublicErrorResponse
 
 _ALLOWED_FIELDS = {
@@ -157,6 +158,19 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 temperature_override = float(temperature)
             except (TypeError, ValueError) as exc:
                 raise PublicErrorResponse("invalid_request", "invalid temperature", 400) from exc
+            # API-12: values must satisfy the base schema + configured
+            # override maximum; above-cap (or non-finite) -> 400
+            # override_not_allowed, never silently clamped.  The runner
+            # now APPLIES the override to the provider call (R-33), so an
+            # out-of-range value would reach the provider unchecked.
+            if not math.isfinite(temperature_override) or (
+                temperature_override > config.engine.overrides.temperatureMax
+            ):
+                raise PublicErrorResponse(
+                    "override_not_allowed",
+                    "temperature above the configured maximum",
+                    400,
+                )
         if max_tokens is not None:
             if not config.engine.overrides.allowMaxTokens:
                 raise PublicErrorResponse("invalid_request", "max_tokens overrides disabled", 400)
@@ -164,6 +178,12 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
                 max_tokens_override = int(max_tokens)
             except (TypeError, ValueError) as exc:
                 raise PublicErrorResponse("invalid_request", "invalid max_tokens", 400) from exc
+            if max_tokens_override > config.engine.overrides.maxTokensMax:
+                raise PublicErrorResponse(
+                    "override_not_allowed",
+                    "max_tokens above the configured maximum",
+                    400,
+                )
 
         run_request = RunRequest(
             principal_id=principal,
@@ -205,6 +225,14 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             current_task = asyncio.current_task()
             if run_registry is not None and current_task is not None:
                 run_registry.add(current_task)
+        except CapacityError as exc:
+            # R-19 follow-up: a configured maxIdempotencyRecordsPerSession
+            # limit is a client-visible capacity condition, not a server
+            # bug — 503 storage_capacity (was: 500 internal_error via the
+            # catch-all).
+            if slots is not None:
+                slots.release()
+            raise PublicErrorResponse("storage_capacity", "idempotency capacity reached") from exc
         except BackendUnavailableError as exc:
             if slots is not None:
                 slots.release()

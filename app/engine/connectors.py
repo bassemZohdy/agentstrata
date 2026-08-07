@@ -27,6 +27,12 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 
 MAX_RETRIES = 2
+
+# R-33: API-12 per-run override transport — the values ride in
+# RunConfig.labels (ADK merges run-config labels into the per-step
+# LlmRequest.config.labels) and are applied + stripped by RetryableLlm.
+_OVERRIDE_LABEL_TEMPERATURE = "x-agentstrata-temperature"
+_OVERRIDE_LABEL_MAX_TOKENS = "x-agentstrata-max-tokens"
 BACKOFF_SECONDS = (1, 2)
 
 
@@ -156,6 +162,13 @@ class RetryableLlm(BaseLlm):
     Retryable failures: transport errors, HTTP 429, HTTP 5xx. Backoff 1s then
     2s plus 0-250ms jitter; a longer valid Retry-After is honored. Once a
     delta or tool call has been observed the call is never replayed.
+
+    R-33: also the per-run override seam — API-12's temperature / max_tokens
+    overrides ride in ``RunConfig.labels`` (ADK merges them into the
+    per-step ``LlmRequest.config.labels``), and this wrapper applies them to
+    the request config and strips the synthetic labels before the provider
+    call.  The labels travel with the invocation, so concurrent runs never
+    share override state (unlike a knob on the singleton agent).
     """
 
     model: str = ""
@@ -168,9 +181,24 @@ class RetryableLlm(BaseLlm):
         self._inner = inner
         self._health = health
 
+    def _apply_overrides(self, llm_request: LlmRequest) -> None:
+        """R-33: apply per-run provider overrides carried in the request's
+        run-config labels; the synthetic labels are removed so the provider
+        never sees them."""
+        labels = llm_request.config.labels
+        if not labels:
+            return
+        temperature = labels.pop(_OVERRIDE_LABEL_TEMPERATURE, None)
+        max_tokens = labels.pop(_OVERRIDE_LABEL_MAX_TOKENS, None)
+        if temperature is not None:
+            llm_request.config.temperature = float(temperature)
+        if max_tokens is not None:
+            llm_request.config.max_output_tokens = int(max_tokens)
+
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
+        self._apply_overrides(llm_request)
         last_exc: BaseException | None = None
         for attempt in range(MAX_RETRIES + 1):
             emitted = False

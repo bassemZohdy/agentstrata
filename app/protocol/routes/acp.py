@@ -16,7 +16,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...engine.runner import RunRequest
-from ...storage.contract import BackendUnavailableError
+from ...storage.contract import BackendUnavailableError, CapacityError
 from ..errors import PublicErrorResponse
 from .chat import (
     _canonical_idempotency_key,
@@ -158,6 +158,14 @@ def register(app: Any, config: Any, components: dict[str, Any]) -> None:
             current_task = asyncio.current_task()
             if run_registry is not None and current_task is not None:
                 run_registry.add(current_task)
+        except CapacityError as exc:
+            # R-19 follow-up: a configured maxIdempotencyRecordsPerSession
+            # limit is a client-visible capacity condition, not a server
+            # bug — 503 storage_capacity (was: 500 internal_error via the
+            # catch-all).
+            if slots is not None:
+                slots.release()
+            raise PublicErrorResponse("storage_capacity", "idempotency capacity reached") from exc
         except BackendUnavailableError as exc:
             if slots is not None:
                 slots.release()

@@ -8,6 +8,42 @@ docs/release.md.
 
 ## [Unreleased]
 
+### 2026-08-06 review stragglers — closed (2026-08-07)
+
+The six remaining open items from the 2026-08-06 review backlog, closed
+in one pass (608 host tests; ruff + mypy clean; schemas/traceability
+deterministic):
+
+- **R-03 loose end:** `_execute_inner` now switches on the `rag_degraded`
+  flag — the `"degraded"` sentinel string is gone from `_rag_context` /
+  `_new_message`, so a future `(context, True)` partial-hits path
+  correctly emits `RagDegraded` / fails under `rag.required` (RAG-04).
+- **R-12 follow-up:** `_drain_after_grace` re-snapshots `run_registry`
+  in a loop — a run registering after the first snapshot (the chat.py
+  `is_draining()` → `registry.add()` window) is waited on to completion,
+  never cancelled before its grace expires.  Regression test:
+  `test_drain_waits_for_late_registered_run`.
+- **R-19 follow-up:** chat + ACP idempotency admission map
+  `CapacityError` → 503 `storage_capacity` (was 500 via the catch-all),
+  releasing the slot.  `TestIdempotencyCapacity` covers both surfaces.
+- **R-21 stragglers:** the stale "Approval is a Phase 3 capability"
+  message replaced ("tool-call approval required (approval gate)");
+  `_finalize` loses its unused `state`/`text_parts`/`request` params.
+- **R-25:** `_backoff` takes an injectable `sleeper` (threaded through
+  `run_operator`), so the backoff tests are deterministic — exact cycle
+  counts + per-step lower bounds instead of racing wall time on a
+  zero-margin assertion (~3.2 s faster, no CI flake).
+- **R-33 (API-12):** overrides are now APPLIED to the provider call,
+  not validated-and-discarded.  The seam ADK exposes: `RunConfig.labels`
+  are merged into the per-step `LlmRequest.config.labels` (basic flow),
+  and the existing `RetryableLlm` wrapper applies them to
+  `GenerateContentConfig.temperature` / `.max_output_tokens` and strips
+  the synthetic labels — labels travel with the invocation, so
+  concurrent runs never share override state.  New guard: above-cap or
+  non-finite values return 400 `override_not_allowed` (API-12), never
+  silently clamped.  Decision recorded in `docs/decisions.md`.  Tests:
+  `tests/test_engine/test_overrides.py` + `TestOverrideApplication`.
+
 ### 2026-08-06 review backlog (R-01…R-32) — closed
 
 Full-project review backlog from 2026-08-06: **closed**. 27 items plus

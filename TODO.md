@@ -6,181 +6,92 @@ line) is **closed** and recorded in [CHANGELOG.md](CHANGELOG.md). The
 items and six review-loop follow-ups are in CHANGELOG.md under the
 "2026-08-06 review backlog — closed" entry, with per-commit verification
 narratives in [docs/review-log.md](docs/review-log.md). This file tracks
-only what is **still open**: six review stragglers (below) and the two
-planned-scope epics (E1, E2). Resolved decisions live in
+only what is **still open**: the two planned-scope epics (E1, E2) — the
+six review stragglers (R-03/R-12/R-19/R-21/R-25/R-33) were closed on
+2026-08-07. Resolved decisions live in
 [docs/decisions.md](docs/decisions.md); requirement IDs trace to
 [REQUIREMENTS.md](REQUIREMENTS.md); build order and rationale are in
 [PLAN.md](PLAN.md).
 
-## Open 2026-08-06 review items
+## Open 2026-08-06 review items (all closed)
+
+The six review stragglers tracked below were closed on 2026-08-07 (see
+CHANGELOG); their sections remain as the record of what was done.
 
 ### R-03 loose end — the RAG degraded flag is discarded by its only caller
 
-`runner.py:167` binds `_rag_degraded` and never reads it; the branch
-still switches on the sentinel string (`rag_context == "degraded"`, set
-at `runner.py:408`). The flag is exactly what the R-03 refactor added,
-so switch the branch to it and drop the sentinel. Not a live bug — but
-the signature `tuple[str | None, bool]` permits `(context, True)` and
-`_rag_context` passes that through unchanged (`return context,
-degraded`), so a future "degraded store returned partial hits" path
-would silently emit no `RagDegraded` event and, under `rag.required`,
-would not fail the run (RAG-04).
+- [x] Done: `_execute_inner` switches on the `rag_degraded` flag and
+      `_rag_context` returns `(context, degraded)` with no sentinel
+      string; `_new_message`'s `!= "degraded"` special case removed (a
+      degraded store yields `None` context, so the context block is
+      naturally omitted).  The `(context, True)` partial-hits path now
+      correctly emits `RagDegraded` / fails under `rag.required`
+      (RAG-04).  Covered by the existing RagDegraded/rag_unavailable
+      tests + the full suite.
 
 ### R-12 follow-up — the drain snapshots `run_registry` once at drain start
 
-A run that passes the `is_draining()` check just before the flag flips,
-then registers its task after the snapshot, is not waited on — when the
-snapshotted runs finish early the drain proceeds and
-`_cancel_inflight_runs` cancels the newcomer before its grace expires
-(CNT-07 says in-flight runs keep their deadline up to
-`shutdownGraceSeconds`). The window is the several awaits in `chat.py`
-between the draining check and `run_registry.add(...)`. Re-snapshot in a
-loop until the registry is stable or the grace expires.
+- [x] Done: `_drain_after_grace` re-snapshots in a loop — after a wait
+      completes it re-checks the registry and waits again for any
+      late-registered run, bounded by the overall grace deadline (the
+      chat.py is_draining() -> run_registry.add() window is covered).  A
+      registry empty at drain start still gets the full grace window for
+      in-flight non-run requests.  Test:
+      `test_drain_waits_for_late_registered_run` — a run registering
+      10 ms after the first snapshot is waited on to completion, never
+      cancelled early.
 
 ### R-19 follow-up — idempotency admission CapacityError maps to 500, not 503
 
-The R-19 mapping convention is not applied to the chat/ACP idempotency
-admission. `create_idempotency` raises `CapacityError` when
-`storage.maxIdempotencyRecordsPerSession` is reached (`memory.py:485`,
-`redis_backend.py:382,442`), and the R-30 handler maps only
-`BackendUnavailableError` → 503; everything else falls to the `except
-BaseException` catch-all, which correctly releases the slot but
-re-raises, so the client sees **500 `internal_error`** (verified). A
-configured capacity limit is a client-visible condition, not a server
-bug, and `storage_capacity: 503` is already in `STATUS_BY_CODE`. Map it
-there too, in chat and ACP.
+- [x] Done: chat + ACP admission map `CapacityError` -> 503
+      `storage_capacity` (slot released first, same shape as the R-30
+      handler).  Tests: `TestIdempotencyCapacity` — chat + ACP with a
+      capacity-raising backend return 503 `storage_capacity` and
+      `_in_flight` returns to 0.
 
 ### R-21 stragglers — `runner.py` leftovers
 
-- [ ] `runner.py:804` — error message still reads "Approval is a Phase 3
-      capability" although P3 approvals shipped; it is emitted for
-      `requested_tool_confirmations`.
-- [ ] `runner.py:807-821` — `_finalize` takes `state` and `request` and
-      uses neither.
+- [x] `runner.py:804` — message now reads "tool-call approval required
+      (approval gate)".  Done.
+- [x] `runner.py:807-821` — `_finalize(limiter)` — the unused `state`,
+      `text_parts`, and `request` parameters removed from the signature
+      and the call site.  Done.
 
 (The `health.py:123` `_applied_dump` straggler was folded into R-02 and
 is done.)
 
 ### R-25 The R-22 backoff tests sit exactly on their assertion's lower bound
 
-*Intelligence: low — test reliability / CI.*
-
-`test_watch_failure_backs_off` and `test_list_failure_backs_off`
-(`tests/test_operator/test_operator.py`, added in `a705e22`) let the
-operator run for 1.6 s of wall clock and assert
-`3 <= kube.list_calls <= 8`.
-
-Measured: `list_calls` is **exactly 3** on every run, for both tests
-(4 trials each, both failure modes). The expected value *is* the lower
-bound, so the tests have zero margin — any scheduling delay on a loaded
-CI runner pushes the third re-list past the stop and yields 2, failing
-the build.
-
-The docstring's premise is a miscount: it says the window "admits ~4-5
-re-lists", but the backoff sleeps are 0.25 / 0.5 / 1.0 s, so re-lists
-land at t ≈ 0, 0.25, 0.75 and the fourth at ≈1.75 s — after the 1.6 s
-stop. The author chose the bound believing there was 1-2 calls of
-headroom that does not exist.
-
-This does not affect production code — the R-22 backoff itself is
-correct and the assertion's *upper* bound is what guards the hot-loop
-regression.
-
-- [ ] Drop the lower bound (or set it to 1): it guards nothing — the
-      hot-loop regression is caught by the upper bound alone.
-- [ ] Preferred: make the test deterministic by injecting the sleep/clock
-      into `_backoff` instead of racing wall time, which also removes
-      ~3.2 s from the suite.
-- [ ] Fix the docstring's "~4-5 re-lists" arithmetic either way.
+- [x] Done (preferred option): `_backoff` accepts an injectable
+      `sleeper` (threaded through `run_operator` as `backoff_sleeper`);
+      both tests now drive a recording fake sleep instead of wall time —
+      deterministic (no lower-bound flake on a loaded CI runner) and
+      ~3.2 s faster.  Assertions: exact cycle counts (3 list calls, stop
+      fires during the 3rd backoff) + per-step backoff lower bounds
+      (0.25/0.5/1.0 for consecutive list failures; the watch path
+      correctly stays at the 0.25 s base since the failure counter
+      resets on each successful re-list).  Docstring arithmetic fixed in
+      the rewrite.
 
 ### R-33 `temperature` / `max_tokens` overrides are accepted but never applied (API-12)
 
-*Intelligence: medium — localized correctness + a spec decision.*
-
-R-20 removed the `RunConfig(temperature=…, max_output_tokens=…)` kwargs
-from `_run_config`. That fixed a **real latent bug** — verified:
-`RunConfig(temperature=0.1)` raises `ValidationError` on the current
-google-adk, so before this commit *every* run carrying an override
-failed with `provider_error`. Removing them is a genuine improvement.
-
-But the override is now validated, bounds-clamped, gated per
-`engine.overrides.*` — and then discarded. Verified end to end with
-`allowTemperature: true`:
-
-| | Observed |
-| --- | --- |
-| `POST /v1/chat/completions` with `temperature: 0.1` | **200**, `finish_reason: stop` |
-| effect on the provider call | none — the configured default is used |
-| any warning / field / header telling the client | **none** |
-
-So API-12's contract ("overrides gating") is half-honoured: the *gate*
-works, the *override* does not. A caller tuning temperature gets a clean
-200 and silently different sampling. The deviation is recorded only in a
-code comment in `runner.py` — `docs/decisions.md` was not touched.
-
-Note the comment's premise ("not expressible until google-adk exposes
-the seam") may be too pessimistic: `LlmRequest` *does* carry a `config`
-field, and the `RetryableLlm` wrapper already sits in the call path, so a
-per-request seam plausibly exists. Worth an hour's investigation before
-accepting the deviation as permanent.
-
-- [ ] Pick one and record it in `docs/decisions.md` (a code comment is
-      not a decision record for a public API deviation):
-      **(a)** apply the override via `LlmRequest.config` / the
-      `RetryableLlm` seam — becomes engine work, not a localized fix;
-      **(b)** reject the override with a clear 400 when it cannot be
-      honoured, so callers are never silently ignored;
-      **(c)** amend API-12 in REQUIREMENTS.md to say overrides are
-      validated-and-ignored, and say so in the API docs.
-- [ ] Whichever way: the current state (silent no-op) should not survive,
-      because it is indistinguishable from working.
-- [ ] Tests: assert the chosen behaviour explicitly — today nothing
-      covers "an override actually changed the call".
-
-## Review log
-
-The 2026-08-06 monitoring-loop history (per-commit findings and
-verification narratives, `9408092` → `d28756c`) lives in
-[docs/review-log.md](docs/review-log.md). New passes append there.
-
----
-
-# Planned scope — minimal configuration + full model coverage
-
-
-Requested 2026-08-06. Two epics. **Both are requirements-impacting**:
-they change documented surfaces (CFG-07/CFG-08 env binding, LLM-01
-provider set), so each needs a REQUIREMENTS.md amendment and a
-`docs/decisions.md` entry *before* implementation, per the project's own
-change policy. Neither is a pure dependency bump.
-
-## Baseline — what already exists (do not rebuild)
-
-Read this first; roughly half of "config via env" is already shipped.
-
-- **Tier 5 env binding works today.** `app/config/resolver.py` derives
-  `AGENT_*` variable names from the Pydantic schema
-  (`_env_alias`/`_build_binding_index`, `models.py:iter_schema_fields`),
-  binds them relaxed/schema-aware, reserves
-  `AGENT_PROFILE`/`AGENT_CONFIG_DIR`/`AGENT_APPLICATION_JSON`/`AGENT_BUNDLED_DIR`,
-  warns on unmatched variables with a nearest-path hint, and raises
-  `AmbiguousEnvError` when one variable matches two schema paths.
-- **Zero-file boot already works.** Tier 1 `config/agent.yaml` supplies
-  `name`, `engine.systemInstruction`, and a gemini binding, so
-  `docker run -e GEMINI_API_KEY=… agentbase` runs with no mounted file.
-- **Multi-provider already exists via LiteLLM.** `Provider` =
-  `gemini | openai | anthropic | ollama | litellm`;
-  `connectors.py:_llm_model_string` prefixes openai/anthropic/ollama and
-  passes `litellm` through verbatim, so arbitrary LiteLLM model strings
-  are *already* reachable through the `litellm` escape hatch.
-- **`llm.extra`** is a CFG-13 passthrough map into the LiteLLM kwargs.
-
-The gaps below are what is genuinely missing.
-
-## E1 — Minimal configuration: environment variables as a first-class surface
-
-Goal: a working agent from environment variables alone, with discoverable
-names and sane defaults — no YAML authoring required.
+- [x] Done (option a): overrides are APPLIED to the provider call — the
+      seam existed after all (`LlmRequest.config` is a
+      `GenerateContentConfig` with `temperature`/`max_output_tokens`;
+      ADK merges `RunConfig.labels` into the per-step request's labels,
+      and `RetryableLlm` is already in the call path).  The values ride
+      in `RunConfig.labels` and the wrapper applies + strips them, so
+      concurrent runs never share override state.  Decision recorded in
+      `docs/decisions.md` (R-33).  As a necessary guard now that values
+      flow to the provider: above-cap / non-finite overrides return 400
+      `override_not_allowed` (API-12), never silently clamped.
+- [x] Silent no-op eliminated: an override demonstrably changes the
+      provider call (tests below).
+- [x] Tests: `tests/test_engine/test_overrides.py` (temperature /
+      max_tokens reach the provider config; synthetic labels stripped;
+      no-override untouched) + `TestOverrideApplication` in test_api.py
+      (end-to-end 200 with the applied config; above-cap temperature and
+      max_tokens -> 400 `override_not_allowed`).
 
 ### E1-1 Publish the env-var catalog (currently undocumented)
 

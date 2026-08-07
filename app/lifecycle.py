@@ -110,17 +110,35 @@ class ShutdownManager:
         # finishes early the drain proceeds immediately, shortening pod
         # termination.  On timeout the runs are cancelled below, as before.
         registry = self.components.get("run_registry")
-        pending = [t for t in list(registry or ()) if not t.done()]
-        try:
-            if pending:
+        deadline = time.monotonic() + self.grace_seconds
+        # R-12 follow-up: re-snapshot in a loop — a run that passes the
+        # is_draining() check just before the flag flips registers AFTER
+        # the first snapshot (the several awaits in chat.py between the
+        # check and run_registry.add).  Waiting on a stale snapshot would
+        # let the drain proceed and cancel that run before its grace
+        # expired.  Loop until the registry is stable (nothing in flight
+        # that has not already been waited on) or the grace deadline.
+        first = True
+        while True:
+            pending = [t for t in list(registry or ()) if not t.done()]
+            if not pending:
+                if first:
+                    # No runs at drain start: keep the full-grace window
+                    # so in-flight non-run requests can finish before the
+                    # components close.
+                    await asyncio.sleep(self.grace_seconds)
+                break
+            first = False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
                 await asyncio.wait_for(
                     asyncio.wait(pending, return_when=asyncio.ALL_COMPLETED),
-                    timeout=self.grace_seconds,
+                    timeout=remaining,
                 )
-            else:
-                await asyncio.sleep(self.grace_seconds)
-        except (TimeoutError, asyncio.CancelledError):
-            pass
+            except (TimeoutError, asyncio.CancelledError):
+                break
         # CNT-07: cancel in-flight runs FIRST so the runner persists terminal
         # states/usage while storage is still open.
         started = time.monotonic()

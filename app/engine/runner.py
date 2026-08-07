@@ -31,6 +31,7 @@ from ..storage.contract import (
 )
 from ..storage.model import ApprovalRecord, utcnow
 from .agent import AppliedConfig
+from .connectors import _OVERRIDE_LABEL_MAX_TOKENS, _OVERRIDE_LABEL_TEMPERATURE
 from .events import (
     AgentEvent,
     AgentTransfer,
@@ -151,8 +152,8 @@ class AgentRunner:
             errored = False
             run_deadline = limiter.deadline_remaining()
             async with asyncio.timeout(max(run_deadline, 0.001)):
-                rag_context, _rag_degraded = await self._rag_context(request)
-                if rag_context == "degraded":
+                rag_context, rag_degraded = await self._rag_context(request)
+                if rag_degraded:
                     if self._applied.config.rag.required:
                         # RAG-04: when rag is required the run FAILS with
                         # rag_unavailable instead of answering without
@@ -225,7 +226,7 @@ class AgentRunner:
                 yield RunError(code=code, message=_PUBLIC_MESSAGES.get(code, code))
                 yield Done(finish_reason="error", x_agent_status=code)
             else:
-                finish, status, usage = self._finalize(state, limiter, text_parts, request)
+                finish, status, usage = self._finalize(limiter)
                 if state.succeed():
                     await self._commit_success(
                         request, sid, run_id, text_parts, usage, transfers, run_started[0]
@@ -396,14 +397,12 @@ class AgentRunner:
             principal_id=request.principal_id,
             query=request.user_message,
         )
-        if context is None and degraded:
-            return "degraded", True
         return context, degraded
 
     def _new_message(
         self, request: RunRequest, rag_context: str | None = None
     ) -> genai_types.Content:
-        if rag_context and rag_context != "degraded":
+        if rag_context:
             # RAG-02: one delimited context message, explicitly labeled
             # untrusted, placed directly before the user message (after the
             # system instruction and history in the assembled request).
@@ -421,14 +420,22 @@ class AgentRunner:
             # this, ADK calls the model non-streaming and the SSE surface
             # emits one big delta at the end (no first-token streaming).
             kwargs["streaming_mode"] = StreamingMode.SSE
-        # R-20: the current google-adk RunConfig rejects per-call provider
-        # knobs (temperature/max_output_tokens are extra_forbidden, and a
-        # ValidationError here degraded every overridden run to
-        # provider_error).  The override VALUES are still validated and
-        # gated per API-12; applying them to the provider call is not
-        # expressible until google-adk exposes the seam, and ENG-08's
-        # budget is enforced at the accounting boundary instead
-        # (observe_usage / can_start_another_call).
+        # R-33 (API-12): per-run provider overrides travel in
+        # RunConfig.labels — ADK merges run-config labels into the
+        # per-step LlmRequest.config.labels (basic flow), and the
+        # RetryableLlm wrapper applies them to the GenerateContentConfig
+        # and strips them before the provider call.  Labels ride with the
+        # invocation, so concurrent runs never share override state
+        # (R-03's singleton lesson).  RunConfig itself rejects provider
+        # knobs (temperature is extra_forbidden — the R-20 ValidationError
+        # bug), hence the label transport.
+        if request.temperature_override is not None or request.max_tokens_override is not None:
+            labels: dict[str, str] = {}
+            if request.temperature_override is not None:
+                labels[_OVERRIDE_LABEL_TEMPERATURE] = str(request.temperature_override)
+            if request.max_tokens_override is not None:
+                labels[_OVERRIDE_LABEL_MAX_TOKENS] = str(request.max_tokens_override)
+            kwargs["labels"] = labels
         return RunConfig(**kwargs) if kwargs else None
 
     # -- approvals (HITL-02) ------------------------------------------------------
@@ -836,15 +843,12 @@ class AgentRunner:
         if adk_event.actions and adk_event.actions.requested_tool_confirmations:
             yield RunError(
                 code="approval_required",
-                message="Approval is a Phase 3 capability.",
+                message="tool-call approval required (approval gate)",
             )
 
     def _finalize(
         self,
-        state: RunStateMachine,
         limiter: RunLimiter,
-        text_parts: list[str],
-        request: RunRequest,
     ) -> tuple[str, str | None, dict[str, int]]:
         # ENG-07: iteration exhaustion / output limit -> length + status.
         # NOTE: does NOT transition the state machine — execute() owns the

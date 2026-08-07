@@ -353,3 +353,48 @@ class TestShutdownSummaryAudit:
             and "duration_ms=" in r.message
             for r in caplog.records
         )
+
+
+class TestDrainLateRegistration:
+    """R-12 follow-up: a run that registers after the drain's first
+    snapshot (the chat.py is_draining() -> run_registry.add() window) is
+    still waited on — not cancelled before its grace expires."""
+
+    async def test_drain_waits_for_late_registered_run(self):
+        order: list[str] = []
+        registry: set = set()
+
+        async def quick_run():
+            await asyncio.sleep(0.03)
+            order.append("quick_finished")
+
+        async def late_registration():
+            # Simulates the chat.py window: the run passes the draining
+            # check but only registers in run_registry after the drain
+            # task's first snapshot.
+            await asyncio.sleep(0.01)
+            registry.add(asyncio.current_task())
+            await asyncio.sleep(0.05)
+            order.append("late_finished")
+
+        quick = asyncio.create_task(quick_run())
+        registry.add(quick)
+        late = asyncio.create_task(late_registration())
+
+        components = {
+            "run_registry": registry,
+            "watcher": _FakeStop("watcher", order),
+            "mcp": _FakeClosable("mcp", order),
+            "backend": _FakeClosable("storage", order),
+            "observability": SimpleNamespace(shutdown=lambda: order.append("otel")),
+        }
+        mgr = ShutdownManager(components, grace_seconds=30, server=_FakeServer())
+        await mgr.request_shutdown()
+        assert mgr._drain_task is not None
+        await asyncio.wait_for(mgr._drain_task, timeout=2.0)
+        assert mgr.closed
+        # the late-registered run was WAITED on, not cancelled early
+        assert "late_finished" in order
+        assert not late.cancelled()
+        assert not quick.cancelled()
+        assert order.index("late_finished") < order.index("watcher")

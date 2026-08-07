@@ -143,37 +143,54 @@ class TestOperatorLoop:
         assert kube.statuses[("default", "b")]["conditions"][0]["status"] == "True"
 
     async def test_watch_failure_backs_off(self):
-        """R-22: a watch that dies immediately must not hot-loop the re-list;
-        the exponential backoff bounds the number of cycles in a fixed
-        window (a hot loop would spin hundreds of times)."""
+        """R-22/R-25: a watch that dies immediately must not hot-loop the
+        re-list.  Wall time is replaced by an injected sleeper, so the
+        assertion is deterministic — it no longer races CI scheduling
+        (the old test sat exactly on its own lower bound and could flake
+        to 2 re-lists on a loaded runner)."""
         kube = _FlakyKube(fail_watch=True)
         stop = asyncio.Event()
+        recorded: list[float] = []
 
-        async def _stopper():
-            await asyncio.sleep(1.6)
-            stop.set()
+        async def fake_sleep(delay: float) -> None:
+            recorded.append(delay)
+            if len(recorded) >= 3:
+                stop.set()
+            await asyncio.sleep(0)  # yield so the loop observes stop
 
-        stopper = asyncio.create_task(_stopper())
-        await run_operator(kube, "default", resync_seconds=30, stop_event=stop)
-        await stopper
-        # Backoff sleeps 0.25+0.5+1.0 … ≈ 1.75 s cumulative, so the window
-        # admits ~4-5 re-lists; assert a generous ceiling for CI jitter.
-        assert 3 <= kube.list_calls <= 8
+        await run_operator(
+            kube, "default", resync_seconds=30, stop_event=stop, backoff_sleeper=fake_sleep
+        )
+        # initial list + 2 re-lists, then the stop fired during the
+        # 3rd backoff (before the next list attempt)
+        assert kube.list_calls == 3
+        # each watch loss backs off by at least the 0.25 s base (the
+        # failure counter resets on the intervening successful re-list,
+        # so the backoff stays at failure=1 here) — a hot loop would
+        # have recorded ~0 delays and far more cycles before the stop
+        assert len(recorded) == 3
+        assert all(d >= 0.25 for d in recorded)
 
     async def test_list_failure_backs_off(self):
-        """R-22: a dead API server (list failing) also backs off instead of
-        spinning."""
+        """R-22/R-25: a dead API server (list failing) also backs off
+        instead of spinning — deterministic via the injected sleeper."""
         kube = _FlakyKube(fail_list=True)
         stop = asyncio.Event()
+        recorded: list[float] = []
 
-        async def _stopper():
-            await asyncio.sleep(1.6)
-            stop.set()
+        async def fake_sleep(delay: float) -> None:
+            recorded.append(delay)
+            if len(recorded) >= 3:
+                stop.set()
+            await asyncio.sleep(0)
 
-        stopper = asyncio.create_task(_stopper())
-        await run_operator(kube, "default", resync_seconds=30, stop_event=stop)
-        await stopper
-        assert 3 <= kube.list_calls <= 8
+        await run_operator(
+            kube, "default", resync_seconds=30, stop_event=stop, backoff_sleeper=fake_sleep
+        )
+        assert kube.list_calls == 3  # stop fired during the 3rd backoff
+        assert len(recorded) == 3
+        for i, base in enumerate((0.25, 0.5, 1.0)):
+            assert recorded[i] >= base
 
 
 class _FlakyKube(FakeKubeClient):
